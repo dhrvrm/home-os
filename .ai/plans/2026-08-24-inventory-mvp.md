@@ -303,7 +303,7 @@ git add .
 git commit -m "feat: launch Home OS inventory MVP"
 ```
 
-- [ ] **Step 5: Publish publicly**
+- [x] **Step 5: Publish publicly**
 
 Run:
 
