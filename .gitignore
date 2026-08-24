@@ -5,6 +5,8 @@ node_modules/
 .next/
 out/
 coverage/
+.wrangler/
+.wrangler-dry-run/
 
 # Go
 bin/

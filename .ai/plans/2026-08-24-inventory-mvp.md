@@ -23,7 +23,6 @@
 - `docs/architecture.md`: subsystem boundaries and API/persistence decisions.
 - `apps/web/wrangler.jsonc`: Workers Static Assets deployment configuration.
 - `docs/deployment.md`: local, self-hosted, and Cloudflare Workers deployment paths.
-- `SUBSYSTEM.md` files: colocated declarations for root, API, and web subsystems.
 
 ### Task 1: Repository foundation
 
@@ -33,17 +32,16 @@
 - Create: `package.json`
 - Create: `Makefile`
 - Create: `README.md`
-- Create: `SUBSYSTEM.md`
 
-- [ ] **Step 1: Add workspace metadata and ignore generated state**
+- [x] **Step 1: Add workspace metadata and ignore generated state**
 
 Use a Go workspace pointing at `./apps/api`, an npm workspace pointing at `apps/web`, and ignore `node_modules`, `.next`, `out`, `.env*`, coverage output, and `*.db*` while retaining `.env.example`.
 
-- [ ] **Step 2: Add root commands**
+- [x] **Step 2: Add root commands**
 
 Provide `make dev-api`, `make dev-web`, `make test`, `make lint`, and `make build`. `make test` must run both Go and web tests; `make build` must compile the Go server and static Next export.
 
-- [ ] **Step 3: Document the first-run workflow**
+- [x] **Step 3: Document the first-run workflow**
 
 The README must use these commands:
 
@@ -54,7 +52,7 @@ make dev-api
 make dev-web
 ```
 
-- [ ] **Step 4: Verify workspace metadata**
+- [x] **Step 4: Verify workspace metadata**
 
 Run: `go work edit -json && npm pkg get workspaces`
 
@@ -68,9 +66,8 @@ Expected: both applications are present.
 - Create: `apps/api/internal/inventory/repository.go`
 - Create: `apps/api/internal/inventory/service.go`
 - Create: `apps/api/internal/inventory/service_test.go`
-- Create: `apps/api/SUBSYSTEM.md`
 
-- [ ] **Step 1: Write service tests first**
+- [x] **Step 1: Write service tests first**
 
 Cover creation defaults, blank-name rejection, exact consumption, simple stock transitions, restocking, and forecast confidence. Use an in-memory repository test double implementing:
 
@@ -83,13 +80,13 @@ type Repository interface {
 }
 ```
 
-- [ ] **Step 2: Run the focused test and confirm failure**
+- [x] **Step 2: Run the focused test and confirm failure**
 
 Run: `go test ./internal/inventory -run TestService -v`
 
 Expected: FAIL because the domain implementation does not exist.
 
-- [ ] **Step 3: Implement the minimum domain**
+- [x] **Step 3: Implement the minimum domain**
 
 Use explicit enums:
 
@@ -111,7 +108,7 @@ const (
 
 `Item` contains identity, category, location, unit, tracking mode, quantity, stock level, minimum quantity, timestamps, and an optional `Forecast`. `Service.ApplyEvent` validates the transition and delegates atomic persistence to the repository.
 
-- [ ] **Step 4: Run domain tests**
+- [x] **Step 4: Run domain tests**
 
 Run: `go test ./internal/inventory -v`
 
@@ -124,21 +121,21 @@ Expected: PASS.
 - Create: `apps/api/internal/storage/sqlite/repository.go`
 - Create: `apps/api/internal/storage/sqlite/repository_test.go`
 
-- [ ] **Step 1: Write repository integration tests**
+- [x] **Step 1: Write repository integration tests**
 
 Use `t.TempDir()` and verify create/list/get, atomic event application, persisted category/location, and forecast inputs after closing and reopening the database.
 
-- [ ] **Step 2: Run and confirm failure**
+- [x] **Step 2: Run and confirm failure**
 
 Run: `go test ./internal/storage/sqlite -v`
 
 Expected: FAIL because the repository is absent.
 
-- [ ] **Step 3: Add schema and repository**
+- [x] **Step 3: Add schema and repository**
 
 Create indexed `items` and `stock_events` tables. Configure WAL mode, foreign keys, a busy timeout, and a single writer connection. Apply events inside a SQL transaction and calculate forecast summaries from consumption history.
 
-- [ ] **Step 4: Run storage tests**
+- [x] **Step 4: Run storage tests**
 
 Run: `go test ./internal/storage/sqlite -v`
 
@@ -151,17 +148,17 @@ Expected: PASS.
 - Create: `apps/api/internal/httpapi/router_test.go`
 - Create: `apps/api/cmd/server/main.go`
 
-- [ ] **Step 1: Write transport tests**
+- [x] **Step 1: Write transport tests**
 
 Test `GET /healthz`, `GET /api/v1/items`, `POST /api/v1/items`, `POST /api/v1/items/{id}/events`, validation failures, not-found responses, JSON content types, and CORS preflight.
 
-- [ ] **Step 2: Run and confirm failure**
+- [x] **Step 2: Run and confirm failure**
 
 Run: `go test ./internal/httpapi -v`
 
 Expected: FAIL because no router exists.
 
-- [ ] **Step 3: Implement handlers with the standard library**
+- [x] **Step 3: Implement handlers with the standard library**
 
 Use Go 1.22 route patterns and this response envelope:
 
@@ -171,11 +168,11 @@ Use Go 1.22 route patterns and this response envelope:
 
 Return `201` for item creation, `200` for event application, `400` for invalid requests, and `404` for missing items. Limit request bodies and recover panics without leaking details.
 
-- [ ] **Step 4: Wire the server**
+- [x] **Step 4: Wire the server**
 
 Read `HOMEOS_ADDR`, `HOMEOS_DB_PATH`, and `HOMEOS_ALLOWED_ORIGINS`; use sensible local defaults and graceful shutdown.
 
-- [ ] **Step 5: Run all Go tests**
+- [x] **Step 5: Run all Go tests**
 
 Run: `go test ./...`
 
@@ -195,27 +192,26 @@ Expected: PASS.
 - Create: `apps/web/public/icon.svg`
 - Create: `apps/web/src/components/pwa-register.tsx`
 - Create: `apps/web/wrangler.jsonc`
-- Create: `apps/web/SUBSYSTEM.md`
 
-- [ ] **Step 1: Configure a static SPA export**
+- [x] **Step 1: Configure a static SPA export**
 
 Set `output: "export"`, `trailingSlash: true`, and no server-only Next features. Use system-safe local fonts to keep the offline shell independent of external font requests.
 
-- [ ] **Step 2: Add installability metadata**
+- [x] **Step 2: Add installability metadata**
 
 Define a standalone manifest with the Home OS name, inventory description, theme colors, portrait orientation, and SVG icon. Register `/sw.js` only in production.
 
-- [ ] **Step 3: Implement app tokens and responsive shell**
+- [x] **Step 3: Implement app tokens and responsive shell**
 
 Use semantic CSS variables with system light/dark modes, one muted green accent, 14px surfaces, pill action buttons, visible focus rings, reduced-motion support, and mobile navigation.
 
-- [ ] **Step 4: Verify the static shell**
+- [x] **Step 4: Verify the static shell**
 
 Run: `npm run build --workspace @home-os/web`
 
 Expected: Next.js exports `apps/web/out` successfully.
 
-- [ ] **Step 5: Configure Workers Static Assets**
+- [x] **Step 5: Configure Workers Static Assets**
 
 Point the Worker's assets directory at `./out`, enable SPA not-found handling, and add `npm run preview` and `npm run deploy` commands using Wrangler. Static asset requests should bypass Worker code unless an API route is added.
 
@@ -232,25 +228,25 @@ Point the Worker's assets directory at `./out`, enable SPA not-found handling, a
 - Create: `apps/web/src/components/inventory-app.test.tsx`
 - Create: `apps/web/src/app/page.tsx`
 
-- [ ] **Step 1: Write interaction tests**
+- [x] **Step 1: Write interaction tests**
 
 Mock fetch and cover loading, API failure, empty inventory, filtering, item creation, consumption, restocking, and low/out transitions.
 
-- [ ] **Step 2: Run and confirm failure**
+- [x] **Step 2: Run and confirm failure**
 
 Run: `npm test --workspace @home-os/web`
 
 Expected: FAIL because inventory components are absent.
 
-- [ ] **Step 3: Implement the API client and product UI**
+- [x] **Step 3: Implement the API client and product UI**
 
 The client reads `NEXT_PUBLIC_API_URL`, uses typed JSON envelopes, and provides actionable error messages. The workspace includes household summary, search, category filters, an accessible add-item dialog, responsive inventory rows, stock controls, and forecast language such as `Likely low in 6 days`.
 
-- [ ] **Step 4: Implement complete states**
+- [x] **Step 4: Implement complete states**
 
 Loading uses layout-matched skeletons. Empty state explains how to add the first item. Fetch and mutation errors appear inline with retry. Optimistic updates are not used until conflict semantics exist.
 
-- [ ] **Step 5: Run web tests and build**
+- [x] **Step 5: Run web tests and build**
 
 Run: `npm test --workspace @home-os/web && npm run build --workspace @home-os/web`
 
@@ -264,15 +260,15 @@ Expected: PASS and static export succeeds.
 - Create: `docs/deployment.md`
 - Modify: `README.md`
 
-- [ ] **Step 1: Document local and self-hosted operation**
+- [x] **Step 1: Document local and self-hosted operation**
 
 Explain that SQLite is durable on a laptop, home server, VPS, or container with a mounted volume. Include backup instructions based on SQLite's online backup command.
 
-- [ ] **Step 2: Document the Cloudflare Workers path**
+- [x] **Step 2: Document the Cloudflare Workers path**
 
 State clearly that Cloudflare recommends Workers for new projects and that Workers Static Assets can serve the exported Next.js PWA. Workers have no durable local filesystem. Describe D1 plus a TypeScript Worker transport as the native free all-Cloudflare option; treat Go-on-Wasm as an optimization experiment because Cloudflare does not provide first-class Go bindings for D1.
 
-- [ ] **Step 3: Add free-tier expectations**
+- [x] **Step 3: Add free-tier expectations**
 
 Record Cloudflare's current Workers Static Assets, Workers, and D1 free quotas with dated official links. Do not promise that free tiers are permanent.
 
@@ -281,23 +277,23 @@ Record Cloudflare's current Workers Static Assets, Workers, and D1 free quotas w
 **Files:**
 - Modify: plan checkboxes as tasks complete.
 
-- [ ] **Step 1: Format and lint**
+- [x] **Step 1: Format and lint**
 
 Run: `gofmt -w apps/api && go vet ./apps/api/... && npm run lint --workspace @home-os/web`
 
 Expected: no diagnostics.
 
-- [ ] **Step 2: Run full verification**
+- [x] **Step 2: Run full verification**
 
 Run: `make test && make build`
 
 Expected: all tests pass and both production builds succeed.
 
-- [ ] **Step 3: Run frontend pre-flight**
+- [x] **Step 3: Run frontend pre-flight**
 
 Check responsive widths, both color schemes, keyboard focus, visible copy, PWA manifest/service-worker paths, and scan visible strings for forbidden dash characters.
 
-- [ ] **Step 4: Initialize and commit**
+- [x] **Step 4: Initialize and commit**
 
 Run:
 

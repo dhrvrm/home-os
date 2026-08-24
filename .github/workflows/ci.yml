@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.24.x"
+          cache-dependency-path: |
+            apps/api/go.sum
+            go.work.sum
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install web dependencies
+        run: npm ci
+
+      - name: Test Go
+        run: go test ./apps/api/...
+
+      - name: Vet Go
+        run: go vet ./apps/api/...
+
+      - name: Test web
+        run: npm test --workspace @home-os/web
+
+      - name: Lint web
+        run: npm run lint --workspace @home-os/web
+
+      - name: Build applications
+        run: make build
