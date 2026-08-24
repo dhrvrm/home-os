@@ -1,0 +1,25 @@
+.worktrees/
+
+# JavaScript
+node_modules/
+.next/
+out/
+coverage/
+
+# Go
+bin/
+*.test
+
+# Runtime data and local configuration
+.env
+.env.local
+!.env.example
+data/
+*.db
+*.db-shm
+*.db-wal
+
+# Editors and operating systems
+.DS_Store
+.idea/
+.vscode/
