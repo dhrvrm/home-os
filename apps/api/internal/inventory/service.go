@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"math"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -51,7 +52,7 @@ func (s *Service) ListItems(ctx context.Context, filter Filter) ([]Item, error) 
 		if eventErr != nil {
 			return nil, eventErr
 		}
-		items[index].Forecast = CalculateForecast(items[index], events, now)
+		enrichItem(&items[index], events, now)
 	}
 	return items, nil
 }
@@ -65,7 +66,7 @@ func (s *Service) GetItem(ctx context.Context, id string) (Item, error) {
 	if err != nil {
 		return Item{}, err
 	}
-	item.Forecast = CalculateForecast(item, events, s.now())
+	enrichItem(&item, events, s.now())
 	return item, nil
 }
 
@@ -90,15 +91,24 @@ func (s *Service) CreateItem(ctx context.Context, input CreateItemInput) (Item, 
 	}
 
 	level := input.StockLevel
-	if level == "" {
-		if mode == TrackingExact {
-			level = exactLevel(input.Quantity, input.MinQuantity)
-		} else {
-			level = StockOkay
-		}
-	}
-	if !level.Valid() {
+	if level != "" && !level.Valid() {
 		return Item{}, ValidationError{Field: "stockLevel", Message: "must be full, okay, low, or out"}
+	}
+	levelPercent := 0.0
+	if mode == TrackingExact {
+		level = exactLevel(input.Quantity, input.MinQuantity)
+	} else {
+		if input.LevelPercent != nil {
+			levelPercent = *input.LevelPercent
+		} else if level.Valid() {
+			levelPercent = percentForLevel(level)
+		} else {
+			levelPercent = 50
+		}
+		if !validPercent(levelPercent) {
+			return Item{}, ValidationError{Field: "levelPercent", Message: "must be between zero and 100"}
+		}
+		level = simpleLevel(levelPercent)
 	}
 
 	unit := strings.TrimSpace(input.Unit)
@@ -115,6 +125,7 @@ func (s *Service) CreateItem(ctx context.Context, input CreateItemInput) (Item, 
 		TrackingMode: mode,
 		Quantity:     input.Quantity,
 		StockLevel:   level,
+		LevelPercent: levelPercent,
 		MinQuantity:  input.MinQuantity,
 		CreatedAt:    now,
 		UpdatedAt:    now,
@@ -144,7 +155,15 @@ func (s *Service) ApplyEvent(ctx context.Context, itemID string, input ApplyEven
 			next.Quantity = math.Max(0, item.Quantity-input.Quantity)
 			next.StockLevel = exactLevel(next.Quantity, item.MinQuantity)
 		} else {
-			next.StockLevel = nextSimpleLevel(item.StockLevel)
+			points := input.Quantity
+			if points == 0 {
+				points = 25
+			}
+			if points < 0 {
+				return Item{}, ValidationError{Field: "quantity", Message: "must be zero or greater"}
+			}
+			next.LevelPercent = math.Max(0, item.LevelPercent-points)
+			next.StockLevel = simpleLevel(next.LevelPercent)
 		}
 	case EventRestock:
 		if item.TrackingMode == TrackingExact {
@@ -152,27 +171,38 @@ func (s *Service) ApplyEvent(ctx context.Context, itemID string, input ApplyEven
 				return Item{}, ValidationError{Field: "quantity", Message: "must be greater than zero"}
 			}
 			next.Quantity += input.Quantity
+		} else {
+			next.LevelPercent = 100
 		}
 		next.StockLevel = StockFull
 	case EventMarkLevel:
-		if !input.StockLevel.Valid() {
-			return Item{}, ValidationError{Field: "stockLevel", Message: "must be full, okay, low, or out"}
-		}
-		next.StockLevel = input.StockLevel
-		if item.TrackingMode == TrackingExact && input.StockLevel == StockOut {
-			next.Quantity = 0
+		if item.TrackingMode == TrackingSimple {
+			if input.LevelPercent == nil || !validPercent(*input.LevelPercent) {
+				return Item{}, ValidationError{Field: "levelPercent", Message: "must be between zero and 100"}
+			}
+			next.LevelPercent = *input.LevelPercent
+			next.StockLevel = simpleLevel(next.LevelPercent)
+		} else {
+			if !input.StockLevel.Valid() {
+				return Item{}, ValidationError{Field: "stockLevel", Message: "must be full, okay, low, or out"}
+			}
+			next.StockLevel = input.StockLevel
+			if input.StockLevel == StockOut {
+				next.Quantity = 0
+			}
 		}
 	}
 
 	now := s.now()
 	next.UpdatedAt = now
 	event := StockEvent{
-		ID:         s.newID(),
-		ItemID:     item.ID,
-		Type:       input.Type,
-		Quantity:   input.Quantity,
-		StockLevel: next.StockLevel,
-		OccurredAt: now,
+		ID:           s.newID(),
+		ItemID:       item.ID,
+		Type:         input.Type,
+		Quantity:     input.Quantity,
+		StockLevel:   next.StockLevel,
+		LevelPercent: next.LevelPercent,
+		OccurredAt:   now,
 	}
 	updated, err := s.repository.ApplyEvent(ctx, event, next)
 	if err != nil {
@@ -182,8 +212,13 @@ func (s *Service) ApplyEvent(ctx context.Context, itemID string, input ApplyEven
 	if err != nil {
 		return Item{}, err
 	}
-	updated.Forecast = CalculateForecast(updated, events, now)
+	enrichItem(&updated, events, now)
 	return updated, nil
+}
+
+func enrichItem(item *Item, events []StockEvent, now time.Time) {
+	item.Forecast = CalculateForecast(*item, events, now)
+	item.Cadence = CalculateCadence(events, now)
 }
 
 func CalculateForecast(item Item, events []StockEvent, now time.Time) *Forecast {
@@ -214,16 +249,34 @@ func CalculateForecast(item Item, events []StockEvent, now time.Time) *Forecast 
 	if dailyUsage <= 0 {
 		return nil
 	}
-	confidence := ConfidenceLow
-	if count >= 8 {
-		confidence = ConfidenceHigh
-	} else if count >= 4 {
-		confidence = ConfidenceMedium
-	}
 	return &Forecast{
 		DailyUsage:    roundOne(dailyUsage),
 		DaysRemaining: roundOne(item.Quantity / dailyUsage),
-		Confidence:    confidence,
+		Confidence:    confidenceFor(count),
+	}
+}
+
+func CalculateCadence(events []StockEvent, now time.Time) *Cadence {
+	timestamps := make([]time.Time, 0, len(events))
+	for _, event := range events {
+		if event.Type == EventConsume && !event.OccurredAt.After(now) {
+			timestamps = append(timestamps, event.OccurredAt)
+		}
+	}
+	if len(timestamps) < 2 {
+		return nil
+	}
+	sort.Slice(timestamps, func(left, right int) bool { return timestamps[left].Before(timestamps[right]) })
+	spanDays := timestamps[len(timestamps)-1].Sub(timestamps[0]).Hours() / 24
+	if spanDays <= 0 {
+		return nil
+	}
+	averageInterval := spanDays / float64(len(timestamps)-1)
+	return &Cadence{
+		AverageIntervalDays: roundOne(averageInterval),
+		EventsPerWeek:       roundOne(7 / averageInterval),
+		LastConsumedAt:      timestamps[len(timestamps)-1],
+		Confidence:          confidenceFor(len(timestamps)),
 	}
 }
 
@@ -237,15 +290,42 @@ func exactLevel(quantity, minimum float64) StockLevel {
 	return StockOkay
 }
 
-func nextSimpleLevel(level StockLevel) StockLevel {
+func simpleLevel(percent float64) StockLevel {
+	switch {
+	case percent <= 0:
+		return StockOut
+	case percent <= 25:
+		return StockLow
+	case percent <= 75:
+		return StockOkay
+	default:
+		return StockFull
+	}
+}
+
+func validPercent(percent float64) bool { return percent >= 0 && percent <= 100 }
+
+func percentForLevel(level StockLevel) float64 {
 	switch level {
 	case StockFull:
-		return StockOkay
-	case StockOkay:
-		return StockLow
+		return 100
+	case StockLow:
+		return 25
+	case StockOut:
+		return 0
 	default:
-		return StockOut
+		return 50
 	}
+}
+
+func confidenceFor(count int) Confidence {
+	if count >= 8 {
+		return ConfidenceHigh
+	}
+	if count >= 4 {
+		return ConfidenceMedium
+	}
+	return ConfidenceLow
 }
 
 func fallback(value, defaultValue string) string {

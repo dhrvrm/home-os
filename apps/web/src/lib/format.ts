@@ -1,4 +1,4 @@
-import type { Forecast, InventoryItem, StockLevel } from "./inventory";
+import type { Cadence, Forecast, InventoryItem, StockLevel } from "./inventory";
 
 export function stockLabel(level: StockLevel): string {
   return { full: "Full", okay: "Okay", low: "Low", out: "Out" }[level];
@@ -15,6 +15,12 @@ export function forecastLabel(forecast?: Forecast): string {
   if (forecast.daysRemaining < 1) return "Likely out today";
   const days = Math.max(1, Math.round(forecast.daysRemaining));
   return `About ${days} day${days === 1 ? "" : "s"} left`;
+}
+
+export function cadenceLabel(cadence?: Cadence): string {
+  if (!cadence) return "Learning usage";
+  const days = Math.max(1, Math.round(cadence.averageIntervalDays));
+  return `Used about every ${days} day${days === 1 ? "" : "s"}`;
 }
 
 export function relativeUpdate(value: string): string {

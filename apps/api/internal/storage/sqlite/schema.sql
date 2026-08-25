@@ -7,6 +7,7 @@ CREATE TABLE IF NOT EXISTS items (
     tracking_mode TEXT NOT NULL CHECK (tracking_mode IN ('simple', 'exact')),
     quantity REAL NOT NULL DEFAULT 0 CHECK (quantity >= 0),
     stock_level TEXT NOT NULL CHECK (stock_level IN ('full', 'okay', 'low', 'out')),
+    level_percent REAL NOT NULL DEFAULT 0 CHECK (level_percent >= 0 AND level_percent <= 100),
     min_quantity REAL NOT NULL DEFAULT 0 CHECK (min_quantity >= 0),
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
@@ -18,6 +19,7 @@ CREATE TABLE IF NOT EXISTS stock_events (
     event_type TEXT NOT NULL CHECK (event_type IN ('consume', 'restock', 'mark_level')),
     quantity REAL NOT NULL DEFAULT 0,
     stock_level TEXT NOT NULL CHECK (stock_level IN ('full', 'okay', 'low', 'out')),
+    level_percent REAL NOT NULL DEFAULT 0 CHECK (level_percent >= 0 AND level_percent <= 100),
     occurred_at TEXT NOT NULL
 );
 

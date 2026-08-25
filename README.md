@@ -4,12 +4,14 @@ Home OS is a shared household inventory for roommates. It tracks what is availab
 
 The first release includes:
 
-- simple `full`, `okay`, `low`, and `out` stock states
+- a simple 0-100 stock meter with `full`, `okay`, `low`, and `out` states
 - exact quantity tracking for items that need it
 - categories, locations, search, and quick filters
 - purchase and consumption history
-- lightweight run-out forecasts
+- learned consumption cadence and lightweight run-out forecasts
 - an installable, offline-capable PWA
+
+Simple items start at the level you choose. Each **Use** action subtracts 25 points and **Restock** returns the item to 100. After two consumption events, Home OS begins showing the item's typical usage interval.
 
 ## Stack
 

@@ -8,6 +8,13 @@ export interface Forecast {
   confidence: "low" | "medium" | "high";
 }
 
+export interface Cadence {
+  averageIntervalDays: number;
+  eventsPerWeek: number;
+  lastConsumedAt: string;
+  confidence: "low" | "medium" | "high";
+}
+
 export interface InventoryItem {
   id: string;
   name: string;
@@ -17,8 +24,10 @@ export interface InventoryItem {
   trackingMode: TrackingMode;
   quantity: number;
   stockLevel: StockLevel;
+  levelPercent: number;
   minQuantity: number;
   forecast?: Forecast;
+  cadence?: Cadence;
   createdAt: string;
   updatedAt: string;
 }
@@ -30,6 +39,7 @@ export interface CreateItemInput {
   unit: string;
   trackingMode: TrackingMode;
   quantity: number;
+  levelPercent?: number;
   minQuantity: number;
 }
 
@@ -37,4 +47,5 @@ export interface ApplyEventInput {
   type: EventType;
   quantity?: number;
   stockLevel?: StockLevel;
+  levelPercent?: number;
 }

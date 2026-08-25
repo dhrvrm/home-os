@@ -31,7 +31,11 @@ func (s *fakeInventoryService) CreateItem(_ context.Context, input inventory.Cre
 	if s.err != nil {
 		return inventory.Item{}, s.err
 	}
-	return inventory.Item{ID: "item-1", Name: input.Name}, nil
+	item := inventory.Item{ID: "item-1", Name: input.Name}
+	if input.LevelPercent != nil {
+		item.LevelPercent = *input.LevelPercent
+	}
+	return item, nil
 }
 
 func (s *fakeInventoryService) ApplyEvent(_ context.Context, itemID string, input inventory.ApplyEventInput) (inventory.Item, error) {
@@ -77,12 +81,12 @@ func TestListItemsParsesFilters(t *testing.T) {
 
 func TestCreateItem(t *testing.T) {
 	service := &fakeInventoryService{}
-	request := httptest.NewRequest(http.MethodPost, "/api/v1/items", strings.NewReader(`{"name":"Rice","trackingMode":"exact","quantity":2}`))
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/items", strings.NewReader(`{"name":"Rice","trackingMode":"simple","levelPercent":75}`))
 	request.Header.Set("Content-Type", "application/json")
 	response := httptest.NewRecorder()
 	NewRouter(service, Config{}).ServeHTTP(response, request)
 
-	if response.Code != http.StatusCreated || service.created.Name != "Rice" || service.created.Quantity != 2 {
+	if response.Code != http.StatusCreated || service.created.Name != "Rice" || service.created.LevelPercent == nil || *service.created.LevelPercent != 75 || !strings.Contains(response.Body.String(), `"levelPercent":75`) {
 		t.Fatalf("response = %d %s, input = %#v", response.Code, response.Body.String(), service.created)
 	}
 }
@@ -95,6 +99,18 @@ func TestApplyEvent(t *testing.T) {
 	NewRouter(service, Config{}).ServeHTTP(response, request)
 
 	if response.Code != http.StatusOK || service.eventItemID != "milk" || service.event.Type != inventory.EventConsume {
+		t.Fatalf("response = %d %s, event = %#v", response.Code, response.Body.String(), service.event)
+	}
+}
+
+func TestApplyEventAcceptsZeroPercentage(t *testing.T) {
+	service := &fakeInventoryService{}
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/items/soap/events", strings.NewReader(`{"type":"mark_level","levelPercent":0}`))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	NewRouter(service, Config{}).ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK || service.event.LevelPercent == nil || *service.event.LevelPercent != 0 {
 		t.Fatalf("response = %d %s, event = %#v", response.Code, response.Body.String(), service.event)
 	}
 }

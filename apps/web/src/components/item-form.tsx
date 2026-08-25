@@ -13,6 +13,7 @@ interface ItemFormProps {
 
 export function ItemForm({ pending, error, onClose, onSubmit }: ItemFormProps) {
   const [mode, setMode] = useState<TrackingMode>("simple");
+  const [levelPercent, setLevelPercent] = useState(50);
   const dialogRef = useRef<HTMLElement>(null);
   const returnFocusRef = useRef<HTMLElement | null>(
     document.activeElement instanceof HTMLElement ? document.activeElement : null,
@@ -54,6 +55,7 @@ export function ItemForm({ pending, error, onClose, onSubmit }: ItemFormProps) {
       unit: String(data.get("unit") ?? "item"),
       trackingMode: mode,
       quantity: mode === "exact" ? Number(data.get("quantity") ?? 0) : 0,
+      levelPercent: mode === "simple" ? levelPercent : undefined,
       minQuantity: mode === "exact" ? Number(data.get("minQuantity") ?? 0) : 0,
     });
   }
@@ -83,13 +85,21 @@ export function ItemForm({ pending, error, onClose, onSubmit }: ItemFormProps) {
             <legend>How do you want to track it?</legend>
             <label className={mode === "simple" ? "mode-option is-active" : "mode-option"}>
               <input type="radio" name="mode" value="simple" checked={mode === "simple"} onChange={() => setMode("simple")} />
-              <span><strong>Simple</strong><small>Full, okay, low, or out</small></span>
+              <span><strong>Simple</strong><small>Estimate stock from 0 to 100</small></span>
             </label>
             <label className={mode === "exact" ? "mode-option is-active" : "mode-option"}>
               <input type="radio" name="mode" value="exact" checked={mode === "exact"} onChange={() => setMode("exact")} />
               <span><strong>Exact</strong><small>Track a numeric quantity</small></span>
             </label>
           </fieldset>
+
+          {mode === "simple" && (
+            <div className="field field--wide level-field">
+              <span className="level-field__label"><label htmlFor="starting-level">Starting level</label><output htmlFor="starting-level">{levelPercent}%</output></span>
+              <input id="starting-level" name="levelPercent" type="range" min="0" max="100" step="25" value={levelPercent} onChange={(event) => setLevelPercent(Number(event.target.value))} />
+              <span className="level-field__scale" aria-hidden="true"><span>Empty</span><span>Half</span><span>Full</span></span>
+            </div>
+          )}
 
           <label className="field">
             <span>Category</span>

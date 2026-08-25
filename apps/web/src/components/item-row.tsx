@@ -1,7 +1,7 @@
 "use client";
 
 import { ArrowCounterClockwise, Minus, Package, Warning } from "@phosphor-icons/react";
-import { forecastLabel, quantityLabel, relativeUpdate, stockLabel } from "@/lib/format";
+import { cadenceLabel, forecastLabel, quantityLabel, relativeUpdate, stockLabel } from "@/lib/format";
 import type { ApplyEventInput, InventoryItem } from "@/lib/inventory";
 
 interface ItemRowProps {
@@ -11,7 +11,7 @@ interface ItemRowProps {
 }
 
 export function ItemRow({ item, pending, onAction }: ItemRowProps) {
-  const consumeQuantity = item.trackingMode === "exact" ? 1 : undefined;
+  const consumeQuantity = item.trackingMode === "exact" ? 1 : 25;
   const restockQuantity = item.trackingMode === "exact" ? Math.max(1, item.minQuantity || 1) : undefined;
   return (
     <article className="item-row">
@@ -24,11 +24,16 @@ export function ItemRow({ item, pending, onAction }: ItemRowProps) {
       </div>
       <div className="item-stock">
         <span className={`status status--${item.stockLevel}`}>{stockLabel(item.stockLevel)}</span>
-        <strong>{quantityLabel(item)}</strong>
+        {item.trackingMode === "simple" ? (
+          <div className="stock-meter">
+            <meter className={`stock-meter__bar stock-meter__bar--${item.stockLevel}`} min="0" max="100" value={item.levelPercent} aria-label={`${item.name} level`} />
+            <strong>{Math.round(item.levelPercent)}%</strong>
+          </div>
+        ) : <strong>{quantityLabel(item)}</strong>}
       </div>
       <div className="item-pace">
-        <strong>{forecastLabel(item.forecast)}</strong>
-        <span>{relativeUpdate(item.updatedAt)}</span>
+        <strong>{cadenceLabel(item.cadence)}</strong>
+        <span>{item.trackingMode === "exact" && item.forecast ? forecastLabel(item.forecast) : relativeUpdate(item.updatedAt)}</span>
       </div>
       <div className="item-actions">
         <button className="button button--small button--quiet" type="button" disabled={pending || item.stockLevel === "out"} onClick={() => onAction(item, { type: "consume", quantity: consumeQuantity })} aria-label={`Use ${item.name}`}>

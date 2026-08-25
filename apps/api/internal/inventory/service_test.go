@@ -77,7 +77,7 @@ func TestServiceCreatesItemWithSafeDefaults(t *testing.T) {
 	if item.ID != "item-1" || item.Name != "Dish soap" {
 		t.Fatalf("unexpected identity: %#v", item)
 	}
-	if item.TrackingMode != TrackingSimple || item.StockLevel != StockOkay || item.Unit != "item" {
+	if item.TrackingMode != TrackingSimple || item.StockLevel != StockOkay || item.LevelPercent != 50 || item.Unit != "item" {
 		t.Fatalf("unexpected defaults: %#v", item)
 	}
 	if !item.CreatedAt.Equal(now) || !item.UpdatedAt.Equal(now) {
@@ -110,15 +110,70 @@ func TestServiceConsumesExactStockAndMarksLow(t *testing.T) {
 
 func TestServiceAdvancesSimpleStockWithoutQuantityBookkeeping(t *testing.T) {
 	repo := newMemoryRepository()
-	repo.items["soap"] = Item{ID: "soap", Name: "Soap", TrackingMode: TrackingSimple, StockLevel: StockOkay, Unit: "item"}
+	repo.items["soap"] = Item{ID: "soap", Name: "Soap", TrackingMode: TrackingSimple, StockLevel: StockOkay, LevelPercent: 50, Unit: "item"}
 	service := NewService(repo, WithIDGenerator(func() string { return "event-1" }))
 
 	item, err := service.ApplyEvent(context.Background(), "soap", ApplyEventInput{Type: EventConsume})
 	if err != nil {
 		t.Fatalf("ApplyEvent() error = %v", err)
 	}
-	if item.StockLevel != StockLow {
-		t.Fatalf("StockLevel = %q, want %q", item.StockLevel, StockLow)
+	if item.LevelPercent != 25 || item.StockLevel != StockLow {
+		t.Fatalf("unexpected stock: %#v", item)
+	}
+}
+
+func TestServiceUsesExplicitSimpleConsumptionPoints(t *testing.T) {
+	repo := newMemoryRepository()
+	repo.items["soap"] = Item{ID: "soap", Name: "Soap", TrackingMode: TrackingSimple, StockLevel: StockFull, LevelPercent: 90, Unit: "item"}
+	service := NewService(repo, WithIDGenerator(func() string { return "event-1" }))
+
+	item, err := service.ApplyEvent(context.Background(), "soap", ApplyEventInput{Type: EventConsume, Quantity: 15})
+	if err != nil {
+		t.Fatalf("ApplyEvent() error = %v", err)
+	}
+	if item.LevelPercent != 75 || item.StockLevel != StockOkay {
+		t.Fatalf("unexpected stock: %#v", item)
+	}
+}
+
+func TestServiceRestocksSimpleLevelToOneHundred(t *testing.T) {
+	repo := newMemoryRepository()
+	repo.items["soap"] = Item{ID: "soap", Name: "Soap", TrackingMode: TrackingSimple, StockLevel: StockLow, LevelPercent: 10, Unit: "item"}
+	service := NewService(repo, WithIDGenerator(func() string { return "event-1" }))
+
+	item, err := service.ApplyEvent(context.Background(), "soap", ApplyEventInput{Type: EventRestock})
+	if err != nil {
+		t.Fatalf("ApplyEvent() error = %v", err)
+	}
+	if item.LevelPercent != 100 || item.StockLevel != StockFull {
+		t.Fatalf("unexpected stock: %#v", item)
+	}
+}
+
+func TestServiceMarksSimpleLevelAndAcceptsZero(t *testing.T) {
+	repo := newMemoryRepository()
+	repo.items["soap"] = Item{ID: "soap", Name: "Soap", TrackingMode: TrackingSimple, StockLevel: StockOkay, LevelPercent: 50, Unit: "item"}
+	service := NewService(repo, WithIDGenerator(func() string { return "event-1" }))
+	zero := 0.0
+
+	item, err := service.ApplyEvent(context.Background(), "soap", ApplyEventInput{Type: EventMarkLevel, LevelPercent: &zero})
+	if err != nil {
+		t.Fatalf("ApplyEvent() error = %v", err)
+	}
+	if item.LevelPercent != 0 || item.StockLevel != StockOut {
+		t.Fatalf("unexpected stock: %#v", item)
+	}
+}
+
+func TestServiceRejectsSimpleLevelOutsideRange(t *testing.T) {
+	repo := newMemoryRepository()
+	repo.items["soap"] = Item{ID: "soap", Name: "Soap", TrackingMode: TrackingSimple, StockLevel: StockOkay, LevelPercent: 50, Unit: "item"}
+	service := NewService(repo)
+	overfull := 101.0
+
+	_, err := service.ApplyEvent(context.Background(), "soap", ApplyEventInput{Type: EventMarkLevel, LevelPercent: &overfull})
+	if !errors.Is(err, ErrInvalid) {
+		t.Fatalf("ApplyEvent() error = %v, want ErrInvalid", err)
 	}
 }
 
@@ -183,5 +238,58 @@ func TestForecastUsesRecentExactConsumption(t *testing.T) {
 	}
 	if forecast.DailyUsage != 1 || forecast.DaysRemaining != 6 || forecast.Confidence != ConfidenceLow {
 		t.Fatalf("unexpected forecast: %#v", forecast)
+	}
+}
+
+func TestCalculateCadenceNeedsTwoConsumptionEvents(t *testing.T) {
+	now := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
+	events := []StockEvent{{Type: EventConsume, OccurredAt: now.Add(-2 * 24 * time.Hour)}}
+	if cadence := CalculateCadence(events, now); cadence != nil {
+		t.Fatalf("CalculateCadence() = %#v, want nil", cadence)
+	}
+}
+
+func TestCalculateCadenceUsesIntervalsBetweenSortedEvents(t *testing.T) {
+	now := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
+	events := []StockEvent{
+		{Type: EventConsume, OccurredAt: now.Add(-2 * 24 * time.Hour)},
+		{Type: EventRestock, OccurredAt: now.Add(-3 * 24 * time.Hour)},
+		{Type: EventConsume, OccurredAt: now.Add(24 * time.Hour)},
+		{Type: EventConsume, OccurredAt: now.Add(-10 * 24 * time.Hour)},
+		{Type: EventConsume, OccurredAt: now.Add(-6 * 24 * time.Hour)},
+	}
+
+	cadence := CalculateCadence(events, now)
+	if cadence == nil {
+		t.Fatal("CalculateCadence() = nil")
+	}
+	if cadence.AverageIntervalDays != 4 || cadence.EventsPerWeek != 1.8 || cadence.Confidence != ConfidenceLow {
+		t.Fatalf("unexpected cadence: %#v", cadence)
+	}
+	if !cadence.LastConsumedAt.Equal(now.Add(-2 * 24 * time.Hour)) {
+		t.Fatalf("LastConsumedAt = %v", cadence.LastConsumedAt)
+	}
+}
+
+func TestCalculateCadenceConfidenceIncreasesWithSamples(t *testing.T) {
+	now := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
+	for _, test := range []struct {
+		name       string
+		count      int
+		confidence Confidence
+	}{
+		{name: "medium", count: 4, confidence: ConfidenceMedium},
+		{name: "high", count: 8, confidence: ConfidenceHigh},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			events := make([]StockEvent, 0, test.count)
+			for index := range test.count {
+				events = append(events, StockEvent{Type: EventConsume, OccurredAt: now.Add(-time.Duration(test.count-index) * 24 * time.Hour)})
+			}
+			cadence := CalculateCadence(events, now)
+			if cadence == nil || cadence.Confidence != test.confidence {
+				t.Fatalf("CalculateCadence() = %#v, want confidence %q", cadence, test.confidence)
+			}
+		})
 	}
 }
