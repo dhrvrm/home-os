@@ -258,7 +258,7 @@ Expected: every command exits zero, the audit reports zero vulnerabilities, and 
 
 Seed an item with a Hindi alias and two categories. Inspect the add dialog and rows at 1440px light/dark and a true 390px emulated viewport. Assert document width equals viewport width. Run Lighthouse accessibility and require 100.
 
-- [ ] **Step 6: Review, commit, and publish**
+- [x] **Step 6: Review, commit, and publish**
 
 Run a credential-pattern scan, inspect the complete staged diff, and commit:
 
