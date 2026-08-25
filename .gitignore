@@ -5,6 +5,9 @@ node_modules/
 .next/
 out/
 coverage/
+apps/web/public/vendor/wllama.wasm
+apps/web/public/vendor/wllama-compat.js
+apps/web/public/vendor/wllama-compat.wasm
 .wrangler/
 .wrangler-dry-run/
 

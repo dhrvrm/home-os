@@ -126,6 +126,12 @@ type CreateItemInput struct {
 	MinQuantity      float64      `json:"minQuantity"`
 }
 
+type UpdateItemMetadataInput struct {
+	Name             *string   `json:"name"`
+	AlternativeNames *[]string `json:"alternativeNames"`
+	Categories       *[]string `json:"categories"`
+}
+
 type ApplyEventInput struct {
 	Type         EventType  `json:"type"`
 	Quantity     float64    `json:"quantity"`

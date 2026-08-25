@@ -1,4 +1,4 @@
-import type { ApplyEventInput, CreateItemInput, InventoryItem } from "./inventory";
+import type { ApplyEventInput, CreateItemInput, InventoryItem, UpdateItemMetadataInput } from "./inventory";
 
 interface APIErrorBody {
   code: string;
@@ -71,6 +71,14 @@ export async function createItem(input: CreateItemInput): Promise<InventoryItem>
 export async function applyEvent(itemID: string, input: ApplyEventInput): Promise<InventoryItem> {
   const data = await request<{ item: InventoryItem }>(`/api/v1/items/${encodeURIComponent(itemID)}/events`, {
     method: "POST",
+    body: JSON.stringify(input),
+  });
+  return data.item;
+}
+
+export async function updateItemMetadata(itemID: string, input: UpdateItemMetadataInput): Promise<InventoryItem> {
+  const data = await request<{ item: InventoryItem }>(`/api/v1/items/${encodeURIComponent(itemID)}`, {
+    method: "PATCH",
     body: JSON.stringify(input),
   });
   return data.item;

@@ -131,6 +131,48 @@ func TestRepositoryPersistsAndFiltersAlternativeNamesAndCategories(t *testing.T)
 	}
 }
 
+func TestRepositoryReplacesItemMetadataWithoutChangingStock(t *testing.T) {
+	ctx := context.Background()
+	repository, err := Open(filepath.Join(t.TempDir(), "inventory.db"))
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	t.Cleanup(func() { _ = repository.Close() })
+	created := time.Date(2026, 8, 24, 12, 0, 0, 0, time.UTC)
+	item := inventory.Item{
+		ID: "soap", Name: "Dish soap", AlternativeNames: []string{"Soap"}, Category: "Cleaning", Categories: []string{"Cleaning"},
+		Location: "Kitchen", Unit: "bottle", TrackingMode: inventory.TrackingSimple, StockLevel: inventory.StockLow,
+		LevelPercent: 25, CreatedAt: created, UpdatedAt: created,
+	}
+	if _, err := repository.CreateItem(ctx, item); err != nil {
+		t.Fatalf("CreateItem() error = %v", err)
+	}
+	item.Name = "Washing-up liquid"
+	item.AlternativeNames = []string{"बर्तन धोने का साबुन", "Soap"}
+	item.Category = "Kitchen"
+	item.Categories = []string{"Kitchen", "Cleaning"}
+	item.UpdatedAt = created.Add(time.Hour)
+	if _, err := repository.UpdateItemMetadata(ctx, item); err != nil {
+		t.Fatalf("UpdateItemMetadata() error = %v", err)
+	}
+
+	got, err := repository.GetItem(ctx, item.ID)
+	if err != nil {
+		t.Fatalf("GetItem() error = %v", err)
+	}
+	if got.Name != item.Name || !reflect.DeepEqual(got.AlternativeNames, item.AlternativeNames) || !reflect.DeepEqual(got.Categories, item.Categories) {
+		t.Fatalf("metadata = %#v, want %#v", got, item)
+	}
+	if got.Quantity != item.Quantity || got.StockLevel != inventory.StockLow || got.LevelPercent != 25 || got.Location != "Kitchen" || !got.CreatedAt.Equal(created) {
+		t.Fatalf("stock fields changed: %#v", got)
+	}
+	missing := item
+	missing.ID = "missing"
+	if _, err := repository.UpdateItemMetadata(ctx, missing); !errors.Is(err, inventory.ErrNotFound) {
+		t.Fatalf("UpdateItemMetadata(missing) error = %v, want ErrNotFound", err)
+	}
+}
+
 func TestOpenMigratesLegacyPercentageColumns(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "legacy.db")

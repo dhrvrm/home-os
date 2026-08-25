@@ -155,6 +155,63 @@ func (s *Service) CreateItem(ctx context.Context, input CreateItemInput) (Item, 
 	return s.repository.CreateItem(ctx, item)
 }
 
+func (s *Service) UpdateItemMetadata(ctx context.Context, itemID string, input UpdateItemMetadataInput) (Item, error) {
+	s.mutationMu.Lock()
+	defer s.mutationMu.Unlock()
+
+	item, err := s.repository.GetItem(ctx, strings.TrimSpace(itemID))
+	if err != nil {
+		return Item{}, err
+	}
+
+	next := item
+	if input.Name != nil {
+		next.Name = strings.TrimSpace(*input.Name)
+		if next.Name == "" {
+			return Item{}, ValidationError{Field: "name", Message: "enter an item name"}
+		}
+		if utf8.RuneCountInString(next.Name) > 120 {
+			return Item{}, ValidationError{Field: "name", Message: "must be 120 characters or fewer"}
+		}
+	}
+	if input.AlternativeNames != nil {
+		next.AlternativeNames, err = normalizeValues("alternativeNames", *input.AlternativeNames, next.Name, 8, 120)
+		if err != nil {
+			return Item{}, err
+		}
+	} else if input.Name != nil {
+		next.AlternativeNames, err = normalizeValues("alternativeNames", next.AlternativeNames, next.Name, 8, 120)
+		if err != nil {
+			return Item{}, err
+		}
+	}
+	if input.Categories != nil {
+		next.Categories, err = normalizeValues("categories", *input.Categories, "", 9, 60)
+		if err != nil {
+			return Item{}, err
+		}
+		if len(next.Categories) == 0 {
+			return Item{}, ValidationError{Field: "categories", Message: "choose at least one category"}
+		}
+	}
+	if len(next.Categories) == 0 {
+		next.Categories = []string{fallback(strings.TrimSpace(next.Category), "Other")}
+	}
+	next.Category = next.Categories[0]
+	now := s.now()
+	next.UpdatedAt = now
+	updated, err := s.repository.UpdateItemMetadata(ctx, next)
+	if err != nil {
+		return Item{}, err
+	}
+	events, err := s.repository.ListEvents(ctx, updated.ID, now.Add(-90*24*time.Hour))
+	if err != nil {
+		return Item{}, err
+	}
+	enrichItem(&updated, events, now)
+	return updated, nil
+}
+
 func (s *Service) ApplyEvent(ctx context.Context, itemID string, input ApplyEventInput) (Item, error) {
 	s.mutationMu.Lock()
 	defer s.mutationMu.Unlock()

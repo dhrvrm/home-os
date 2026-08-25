@@ -9,17 +9,31 @@ The first release includes:
 - alternative names in any language, multiple categories, locations, search, and quick filters
 - purchase and consumption history
 - learned consumption cadence and lightweight run-out forecasts
+- a private in-browser assistant for questions, renaming, alternative names, and categorization
 - an installable, offline-capable PWA
 
 Simple items start at the level you choose. Each **Use** action subtracts 25 points and **Restock** returns the item to 100. After two consumption events, Home OS begins showing the item's typical usage interval.
 
 Each item has one primary display name and can also have alternative names, such as a Hindi household name or a common brand name. Search matches every name and every category. An item may belong to several categories, and appears under each matching category filter.
 
+## Local inventory assistant
+
+**Ask Home** handles common inventory questions directly in the app, including counts, locations, and low/out-of-stock lists. These deterministic answers do not load an AI model.
+
+Free-form requests can optionally use SmolLM2 135M Instruct through Wllama/llama.cpp. The first use asks for permission before downloading a 105 MB Q4 model from Hugging Face. The model is cached in the browser's origin-private storage and inference runs in Wllama's local worker using WebGPU when available or WebAssembly as a fallback. No hosted inference API receives the inventory.
+
+Use a current Chromium, Firefox, or Safari release with WebAssembly SIMD. Home OS packages both Wllama's modern runtime and its pinned compatibility runtime, so older WebAssembly paths do not fetch executable code from a third-party CDN. Allow roughly 130 MB of free browser storage for the model and cache metadata; CPU-only generation is slower than WebGPU.
+
+Generated output is treated as untrusted. It is parsed through an allowlist and can only propose a primary name, alternative names, or categories for an existing item. Home OS displays the exact proposal and requires confirmation before calling the metadata API. The model cannot directly mutate inventory.
+
+The small model is intentionally limited: it is best at short, explicit requests with an exact item name, and its generated Hindi is weaker than its English. Hindi and other scripts remain fully supported for saved alternative names and deterministic item matching.
+
 ## Stack
 
 - Go API using the standard HTTP library
 - SQLite single-file persistence
 - Next.js static SPA with TypeScript
+- Wllama with a small GGUF model for browser-local inference
 - Cloudflare Workers Static Assets deployment for the PWA
 
 ## Run locally
@@ -50,7 +64,7 @@ make build
 
 ## Deploy
 
-`npm run deploy --workspace @home-os/web` publishes the static PWA to Cloudflare Workers Static Assets. The Go API requires a host with a persistent volume; see [deployment guidance](docs/deployment.md) for the free and paid options.
+`npm run deploy --workspace @home-os/web` publishes the static PWA to Cloudflare Workers Static Assets. The build copies the pinned 8.1 MB modern Wllama runtime and 15 MB compatibility runtime into the static export; the 105 MB model is not deployed to Cloudflare and is fetched only after consent. The Go API requires a host with a persistent volume; see [deployment guidance](docs/deployment.md) for the free and paid options.
 
 ## Project structure
 

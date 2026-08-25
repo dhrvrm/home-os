@@ -196,6 +196,40 @@ func (r *Repository) CreateItem(ctx context.Context, item inventory.Item) (inven
 	return item, nil
 }
 
+func (r *Repository) UpdateItemMetadata(ctx context.Context, item inventory.Item) (inventory.Item, error) {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return inventory.Item{}, fmt.Errorf("begin item metadata update: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	result, err := tx.ExecContext(ctx, `UPDATE items SET name = ?, category = ?, updated_at = ? WHERE id = ?`,
+		item.Name, item.Category, formatTime(item.UpdatedAt), item.ID)
+	if err != nil {
+		return inventory.Item{}, fmt.Errorf("update item metadata: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return inventory.Item{}, fmt.Errorf("check item metadata update: %w", err)
+	}
+	if rows == 0 {
+		return inventory.Item{}, inventory.ErrNotFound
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM item_alternative_names WHERE item_id = ?`, item.ID); err != nil {
+		return inventory.Item{}, fmt.Errorf("replace alternative names: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM item_categories WHERE item_id = ?`, item.ID); err != nil {
+		return inventory.Item{}, fmt.Errorf("replace item categories: %w", err)
+	}
+	if err := insertItemMetadata(ctx, tx, item); err != nil {
+		return inventory.Item{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return inventory.Item{}, fmt.Errorf("commit item metadata update: %w", err)
+	}
+	return item, nil
+}
+
 func (r *Repository) ApplyEvent(ctx context.Context, event inventory.StockEvent, next inventory.Item) (inventory.Item, error) {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {

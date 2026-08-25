@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { X } from "@phosphor-icons/react";
+import { CATEGORY_OPTIONS } from "@/lib/categories";
 import type { CreateItemInput, TrackingMode } from "@/lib/inventory";
 
 interface ItemFormProps {
@@ -10,8 +11,6 @@ interface ItemFormProps {
   onClose: () => void;
   onSubmit: (input: CreateItemInput) => Promise<void>;
 }
-
-const CATEGORY_OPTIONS = ["Food", "Cleaning", "Kitchen", "Laundry", "Paper goods", "Personal care", "Medicine", "Pet supplies", "Other"];
 
 export function ItemForm({ pending, error, onClose, onSubmit }: ItemFormProps) {
   const [mode, setMode] = useState<TrackingMode>("simple");

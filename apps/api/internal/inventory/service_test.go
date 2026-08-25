@@ -53,6 +53,16 @@ func (r *memoryRepository) CreateItem(_ context.Context, item Item) (Item, error
 	return item, nil
 }
 
+func (r *memoryRepository) UpdateItemMetadata(_ context.Context, item Item) (Item, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, ok := r.items[item.ID]; !ok {
+		return Item{}, ErrNotFound
+	}
+	r.items[item.ID] = item
+	return item, nil
+}
+
 func (r *memoryRepository) ApplyEvent(_ context.Context, event StockEvent, next Item) (Item, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -152,6 +162,77 @@ func TestServiceRejectsInvalidAlternativeNamesAndCategories(t *testing.T) {
 			var validation ValidationError
 			if !errors.As(err, &validation) || validation.Field != test.field {
 				t.Fatalf("CreateItem() error = %#v, want field %q", err, test.field)
+			}
+		})
+	}
+}
+
+func TestServiceUpdatesItemMetadataWithoutChangingStock(t *testing.T) {
+	repo := newMemoryRepository()
+	created := time.Date(2026, 8, 24, 12, 0, 0, 0, time.UTC)
+	updatedAt := created.Add(24 * time.Hour)
+	repo.items["soap"] = Item{
+		ID: "soap", Name: "Dish soap", AlternativeNames: []string{"Soap"}, Category: "Cleaning",
+		Categories: []string{"Cleaning"}, Location: "Kitchen", Unit: "bottle", TrackingMode: TrackingSimple,
+		StockLevel: StockLow, LevelPercent: 25, CreatedAt: created, UpdatedAt: created,
+	}
+	service := NewService(repo, WithClock(func() time.Time { return updatedAt }))
+	name := "Washing-up liquid"
+	aliases := []string{" बर्तन धोने का साबुन ", "Soap", "soap", name}
+	categories := []string{" Kitchen ", "Cleaning", "kitchen"}
+
+	item, err := service.UpdateItemMetadata(context.Background(), "soap", UpdateItemMetadataInput{
+		Name: &name, AlternativeNames: &aliases, Categories: &categories,
+	})
+	if err != nil {
+		t.Fatalf("UpdateItemMetadata() error = %v", err)
+	}
+	if item.Name != name || strings.Join(item.AlternativeNames, "|") != "बर्तन धोने का साबुन|Soap" {
+		t.Fatalf("unexpected names: %#v", item)
+	}
+	if strings.Join(item.Categories, "|") != "Kitchen|Cleaning" || item.Category != "Kitchen" {
+		t.Fatalf("unexpected categories: %#v", item)
+	}
+	if item.StockLevel != StockLow || item.LevelPercent != 25 || item.Unit != "bottle" || !item.UpdatedAt.Equal(updatedAt) {
+		t.Fatalf("stock metadata changed: %#v", item)
+	}
+}
+
+func TestServiceMetadataUpdateKeepsOmittedFieldsAndAllowsEmptyAliases(t *testing.T) {
+	repo := newMemoryRepository()
+	repo.items["rice"] = Item{ID: "rice", Name: "Rice", AlternativeNames: []string{"चावल"}, Category: "Food", Categories: []string{"Food", "Kitchen"}}
+	service := NewService(repo)
+	emptyAliases := []string{}
+
+	item, err := service.UpdateItemMetadata(context.Background(), "rice", UpdateItemMetadataInput{AlternativeNames: &emptyAliases})
+	if err != nil {
+		t.Fatalf("UpdateItemMetadata() error = %v", err)
+	}
+	if item.Name != "Rice" || len(item.AlternativeNames) != 0 || strings.Join(item.Categories, "|") != "Food|Kitchen" {
+		t.Fatalf("unexpected metadata: %#v", item)
+	}
+}
+
+func TestServiceRejectsInvalidMetadataUpdate(t *testing.T) {
+	repo := newMemoryRepository()
+	repo.items["rice"] = Item{ID: "rice", Name: "Rice", Category: "Food", Categories: []string{"Food"}}
+	service := NewService(repo)
+	blank := "  "
+	emptyCategories := []string{}
+
+	for _, test := range []struct {
+		name  string
+		input UpdateItemMetadataInput
+		field string
+	}{
+		{name: "blank name", input: UpdateItemMetadataInput{Name: &blank}, field: "name"},
+		{name: "empty categories", input: UpdateItemMetadataInput{Categories: &emptyCategories}, field: "categories"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := service.UpdateItemMetadata(context.Background(), "rice", test.input)
+			var validation ValidationError
+			if !errors.As(err, &validation) || validation.Field != test.field {
+				t.Fatalf("UpdateItemMetadata() error = %#v, want field %q", err, test.field)
 			}
 		})
 	}

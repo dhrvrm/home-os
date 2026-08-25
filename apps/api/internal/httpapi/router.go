@@ -19,6 +19,7 @@ const maxRequestBody = 1 << 20
 type InventoryService interface {
 	ListItems(context.Context, inventory.Filter) ([]inventory.Item, error)
 	CreateItem(context.Context, inventory.CreateItemInput) (inventory.Item, error)
+	UpdateItemMetadata(context.Context, string, inventory.UpdateItemMetadataInput) (inventory.Item, error)
 	ApplyEvent(context.Context, string, inventory.ApplyEventInput) (inventory.Item, error)
 }
 
@@ -53,6 +54,7 @@ func NewRouter(service InventoryService, config Config) http.Handler {
 	mux.HandleFunc("GET /healthz", h.health)
 	mux.HandleFunc("GET /api/v1/items", h.listItems)
 	mux.HandleFunc("POST /api/v1/items", h.createItem)
+	mux.HandleFunc("PATCH /api/v1/items/{id}", h.updateItemMetadata)
 	mux.HandleFunc("POST /api/v1/items/{id}/events", h.applyEvent)
 	return cors(config.AllowedOrigins, recoverPanics(logger, requestLog(logger, mux)))
 }
@@ -91,6 +93,20 @@ func (h *handler) createItem(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusCreated, envelope{Data: map[string]any{"item": item}})
+}
+
+func (h *handler) updateItemMetadata(w http.ResponseWriter, r *http.Request) {
+	var input inventory.UpdateItemMetadataInput
+	if err := decodeJSON(w, r, &input); err != nil {
+		writeJSON(w, http.StatusBadRequest, envelope{Error: &apiError{Code: "invalid_json", Message: err.Error()}})
+		return
+	}
+	item, err := h.service.UpdateItemMetadata(r.Context(), r.PathValue("id"), input)
+	if err != nil {
+		writeError(w, err, h.logger)
+		return
+	}
+	writeJSON(w, http.StatusOK, envelope{Data: map[string]any{"item": item}})
 }
 
 func (h *handler) applyEvent(w http.ResponseWriter, r *http.Request) {
@@ -156,7 +172,7 @@ func cors(allowed []string, next http.Handler) http.Handler {
 		}
 		if origin != "" && permitted {
 			w.Header().Set("Access-Control-Allow-Origin", origin)
-			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, OPTIONS")
 			w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
 			w.Header().Set("Vary", "Origin")
 		}

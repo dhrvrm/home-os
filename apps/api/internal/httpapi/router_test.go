@@ -16,6 +16,8 @@ type fakeInventoryService struct {
 	items       []inventory.Item
 	listFilter  inventory.Filter
 	created     inventory.CreateItemInput
+	metadataID  string
+	metadata    inventory.UpdateItemMetadataInput
 	eventItemID string
 	event       inventory.ApplyEventInput
 	err         error
@@ -37,6 +39,28 @@ func (s *fakeInventoryService) CreateItem(_ context.Context, input inventory.Cre
 	}
 	if input.LevelPercent != nil {
 		item.LevelPercent = *input.LevelPercent
+	}
+	return item, nil
+}
+
+func (s *fakeInventoryService) UpdateItemMetadata(_ context.Context, itemID string, input inventory.UpdateItemMetadataInput) (inventory.Item, error) {
+	s.metadataID = itemID
+	s.metadata = input
+	if s.err != nil {
+		return inventory.Item{}, s.err
+	}
+	item := inventory.Item{ID: itemID}
+	if input.Name != nil {
+		item.Name = *input.Name
+	}
+	if input.AlternativeNames != nil {
+		item.AlternativeNames = *input.AlternativeNames
+	}
+	if input.Categories != nil {
+		item.Categories = *input.Categories
+		if len(item.Categories) > 0 {
+			item.Category = item.Categories[0]
+		}
 	}
 	return item, nil
 }
@@ -115,6 +139,55 @@ func TestApplyEvent(t *testing.T) {
 	if response.Code != http.StatusOK || service.eventItemID != "milk" || service.event.Type != inventory.EventConsume {
 		t.Fatalf("response = %d %s, event = %#v", response.Code, response.Body.String(), service.event)
 	}
+}
+
+func TestUpdateItemMetadata(t *testing.T) {
+	service := &fakeInventoryService{}
+	request := httptest.NewRequest(http.MethodPatch, "/api/v1/items/soap", strings.NewReader(`{"name":"Washing-up liquid","alternativeNames":["बर्तन धोने का साबुन"],"categories":["Cleaning","Kitchen"]}`))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	NewRouter(service, Config{}).ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK || service.metadataID != "soap" || service.metadata.Name == nil || *service.metadata.Name != "Washing-up liquid" {
+		t.Fatalf("response = %d %s, metadata = %#v", response.Code, response.Body.String(), service.metadata)
+	}
+	if service.metadata.AlternativeNames == nil || len(*service.metadata.AlternativeNames) != 1 || service.metadata.Categories == nil || len(*service.metadata.Categories) != 2 {
+		t.Fatalf("decoded metadata = %#v", service.metadata)
+	}
+	if !strings.Contains(response.Body.String(), `"category":"Cleaning"`) {
+		t.Fatalf("response = %s", response.Body.String())
+	}
+}
+
+func TestUpdateItemMetadataRejectsUnknownJSONAndMapsErrors(t *testing.T) {
+	t.Run("unknown field", func(t *testing.T) {
+		request := httptest.NewRequest(http.MethodPatch, "/api/v1/items/soap", strings.NewReader(`{"location":"Garage"}`))
+		response := httptest.NewRecorder()
+		NewRouter(&fakeInventoryService{}, Config{}).ServeHTTP(response, request)
+		if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "unknown field") {
+			t.Fatalf("response = %d %s", response.Code, response.Body.String())
+		}
+	})
+
+	t.Run("validation", func(t *testing.T) {
+		service := &fakeInventoryService{err: inventory.ValidationError{Field: "categories", Message: "choose at least one category"}}
+		request := httptest.NewRequest(http.MethodPatch, "/api/v1/items/soap", strings.NewReader(`{"categories":[]}`))
+		response := httptest.NewRecorder()
+		NewRouter(service, Config{}).ServeHTTP(response, request)
+		if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), `"field":"categories"`) {
+			t.Fatalf("response = %d %s", response.Code, response.Body.String())
+		}
+	})
+
+	t.Run("not found", func(t *testing.T) {
+		service := &fakeInventoryService{err: inventory.ErrNotFound}
+		request := httptest.NewRequest(http.MethodPatch, "/api/v1/items/missing", strings.NewReader(`{"name":"Rice"}`))
+		response := httptest.NewRecorder()
+		NewRouter(service, Config{}).ServeHTTP(response, request)
+		if response.Code != http.StatusNotFound {
+			t.Fatalf("response = %d %s", response.Code, response.Body.String())
+		}
+	})
 }
 
 func TestApplyEventAcceptsZeroPercentage(t *testing.T) {

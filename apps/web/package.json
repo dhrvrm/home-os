@@ -3,8 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
-    "build": "next build",
+    "prepare:model-runtime": "node scripts/copy-wllama-assets.mjs",
+    "dev": "npm run prepare:model-runtime && next dev",
+    "build": "npm run prepare:model-runtime && next build",
     "lint": "eslint .",
     "test": "vitest run",
     "preview": "npm run build && wrangler dev",
@@ -12,6 +13,8 @@
   },
   "dependencies": {
     "@phosphor-icons/react": "2.1.10",
+    "@wllama/wllama": "3.6.0",
+    "@wllama/wllama-compat": "3.6.0",
     "next": "16.3.2",
     "react": "19.2.8",
     "react-dom": "19.2.8"

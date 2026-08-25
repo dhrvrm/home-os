@@ -53,3 +53,9 @@ export interface ApplyEventInput {
   stockLevel?: StockLevel;
   levelPercent?: number;
 }
+
+export interface UpdateItemMetadataInput {
+  name?: string;
+  alternativeNames?: string[];
+  categories?: string[];
+}

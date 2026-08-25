@@ -9,11 +9,15 @@ import {
   Package,
   Plus,
   ShoppingCartSimple,
+  Sparkle,
   WarningCircle,
 } from "@phosphor-icons/react";
-import { applyEvent, createItem, listItems } from "@/lib/api";
+import { applyEvent, createItem, listItems, updateItemMetadata } from "@/lib/api";
+import { BrowserAssistant } from "@/lib/browser-assistant";
+import type { AssistantProposal } from "@/lib/inventory-assistant";
 import type { ApplyEventInput, CreateItemInput, InventoryItem } from "@/lib/inventory";
 import { EmptyState } from "./empty-state";
+import { InventoryAssistant } from "./inventory-assistant";
 import { ItemForm } from "./item-form";
 import { ItemRow } from "./item-row";
 
@@ -27,8 +31,10 @@ export function InventoryApp() {
   const [query, setQuery] = useState("");
   const [category, setCategory] = useState("All");
   const [showForm, setShowForm] = useState(false);
+  const [showAssistant, setShowAssistant] = useState(false);
   const [saving, setSaving] = useState(false);
   const [pendingItem, setPendingItem] = useState<string | null>(null);
+  const [assistant] = useState(() => new BrowserAssistant());
 
   const load = useCallback(async () => {
     setLoadState("loading");
@@ -55,6 +61,10 @@ export function InventoryApp() {
     });
     return () => { active = false; };
   }, []);
+
+  useEffect(() => {
+    return () => { void assistant.dispose(); };
+  }, [assistant]);
 
   const categories = useMemo(() => ["All", ...Array.from(new Set(items.flatMap(itemCategories))).sort()], [items]);
   const visibleItems = useMemo(() => {
@@ -96,6 +106,11 @@ export function InventoryApp() {
     }
   }
 
+  async function applyAssistantProposal(proposal: AssistantProposal) {
+    const updated = await updateItemMetadata(proposal.itemID, proposal.changes);
+    setItems((current) => current.map((candidate) => candidate.id === updated.id ? updated : candidate));
+  }
+
   return (
     <div className="app-shell">
       <aside className="sidebar">
@@ -119,9 +134,14 @@ export function InventoryApp() {
             <p className="topbar__context">Our home</p>
             <h1>Inventory</h1>
           </div>
-          <button className="button button--primary topbar__add" type="button" onClick={() => setShowForm(true)}>
-            <Plus size={18} weight="bold" aria-hidden="true" /> Add item
-          </button>
+          <div className="topbar__actions">
+            <button className="button button--quiet topbar__assistant" type="button" onClick={() => setShowAssistant(true)}>
+              <Sparkle size={17} weight="fill" aria-hidden="true" /> Ask Home
+            </button>
+            <button className="button button--primary topbar__add" type="button" onClick={() => setShowForm(true)}>
+              <Plus size={18} weight="bold" aria-hidden="true" /> Add item
+            </button>
+          </div>
         </header>
 
         <section className="overview" aria-label="Inventory summary">
@@ -139,11 +159,16 @@ export function InventoryApp() {
         <section id="inventory" className="inventory-panel">
           <header className="inventory-panel__header">
             <div><h2>Everything at home</h2><p>{visibleItems.length} of {items.length} items</p></div>
-            <label className="search-field">
-              <MagnifyingGlass size={18} aria-hidden="true" />
-              <span className="sr-only">Search inventory</span>
-              <input type="search" value={query} onChange={(event) => setQuery(event.target.value)} aria-label="Search inventory" placeholder="Search items or rooms" />
-            </label>
+            <div className="inventory-panel__tools">
+              <button className="button button--quiet inventory-panel__assistant" type="button" onClick={() => setShowAssistant(true)}>
+                <Sparkle size={16} weight="fill" aria-hidden="true" /> Ask Home
+              </button>
+              <label className="search-field">
+                <MagnifyingGlass size={18} aria-hidden="true" />
+                <span className="sr-only">Search inventory</span>
+                <input type="search" value={query} onChange={(event) => setQuery(event.target.value)} aria-label="Search inventory" placeholder="Search items or rooms" />
+              </label>
+            </div>
           </header>
 
           {items.length > 0 && (
@@ -180,6 +205,7 @@ export function InventoryApp() {
       </nav>
 
       {showForm && <ItemForm pending={saving} error={mutationError} onClose={() => { setShowForm(false); setMutationError(null); }} onSubmit={addItem} />}
+      {showAssistant && <InventoryAssistant assistant={assistant} items={items} onApply={applyAssistantProposal} onClose={() => setShowAssistant(false)} />}
     </div>
   );
 }
