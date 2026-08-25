@@ -250,7 +250,7 @@ Expected: every command exits zero, no test or lint failures, and Wrangler reads
 
 Render seeded inventory at 1440px light/dark and an emulated 390px viewport. Confirm the meter, cadence, controls, and dialog remain legible with no horizontal overflow. Run Lighthouse accessibility and require 100.
 
-- [ ] **Step 3: Review and commit**
+- [x] **Step 3: Review and commit**
 
 Run secret scanning, `git diff --check`, and inspect the complete staged diff. Commit with:
 
@@ -258,6 +258,6 @@ Run secret scanning, `git diff --check`, and inspect the complete staged diff. C
 git commit -m "feat: add inventory levels and cadence"
 ```
 
-- [ ] **Step 4: Integrate and publish**
+- [x] **Step 4: Integrate and publish**
 
 Fast-forward `main`, push `origin/main`, and confirm the GitHub CI run completes successfully.
