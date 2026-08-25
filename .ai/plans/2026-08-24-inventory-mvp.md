@@ -308,7 +308,7 @@ git commit -m "feat: launch Home OS inventory MVP"
 Run:
 
 ```bash
-gh repo create sw-dhruv/home-os --public --source=. --remote=origin --push
+gh repo create dhrvrm/home-os --public --source=. --remote=origin --push
 ```
 
 Expected: GitHub reports the public repository URL and `main` tracks `origin/main`.

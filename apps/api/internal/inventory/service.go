@@ -4,11 +4,13 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"fmt"
 	"math"
 	"sort"
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 )
 
 type Service struct {
@@ -81,6 +83,24 @@ func (s *Service) CreateItem(ctx context.Context, input CreateItemInput) (Item, 
 	if input.MinQuantity < 0 {
 		return Item{}, ValidationError{Field: "minQuantity", Message: "must be zero or greater"}
 	}
+	alternativeNames, err := normalizeValues("alternativeNames", input.AlternativeNames, name, 8, 120)
+	if err != nil {
+		return Item{}, err
+	}
+	categoryValues := input.Categories
+	if len(categoryValues) == 0 && strings.TrimSpace(input.Category) != "" {
+		categoryValues = []string{input.Category}
+	}
+	if len(categoryValues) == 0 {
+		categoryValues = []string{"Other"}
+	}
+	categories, err := normalizeValues("categories", categoryValues, "", 9, 60)
+	if err != nil {
+		return Item{}, err
+	}
+	if len(categories) == 0 {
+		categories = []string{"Other"}
+	}
 
 	mode := input.TrackingMode
 	if mode == "" {
@@ -117,18 +137,20 @@ func (s *Service) CreateItem(ctx context.Context, input CreateItemInput) (Item, 
 	}
 	now := s.now()
 	item := Item{
-		ID:           s.newID(),
-		Name:         name,
-		Category:     fallback(strings.TrimSpace(input.Category), "Other"),
-		Location:     fallback(strings.TrimSpace(input.Location), "Unassigned"),
-		Unit:         unit,
-		TrackingMode: mode,
-		Quantity:     input.Quantity,
-		StockLevel:   level,
-		LevelPercent: levelPercent,
-		MinQuantity:  input.MinQuantity,
-		CreatedAt:    now,
-		UpdatedAt:    now,
+		ID:               s.newID(),
+		Name:             name,
+		AlternativeNames: alternativeNames,
+		Category:         categories[0],
+		Categories:       categories,
+		Location:         fallback(strings.TrimSpace(input.Location), "Unassigned"),
+		Unit:             unit,
+		TrackingMode:     mode,
+		Quantity:         input.Quantity,
+		StockLevel:       level,
+		LevelPercent:     levelPercent,
+		MinQuantity:      input.MinQuantity,
+		CreatedAt:        now,
+		UpdatedAt:        now,
 	}
 	return s.repository.CreateItem(ctx, item)
 }
@@ -326,6 +348,33 @@ func confidenceFor(count int) Confidence {
 		return ConfidenceMedium
 	}
 	return ConfidenceLow
+}
+
+func normalizeValues(field string, values []string, excluded string, maxCount, maxLength int) ([]string, error) {
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" || (excluded != "" && strings.EqualFold(trimmed, excluded)) {
+			continue
+		}
+		if utf8.RuneCountInString(trimmed) > maxLength {
+			return nil, ValidationError{Field: field, Message: fmt.Sprintf("each value must be %d characters or fewer", maxLength)}
+		}
+		duplicate := false
+		for _, existing := range result {
+			if strings.EqualFold(existing, trimmed) {
+				duplicate = true
+				break
+			}
+		}
+		if !duplicate {
+			result = append(result, trimmed)
+		}
+	}
+	if len(result) > maxCount {
+		return nil, ValidationError{Field: field, Message: fmt.Sprintf("use no more than %d values", maxCount)}
+	}
+	return result, nil
 }
 
 func fallback(value, defaultValue string) string {

@@ -18,7 +18,9 @@ export interface Cadence {
 export interface InventoryItem {
   id: string;
   name: string;
+  alternativeNames: string[];
   category: string;
+  categories: string[];
   location: string;
   unit: string;
   trackingMode: TrackingMode;
@@ -34,7 +36,9 @@ export interface InventoryItem {
 
 export interface CreateItemInput {
   name: string;
-  category: string;
+  alternativeNames?: string[];
+  category?: string;
+  categories?: string[];
   location: string;
   unit: string;
   trackingMode: TrackingMode;

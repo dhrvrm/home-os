@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/sw-dhruv/home-os/apps/api/internal/inventory"
+	"github.com/dhrvrm/home-os/apps/api/internal/inventory"
 )
 
 const maxRequestBody = 1 << 20

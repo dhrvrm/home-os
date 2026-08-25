@@ -1,4 +1,4 @@
-module github.com/sw-dhruv/home-os/apps/api
+module github.com/dhrvrm/home-os/apps/api
 
 go 1.24.0
 

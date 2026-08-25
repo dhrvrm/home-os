@@ -20,7 +20,8 @@ export function ItemRow({ item, pending, onAction }: ItemRowProps) {
       </div>
       <div className="item-identity">
         <h3>{item.name}</h3>
-        <p>{item.category}<span aria-hidden="true">/</span>{item.location}</p>
+        {item.alternativeNames?.length > 0 && <small>{item.alternativeNames.join(", ")}</small>}
+        <p>{(item.categories?.length ? item.categories : [item.category]).join(", ")}<span aria-hidden="true">/</span>{item.location}</p>
       </div>
       <div className="item-stock">
         <span className={`status status--${item.stockLevel}`}>{stockLabel(item.stockLevel)}</span>

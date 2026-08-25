@@ -6,7 +6,9 @@ import { InventoryApp } from "./inventory-app";
 const soap = {
   id: "soap",
   name: "Dish soap",
+  alternativeNames: ["साबुन", "Soap"],
   category: "Cleaning",
+  categories: ["Cleaning", "Kitchen"],
   location: "Kitchen",
   unit: "bottle",
   trackingMode: "simple",
@@ -27,7 +29,9 @@ const soap = {
 const rice = {
   id: "rice",
   name: "Rice",
+  alternativeNames: ["चावल"],
   category: "Food",
+  categories: ["Food", "Staples"],
   location: "Pantry",
   unit: "kg",
   trackingMode: "exact",
@@ -55,6 +59,7 @@ describe("InventoryApp", () => {
     expect(screen.getByText("Rice")).toBeInTheDocument();
     expect(screen.getByRole("meter", { name: "Dish soap level" })).toHaveAttribute("value", "25");
     expect(screen.getByText("Used about every 4 days")).toBeInTheDocument();
+    expect(screen.getByText("साबुन, Soap")).toBeInTheDocument();
   });
 
   it("shows a retryable API error", async () => {
@@ -69,19 +74,20 @@ describe("InventoryApp", () => {
     const user = userEvent.setup();
     render(<InventoryApp />);
     await screen.findByText("Dish soap");
-    await user.type(screen.getByRole("searchbox", { name: "Search inventory" }), "rice");
-    expect(screen.queryByText("Dish soap")).not.toBeInTheDocument();
-    expect(screen.getByText("Rice")).toBeInTheDocument();
+    await user.type(screen.getByRole("searchbox", { name: "Search inventory" }), "साबुन");
+    expect(screen.getByText("Dish soap")).toBeInTheDocument();
+    expect(screen.queryByText("Rice")).not.toBeInTheDocument();
     await user.clear(screen.getByRole("searchbox", { name: "Search inventory" }));
-    await user.click(screen.getByRole("button", { name: "Cleaning" }));
+    await user.click(screen.getByRole("button", { name: "Kitchen" }));
     expect(screen.getByText("Dish soap")).toBeInTheDocument();
     expect(screen.queryByText("Rice")).not.toBeInTheDocument();
   });
 
   it("creates an item and adds it to the list", async () => {
+    const created = { ...rice, alternativeNames: ["चावल", "Basmati"], category: "Cleaning", categories: ["Cleaning", "Kitchen"], trackingMode: "simple", levelPercent: 75 };
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(new Response(JSON.stringify({ data: { items: [] }, error: null }), { status: 200 }))
-      .mockResolvedValueOnce(new Response(JSON.stringify({ data: { item: rice }, error: null }), { status: 201 }));
+      .mockResolvedValueOnce(new Response(JSON.stringify({ data: { item: created }, error: null }), { status: 201 }));
     vi.stubGlobal("fetch", fetchMock);
     const user = userEvent.setup();
     render(<InventoryApp />);
@@ -89,11 +95,20 @@ describe("InventoryApp", () => {
     await user.click(screen.getByRole("button", { name: "Add first item" }));
     const dialog = screen.getByRole("dialog", { name: "Add an item" });
     await user.type(within(dialog).getByLabelText("Item name"), "Rice");
+    await user.type(within(dialog).getByLabelText("Alternative names"), "चावल, Basmati");
+    await user.click(within(dialog).getByRole("checkbox", { name: "Food" }));
+    await user.click(within(dialog).getByRole("checkbox", { name: "Cleaning" }));
+    await user.click(within(dialog).getByRole("checkbox", { name: "Kitchen" }));
     fireEvent.change(within(dialog).getByRole("slider", { name: "Starting level" }), { target: { value: "75" } });
     await user.click(within(dialog).getByRole("button", { name: "Save item" }));
     expect(await screen.findByText("Rice")).toBeInTheDocument();
     const createRequest = fetchMock.mock.calls[1][1] as RequestInit;
-    expect(JSON.parse(String(createRequest.body))).toMatchObject({ trackingMode: "simple", levelPercent: 75 });
+    expect(JSON.parse(String(createRequest.body))).toMatchObject({
+      trackingMode: "simple",
+      levelPercent: 75,
+      alternativeNames: ["चावल", "Basmati"],
+      categories: ["Cleaning", "Kitchen"],
+    });
   });
 
   it("contains dialog focus and restores it when closed", async () => {

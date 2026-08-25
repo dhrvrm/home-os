@@ -3,6 +3,7 @@ package inventory
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -90,6 +91,69 @@ func TestServiceRejectsBlankName(t *testing.T) {
 	_, err := service.CreateItem(context.Background(), CreateItemInput{Name: "  "})
 	if !errors.Is(err, ErrInvalid) {
 		t.Fatalf("CreateItem() error = %v, want ErrInvalid", err)
+	}
+}
+
+func TestServiceNormalizesAlternativeNamesAndCategories(t *testing.T) {
+	service := NewService(newMemoryRepository(), WithIDGenerator(func() string { return "item-1" }))
+
+	item, err := service.CreateItem(context.Background(), CreateItemInput{
+		Name:             "Dish soap",
+		AlternativeNames: []string{" साबुन ", "Soap", "soap", "Dish soap", ""},
+		Categories:       []string{" Cleaning ", "Kitchen", "cleaning", ""},
+	})
+	if err != nil {
+		t.Fatalf("CreateItem() error = %v", err)
+	}
+	if got := strings.Join(item.AlternativeNames, "|"); got != "साबुन|Soap" {
+		t.Fatalf("AlternativeNames = %q", got)
+	}
+	if got := strings.Join(item.Categories, "|"); got != "Cleaning|Kitchen" {
+		t.Fatalf("Categories = %q", got)
+	}
+	if item.Category != "Cleaning" {
+		t.Fatalf("Category = %q, want compatibility category Cleaning", item.Category)
+	}
+}
+
+func TestServiceDefaultsCategories(t *testing.T) {
+	service := NewService(newMemoryRepository(), WithIDGenerator(func() string { return "item-1" }))
+
+	item, err := service.CreateItem(context.Background(), CreateItemInput{Name: "Torch"})
+	if err != nil {
+		t.Fatalf("CreateItem() error = %v", err)
+	}
+	if len(item.Categories) != 1 || item.Categories[0] != "Other" || item.Category != "Other" {
+		t.Fatalf("unexpected categories: %#v", item)
+	}
+}
+
+func TestServiceRejectsInvalidAlternativeNamesAndCategories(t *testing.T) {
+	service := NewService(newMemoryRepository())
+	nineValues := []string{"one", "two", "three", "four", "five", "six", "seven", "eight", "nine"}
+	tenValues := append(append([]string{}, nineValues...), "ten")
+
+	if _, err := service.CreateItem(context.Background(), CreateItemInput{Name: "Soap", Categories: nineValues}); err != nil {
+		t.Fatalf("CreateItem() with all nine supported categories error = %v", err)
+	}
+
+	for _, test := range []struct {
+		name  string
+		input CreateItemInput
+		field string
+	}{
+		{name: "too many alternative names", input: CreateItemInput{Name: "Soap", AlternativeNames: nineValues}, field: "alternativeNames"},
+		{name: "alternative name too long", input: CreateItemInput{Name: "Soap", AlternativeNames: []string{strings.Repeat("a", 121)}}, field: "alternativeNames"},
+		{name: "too many categories", input: CreateItemInput{Name: "Soap", Categories: tenValues}, field: "categories"},
+		{name: "category too long", input: CreateItemInput{Name: "Soap", Categories: []string{strings.Repeat("a", 61)}}, field: "categories"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := service.CreateItem(context.Background(), test.input)
+			var validation ValidationError
+			if !errors.As(err, &validation) || validation.Field != test.field {
+				t.Fatalf("CreateItem() error = %#v, want field %q", err, test.field)
+			}
+		})
 	}
 }
 

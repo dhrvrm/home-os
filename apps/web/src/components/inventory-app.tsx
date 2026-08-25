@@ -56,12 +56,13 @@ export function InventoryApp() {
     return () => { active = false; };
   }, []);
 
-  const categories = useMemo(() => ["All", ...Array.from(new Set(items.map((item) => item.category))).sort()], [items]);
+  const categories = useMemo(() => ["All", ...Array.from(new Set(items.flatMap(itemCategories))).sort()], [items]);
   const visibleItems = useMemo(() => {
     const needle = query.trim().toLowerCase();
     return items.filter((item) => {
-      const matchesCategory = category === "All" || item.category === category;
-      const matchesQuery = !needle || [item.name, item.category, item.location].some((value) => value.toLowerCase().includes(needle));
+      const matchesCategory = category === "All" || itemCategories(item).includes(category);
+      const matchesQuery = !needle || [item.name, ...(item.alternativeNames ?? []), ...itemCategories(item), item.location]
+        .some((value) => value.toLowerCase().includes(needle));
       return matchesCategory && matchesQuery;
     });
   }, [category, items, query]);
@@ -181,6 +182,10 @@ export function InventoryApp() {
       {showForm && <ItemForm pending={saving} error={mutationError} onClose={() => { setShowForm(false); setMutationError(null); }} onSubmit={addItem} />}
     </div>
   );
+}
+
+function itemCategories(item: InventoryItem): string[] {
+  return item.categories?.length ? item.categories : [item.category];
 }
 
 function LoadingState() {

@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/sw-dhruv/home-os/apps/api/internal/inventory"
+	"github.com/dhrvrm/home-os/apps/api/internal/inventory"
 )
 
 type fakeInventoryService struct {
@@ -31,7 +31,10 @@ func (s *fakeInventoryService) CreateItem(_ context.Context, input inventory.Cre
 	if s.err != nil {
 		return inventory.Item{}, s.err
 	}
-	item := inventory.Item{ID: "item-1", Name: input.Name}
+	item := inventory.Item{ID: "item-1", Name: input.Name, AlternativeNames: input.AlternativeNames, Category: input.Category, Categories: input.Categories}
+	if len(item.Categories) > 0 {
+		item.Category = item.Categories[0]
+	}
 	if input.LevelPercent != nil {
 		item.LevelPercent = *input.LevelPercent
 	}
@@ -81,12 +84,23 @@ func TestListItemsParsesFilters(t *testing.T) {
 
 func TestCreateItem(t *testing.T) {
 	service := &fakeInventoryService{}
-	request := httptest.NewRequest(http.MethodPost, "/api/v1/items", strings.NewReader(`{"name":"Rice","trackingMode":"simple","levelPercent":75}`))
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/items", strings.NewReader(`{"name":"Dish soap","alternativeNames":["बर्तन धोने का साबुन","Soap"],"categories":["Cleaning","Kitchen"],"trackingMode":"simple","levelPercent":75}`))
 	request.Header.Set("Content-Type", "application/json")
 	response := httptest.NewRecorder()
 	NewRouter(service, Config{}).ServeHTTP(response, request)
 
-	if response.Code != http.StatusCreated || service.created.Name != "Rice" || service.created.LevelPercent == nil || *service.created.LevelPercent != 75 || !strings.Contains(response.Body.String(), `"levelPercent":75`) {
+	if response.Code != http.StatusCreated || service.created.Name != "Dish soap" || service.created.LevelPercent == nil || *service.created.LevelPercent != 75 {
+		t.Fatalf("response = %d %s, input = %#v", response.Code, response.Body.String(), service.created)
+	}
+	if len(service.created.AlternativeNames) != 2 || service.created.AlternativeNames[0] != "बर्तन धोने का साबुन" || len(service.created.Categories) != 2 || service.created.Categories[1] != "Kitchen" {
+		t.Fatalf("decoded metadata = %#v", service.created)
+	}
+	for _, fragment := range []string{`"alternativeNames":["बर्तन धोने का साबुन","Soap"]`, `"categories":["Cleaning","Kitchen"]`, `"category":"Cleaning"`} {
+		if !strings.Contains(response.Body.String(), fragment) {
+			t.Fatalf("response missing %s: %s", fragment, response.Body.String())
+		}
+	}
+	if !strings.Contains(response.Body.String(), `"levelPercent":75`) {
 		t.Fatalf("response = %d %s, input = %#v", response.Code, response.Body.String(), service.created)
 	}
 }

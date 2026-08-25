@@ -5,10 +5,11 @@ import (
 	"database/sql"
 	"errors"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
-	"github.com/sw-dhruv/home-os/apps/api/internal/inventory"
+	"github.com/dhrvrm/home-os/apps/api/internal/inventory"
 )
 
 func TestRepositoryPersistsItemsAcrossReopen(t *testing.T) {
@@ -86,6 +87,50 @@ func TestRepositoryPersistsSimpleLevelAndEventPercentages(t *testing.T) {
 	}
 }
 
+func TestRepositoryPersistsAndFiltersAlternativeNamesAndCategories(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "inventory.db")
+	repository, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	now := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
+	item := inventory.Item{
+		ID: "soap", Name: "Dish soap", AlternativeNames: []string{"बर्तन धोने का साबुन", "Soap", "ÉPONGE", "ΟΣ"},
+		Category: "Cleaning", Categories: []string{"Cleaning", "Kitchen"}, Location: "Kitchen sink",
+		Unit: "bottle", TrackingMode: inventory.TrackingSimple, StockLevel: inventory.StockOkay,
+		LevelPercent: 50, CreatedAt: now, UpdatedAt: now,
+	}
+	if _, err := repository.CreateItem(ctx, item); err != nil {
+		t.Fatalf("CreateItem() error = %v", err)
+	}
+	if err := repository.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	reopened, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open() after close error = %v", err)
+	}
+	t.Cleanup(func() { _ = reopened.Close() })
+	got, err := reopened.GetItem(ctx, item.ID)
+	if err != nil {
+		t.Fatalf("GetItem() error = %v", err)
+	}
+	if !reflect.DeepEqual(got.AlternativeNames, item.AlternativeNames) || !reflect.DeepEqual(got.Categories, item.Categories) {
+		t.Fatalf("GetItem() metadata = %#v, want %#v", got, item)
+	}
+	for _, filter := range []inventory.Filter{{Query: "साबुन"}, {Query: "éponge"}, {Query: "ος"}, {Category: "Kitchen"}} {
+		items, err := reopened.ListItems(ctx, filter)
+		if err != nil {
+			t.Fatalf("ListItems(%#v) error = %v", filter, err)
+		}
+		if len(items) != 1 || items[0].ID != item.ID {
+			t.Fatalf("ListItems(%#v) = %#v", filter, items)
+		}
+	}
+}
+
 func TestOpenMigratesLegacyPercentageColumns(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "legacy.db")
@@ -130,7 +175,7 @@ CREATE TABLE stock_events (
 	if err != nil {
 		t.Fatalf("ListEvents() error = %v", err)
 	}
-	if item.LevelPercent != 25 || len(events) != 1 || events[0].LevelPercent != 25 {
+	if item.LevelPercent != 25 || !reflect.DeepEqual(item.Categories, []string{"Cleaning"}) || len(events) != 1 || events[0].LevelPercent != 25 {
 		t.Fatalf("migrated item = %#v events = %#v", item, events)
 	}
 }

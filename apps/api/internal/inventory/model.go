@@ -78,20 +78,22 @@ type Cadence struct {
 }
 
 type Item struct {
-	ID           string       `json:"id"`
-	Name         string       `json:"name"`
-	Category     string       `json:"category"`
-	Location     string       `json:"location"`
-	Unit         string       `json:"unit"`
-	TrackingMode TrackingMode `json:"trackingMode"`
-	Quantity     float64      `json:"quantity"`
-	StockLevel   StockLevel   `json:"stockLevel"`
-	LevelPercent float64      `json:"levelPercent"`
-	MinQuantity  float64      `json:"minQuantity"`
-	Forecast     *Forecast    `json:"forecast,omitempty"`
-	Cadence      *Cadence     `json:"cadence,omitempty"`
-	CreatedAt    time.Time    `json:"createdAt"`
-	UpdatedAt    time.Time    `json:"updatedAt"`
+	ID               string       `json:"id"`
+	Name             string       `json:"name"`
+	AlternativeNames []string     `json:"alternativeNames"`
+	Category         string       `json:"category"`
+	Categories       []string     `json:"categories"`
+	Location         string       `json:"location"`
+	Unit             string       `json:"unit"`
+	TrackingMode     TrackingMode `json:"trackingMode"`
+	Quantity         float64      `json:"quantity"`
+	StockLevel       StockLevel   `json:"stockLevel"`
+	LevelPercent     float64      `json:"levelPercent"`
+	MinQuantity      float64      `json:"minQuantity"`
+	Forecast         *Forecast    `json:"forecast,omitempty"`
+	Cadence          *Cadence     `json:"cadence,omitempty"`
+	CreatedAt        time.Time    `json:"createdAt"`
+	UpdatedAt        time.Time    `json:"updatedAt"`
 }
 
 type StockEvent struct {
@@ -111,15 +113,17 @@ type Filter struct {
 }
 
 type CreateItemInput struct {
-	Name         string       `json:"name"`
-	Category     string       `json:"category"`
-	Location     string       `json:"location"`
-	Unit         string       `json:"unit"`
-	TrackingMode TrackingMode `json:"trackingMode"`
-	Quantity     float64      `json:"quantity"`
-	StockLevel   StockLevel   `json:"stockLevel"`
-	LevelPercent *float64     `json:"levelPercent"`
-	MinQuantity  float64      `json:"minQuantity"`
+	Name             string       `json:"name"`
+	AlternativeNames []string     `json:"alternativeNames"`
+	Category         string       `json:"category"`
+	Categories       []string     `json:"categories"`
+	Location         string       `json:"location"`
+	Unit             string       `json:"unit"`
+	TrackingMode     TrackingMode `json:"trackingMode"`
+	Quantity         float64      `json:"quantity"`
+	StockLevel       StockLevel   `json:"stockLevel"`
+	LevelPercent     *float64     `json:"levelPercent"`
+	MinQuantity      float64      `json:"minQuantity"`
 }
 
 type ApplyEventInput struct {

@@ -3,6 +3,7 @@ package sqlite
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	_ "embed"
 	"errors"
 	"fmt"
@@ -10,13 +11,52 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode/utf8"
 
-	"github.com/sw-dhruv/home-os/apps/api/internal/inventory"
-	_ "modernc.org/sqlite"
+	"github.com/dhrvrm/home-os/apps/api/internal/inventory"
+	sqliteDriver "modernc.org/sqlite"
 )
 
 //go:embed schema.sql
 var schema string
+
+func init() {
+	sqliteDriver.MustRegisterDeterministicScalarFunction("homeos_contains_fold", 2, func(_ *sqliteDriver.FunctionContext, args []driver.Value) (driver.Value, error) {
+		if len(args) != 2 || args[0] == nil || args[1] == nil {
+			return int64(0), nil
+		}
+		haystack, ok := args[0].(string)
+		if !ok {
+			return nil, fmt.Errorf("homeos_contains_fold expects text, got %T", args[0])
+		}
+		needle, ok := args[1].(string)
+		if !ok {
+			return nil, fmt.Errorf("homeos_contains_fold expects text, got %T", args[1])
+		}
+		if containsFold(haystack, needle) {
+			return int64(1), nil
+		}
+		return int64(0), nil
+	})
+}
+
+func containsFold(haystack, needle string) bool {
+	if needle == "" {
+		return true
+	}
+	for start := 0; start < len(haystack); {
+		for end := start; end < len(haystack); {
+			_, size := utf8.DecodeRuneInString(haystack[end:])
+			end += size
+			if strings.EqualFold(haystack[start:end], needle) {
+				return true
+			}
+		}
+		_, size := utf8.DecodeRuneInString(haystack[start:])
+		start += size
+	}
+	return false
+}
 
 type Repository struct {
 	db *sql.DB
@@ -54,6 +94,10 @@ func Open(path string) (*Repository, error) {
 		_ = db.Close()
 		return nil, err
 	}
+	if err := migrateItemMetadata(db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	return &Repository{db: db}, nil
 }
 
@@ -61,14 +105,17 @@ func (r *Repository) Close() error { return r.db.Close() }
 
 func (r *Repository) ListItems(ctx context.Context, filter inventory.Filter) ([]inventory.Item, error) {
 	query := `SELECT id, name, category, location, unit, tracking_mode, quantity, stock_level, level_percent, min_quantity, created_at, updated_at FROM items WHERE 1 = 1`
-	args := make([]any, 0, 3)
+	args := make([]any, 0, 7)
 	if value := strings.TrimSpace(filter.Query); value != "" {
-		query += " AND (LOWER(name) LIKE LOWER(?) OR LOWER(category) LIKE LOWER(?) OR LOWER(location) LIKE LOWER(?))"
-		like := "%" + value + "%"
-		args = append(args, like, like, like)
+		query += ` AND (
+            homeos_contains_fold(name, ?) OR homeos_contains_fold(category, ?) OR homeos_contains_fold(location, ?) OR
+            EXISTS (SELECT 1 FROM item_alternative_names WHERE item_id = items.id AND homeos_contains_fold(name, ?)) OR
+            EXISTS (SELECT 1 FROM item_categories WHERE item_id = items.id AND homeos_contains_fold(category, ?))
+        )`
+		args = append(args, value, value, value, value, value)
 	}
 	if value := strings.TrimSpace(filter.Category); value != "" {
-		query += " AND category = ?"
+		query += " AND EXISTS (SELECT 1 FROM item_categories WHERE item_id = items.id AND category = ?)"
 		args = append(args, value)
 	}
 	if filter.StockLevel != "" {
@@ -93,6 +140,14 @@ func (r *Repository) ListItems(ctx context.Context, filter inventory.Filter) ([]
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate inventory items: %w", err)
 	}
+	if err := rows.Close(); err != nil {
+		return nil, fmt.Errorf("close inventory items: %w", err)
+	}
+	for index := range items {
+		if err := hydrateItemMetadata(ctx, r.db, &items[index]); err != nil {
+			return nil, err
+		}
+	}
 	return items, nil
 }
 
@@ -102,14 +157,41 @@ func (r *Repository) GetItem(ctx context.Context, id string) (inventory.Item, er
 	if errors.Is(err, sql.ErrNoRows) {
 		return inventory.Item{}, inventory.ErrNotFound
 	}
-	return item, err
+	if err != nil {
+		return inventory.Item{}, err
+	}
+	if err := hydrateItemMetadata(ctx, r.db, &item); err != nil {
+		return inventory.Item{}, err
+	}
+	return item, nil
 }
 
 func (r *Repository) CreateItem(ctx context.Context, item inventory.Item) (inventory.Item, error) {
-	_, err := r.db.ExecContext(ctx, `INSERT INTO items (id, name, category, location, unit, tracking_mode, quantity, stock_level, level_percent, min_quantity, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+	if len(item.Categories) == 0 {
+		item.Categories = []string{item.Category}
+	}
+	if strings.TrimSpace(item.Categories[0]) == "" {
+		item.Categories[0] = "Other"
+	}
+	item.Category = item.Categories[0]
+	if item.AlternativeNames == nil {
+		item.AlternativeNames = []string{}
+	}
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return inventory.Item{}, fmt.Errorf("begin inventory item: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	_, err = tx.ExecContext(ctx, `INSERT INTO items (id, name, category, location, unit, tracking_mode, quantity, stock_level, level_percent, min_quantity, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		item.ID, item.Name, item.Category, item.Location, item.Unit, item.TrackingMode, item.Quantity, item.StockLevel, item.LevelPercent, item.MinQuantity, formatTime(item.CreatedAt), formatTime(item.UpdatedAt))
 	if err != nil {
 		return inventory.Item{}, fmt.Errorf("create inventory item: %w", err)
+	}
+	if err := insertItemMetadata(ctx, tx, item); err != nil {
+		return inventory.Item{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return inventory.Item{}, fmt.Errorf("commit inventory item: %w", err)
 	}
 	return item, nil
 }
@@ -198,6 +280,78 @@ func scanItem(row rowScanner) (inventory.Item, error) {
 	item.CreatedAt = created
 	item.UpdatedAt = updated
 	return item, nil
+}
+
+type metadataQueryer interface {
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+}
+
+func hydrateItemMetadata(ctx context.Context, queryer metadataQueryer, item *inventory.Item) error {
+	item.AlternativeNames = make([]string, 0)
+	rows, err := queryer.QueryContext(ctx, `SELECT name FROM item_alternative_names WHERE item_id = ? ORDER BY position, name`, item.ID)
+	if err != nil {
+		return fmt.Errorf("list alternative names: %w", err)
+	}
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			_ = rows.Close()
+			return fmt.Errorf("scan alternative name: %w", err)
+		}
+		item.AlternativeNames = append(item.AlternativeNames, name)
+	}
+	if err := rows.Close(); err != nil {
+		return fmt.Errorf("close alternative names: %w", err)
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate alternative names: %w", err)
+	}
+
+	item.Categories = make([]string, 0)
+	rows, err = queryer.QueryContext(ctx, `SELECT category FROM item_categories WHERE item_id = ? ORDER BY position, category`, item.ID)
+	if err != nil {
+		return fmt.Errorf("list item categories: %w", err)
+	}
+	for rows.Next() {
+		var category string
+		if err := rows.Scan(&category); err != nil {
+			_ = rows.Close()
+			return fmt.Errorf("scan item category: %w", err)
+		}
+		item.Categories = append(item.Categories, category)
+	}
+	if err := rows.Close(); err != nil {
+		return fmt.Errorf("close item categories: %w", err)
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate item categories: %w", err)
+	}
+	if len(item.Categories) == 0 {
+		item.Categories = []string{item.Category}
+	}
+	item.Category = item.Categories[0]
+	return nil
+}
+
+func insertItemMetadata(ctx context.Context, tx *sql.Tx, item inventory.Item) error {
+	for position, name := range item.AlternativeNames {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO item_alternative_names (item_id, position, name) VALUES (?, ?, ?)`, item.ID, position, name); err != nil {
+			return fmt.Errorf("create alternative name: %w", err)
+		}
+	}
+	for position, category := range item.Categories {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO item_categories (item_id, position, category) VALUES (?, ?, ?)`, item.ID, position, category); err != nil {
+			return fmt.Errorf("create item category: %w", err)
+		}
+	}
+	return nil
+}
+
+func migrateItemMetadata(db *sql.DB) error {
+	if _, err := db.Exec(`INSERT OR IGNORE INTO item_categories (item_id, position, category) SELECT id, 0, category FROM items`); err != nil {
+		return fmt.Errorf("backfill item categories: %w", err)
+	}
+	return nil
 }
 
 func migratePercentages(db *sql.DB) error {

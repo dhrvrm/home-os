@@ -11,6 +11,8 @@ interface ItemFormProps {
   onSubmit: (input: CreateItemInput) => Promise<void>;
 }
 
+const CATEGORY_OPTIONS = ["Food", "Cleaning", "Kitchen", "Laundry", "Paper goods", "Personal care", "Medicine", "Pet supplies", "Other"];
+
 export function ItemForm({ pending, error, onClose, onSubmit }: ItemFormProps) {
   const [mode, setMode] = useState<TrackingMode>("simple");
   const [levelPercent, setLevelPercent] = useState(50);
@@ -50,7 +52,11 @@ export function ItemForm({ pending, error, onClose, onSubmit }: ItemFormProps) {
     const data = new FormData(event.currentTarget);
     await onSubmit({
       name: String(data.get("name") ?? ""),
-      category: String(data.get("category") ?? "Other"),
+      alternativeNames: String(data.get("alternativeNames") ?? "")
+        .split(",")
+        .map((name) => name.trim())
+        .filter(Boolean),
+      categories: data.getAll("categories").map(String),
       location: String(data.get("location") ?? "Unassigned"),
       unit: String(data.get("unit") ?? "item"),
       trackingMode: mode,
@@ -81,6 +87,12 @@ export function ItemForm({ pending, error, onClose, onSubmit }: ItemFormProps) {
             <input name="name" autoFocus required maxLength={120} placeholder="Dish soap" />
           </label>
 
+          <label className="field field--wide">
+            <span>Alternative names</span>
+            <input name="alternativeNames" aria-label="Alternative names" placeholder="साबुन, Soap" />
+            <small className="field__help">Separate names with commas. Any language works.</small>
+          </label>
+
           <fieldset className="mode-picker field--wide">
             <legend>How do you want to track it?</legend>
             <label className={mode === "simple" ? "mode-option is-active" : "mode-option"}>
@@ -101,14 +113,18 @@ export function ItemForm({ pending, error, onClose, onSubmit }: ItemFormProps) {
             </div>
           )}
 
-          <label className="field">
-            <span>Category</span>
-            <select name="category" defaultValue="Food">
-              <option>Food</option><option>Cleaning</option><option>Laundry</option><option>Paper goods</option>
-              <option>Personal care</option><option>Medicine</option><option>Pet supplies</option><option>Other</option>
-            </select>
-          </label>
-          <label className="field">
+          <fieldset className="category-picker field--wide">
+            <legend>Categories</legend>
+            <div className="category-options">
+              {CATEGORY_OPTIONS.map((option) => (
+                <label className="category-option" key={option}>
+                  <input type="checkbox" name="categories" value={option} defaultChecked={option === "Food"} />
+                  <span>{option}</span>
+                </label>
+              ))}
+            </div>
+          </fieldset>
+          <label className="field field--wide">
             <span>Location</span>
             <input name="location" defaultValue="Pantry" maxLength={80} />
           </label>

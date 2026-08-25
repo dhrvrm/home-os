@@ -6,12 +6,14 @@ The first release includes:
 
 - a simple 0-100 stock meter with `full`, `okay`, `low`, and `out` states
 - exact quantity tracking for items that need it
-- categories, locations, search, and quick filters
+- alternative names in any language, multiple categories, locations, search, and quick filters
 - purchase and consumption history
 - learned consumption cadence and lightweight run-out forecasts
 - an installable, offline-capable PWA
 
 Simple items start at the level you choose. Each **Use** action subtracts 25 points and **Restock** returns the item to 100. After two consumption events, Home OS begins showing the item's typical usage interval.
+
+Each item has one primary display name and can also have alternative names, such as a Hindi household name or a common brand name. Search matches every name and every category. An item may belong to several categories, and appears under each matching category filter.
 
 ## Stack
 

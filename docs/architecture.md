@@ -29,6 +29,8 @@ An item uses one of two tracking modes:
 
 Every stock change is an event. After two consumption events, Home OS derives a typical interval between uses for either tracking mode. Exact consumption events also provide the history used to estimate average daily usage and a likely run-out date. Cadence and forecast confidence increase with the amount and span of consumption history; both are guidance, not guarantees.
 
+An item has one primary `name`, zero or more language-agnostic `alternativeNames`, and one or more `categories`. Alternative names make household terms such as Hindi names searchable without changing the primary display identity. Categories are ordered; the first value is also exposed as singular `category` for compatibility with v1 clients. The service trims and case-insensitively deduplicates both collections, defaults an empty category list to `Other`, and allows up to eight alternative names and nine categories.
+
 ## API contract
 
 The current version is namespaced under `/api/v1`:
@@ -46,11 +48,13 @@ Responses use one envelope:
 
 Errors replace `data` with `null` and include a stable code plus a readable message. Request bodies are size-limited, writes are validated in the domain service, and an inventory event plus its resulting item state is committed in one SQLite transaction.
 
+Item responses include both `categories` and the compatibility `category` projection. New clients should send `categories` and `alternativeNames`; older requests that send only `category` remain valid.
+
 ## Persistence and concurrency
 
 SQLite is configured with foreign keys, WAL mode, a busy timeout, and one database connection. The Go service serializes stock mutations so concurrent roommate actions cannot overwrite one another between the domain read and database write. That is a good fit for a household-sized, single-process write workload and avoids pretending a single file is a distributed database. The database file must live on durable local or mounted storage.
 
-Opening an older database adds the percentage columns in place and maps existing simple states to percentages (`full=100`, `okay=50`, `low=25`, `out=0`). Back up the database before deploying a new binary even though the migration preserves existing item and event rows.
+Opening an older database adds the percentage columns in place and maps existing simple states to percentages (`full=100`, `okay=50`, `low=25`, `out=0`). It also creates normalized child tables for alternative names and category memberships, then idempotently backfills each legacy singular category as the item's first category. Back up the database before deploying a new binary even though the migrations preserve existing item and event rows.
 
 Cloudflare Workers do not provide a durable local filesystem. Workers Static Assets can host the PWA, but the Go API and SQLite file must run elsewhere. A future Cloudflare-native adapter would consist of a Worker API and D1 repository behind the same `/api/v1` contract. It should be added only when its operational benefit justifies maintaining a second runtime.
 
