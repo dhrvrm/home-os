@@ -244,7 +244,7 @@ describe("InventoryApp", () => {
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
     const eventRequest = fetchMock.mock.calls[1][1] as RequestInit;
     expect(JSON.parse(String(eventRequest.body))).toMatchObject({ type: "consume", quantity: 25 });
-    expect(screen.getByText("0%")).toBeInTheDocument();
+    expect(await screen.findByText("0%")).toBeInTheDocument();
   });
 
   it("edits an item directly and displays immutable history", async () => {
