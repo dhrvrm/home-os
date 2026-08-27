@@ -1,4 +1,5 @@
 import { CATEGORY_OPTIONS } from "./categories";
+import { retrieveInventory, type InventoryRetrieval } from "./assistant-retrieval";
 import type { InventoryItem, StockLevel, UpdateItemMetadataInput } from "./inventory";
 
 export const ASSISTANT_HELP = "I can find items, count stock, show what is low or out, and propose names, alternative names, or categories. I will always ask before changing anything.";
@@ -21,6 +22,7 @@ export type AssistantResult =
 interface ModelCommand {
   intent?: unknown;
   item?: unknown;
+  field?: unknown;
   name?: unknown;
   alternativeNames?: unknown;
   addCategories?: unknown;
@@ -28,6 +30,13 @@ interface ModelCommand {
   stockLevel?: unknown;
   category?: unknown;
   location?: unknown;
+}
+
+type InspectField = "status" | "quantity" | "location" | "categories" | "forecast" | "cadence";
+
+export interface AssistantContext {
+  prompt: { system: string; user: string };
+  retrieval: InventoryRetrieval;
 }
 
 interface SnapshotItem {
@@ -51,6 +60,9 @@ export function runDeterministicQuery(request: string, items: InventoryItem[]): 
   if (/^(help|what can you do|how can you help)[?.!]*$/.test(query)) {
     return { type: "help", message: ASSISTANT_HELP };
   }
+  if (/^(what should (?:i|we) buy|what do (?:i|we) need to buy|build (?:my|the) shopping list)[?.!]*$/.test(query)) {
+    return answerForItems(items.filter((item) => item.stockLevel === "low" || item.stockLevel === "out"), "need attention");
+  }
   if (/(running low|low stock|need(?:s)? attention|almost (?:empty|finished))/.test(query)) {
     return answerForItems(items.filter((item) => item.stockLevel === "low" || item.stockLevel === "out"), "need attention");
   }
@@ -60,6 +72,21 @@ export function runDeterministicQuery(request: string, items: InventoryItem[]): 
   if (/^(how many|count|number of)(?: items)?[?.!]*$/.test(query) || /how many items (?:do we have|are tracked)/.test(query)) {
     return { type: "answer", message: `${items.length} ${items.length === 1 ? "item is" : "items are"} tracked at home.`, itemIDs: items.map((item) => item.id) };
   }
+
+  const quantityMatch = query.match(/^(?:how much|what quantity of)\s+(.+?)(?:\s+is left)?[?.!]*$/);
+  if (quantityMatch) return answerForReferencedItem(quantityMatch[1], "quantity", items);
+
+  const statusMatch = query.match(/^(?:what(?:'s| is) the status of|status of)\s+(.+?)[?.!]*$/);
+  if (statusMatch) return answerForReferencedItem(statusMatch[1], "status", items);
+
+  const forecastMatch = query.match(/^(?:when will|how soon will)\s+(.+?)\s+run out[?.!]*$/);
+  if (forecastMatch) return answerForReferencedItem(forecastMatch[1], "forecast", items);
+
+  const cadenceMatch = query.match(/^(?:how often do we use|what is the (?:usage )?frequency of)\s+(.+?)[?.!]*$/);
+  if (cadenceMatch) return answerForReferencedItem(cadenceMatch[1], "cadence", items);
+
+  const categoriesForItemMatch = query.match(/^what categor(?:y is|ies are|ies is)\s+(.+?)\s+in[?.!]*$/);
+  if (categoriesForItemMatch) return answerForReferencedItem(categoriesForItemMatch[1], "categories", items);
 
   const explicitCategoryMatch = query.match(/^(?:what(?:'s| is)|show(?: me)?(?: items)?)\s+(?:in|under) (?:the )?(.+?) category[?.!]*$/);
   if (explicitCategoryMatch) {
@@ -116,8 +143,13 @@ export function runDeterministicQuery(request: string, items: InventoryItem[]): 
 }
 
 export function buildAssistantPrompt(request: string, items: InventoryItem[]): { system: string; user: string } {
+  return buildAssistantContext(request, items).prompt;
+}
+
+export function buildAssistantContext(request: string, items: InventoryItem[]): AssistantContext {
   const boundedRequest = truncate(request, 280);
-  const candidates: SnapshotItem[] = prioritizeItems(boundedRequest, items).map((item) => ({
+  const retrieval = retrieveInventory(boundedRequest, items);
+  const candidates: SnapshotItem[] = retrieval.evidence.map(({ item }) => ({
     id: item.id,
     name: truncate(item.name, 80),
     alternativeNames: prioritizeValues(boundedRequest, item.alternativeNames ?? []).slice(0, 2).map((value) => truncate(value, 40)),
@@ -128,11 +160,19 @@ export function buildAssistantPrompt(request: string, items: InventoryItem[]): {
   const snapshot: SnapshotItem[] = [];
   for (const candidate of candidates) {
     const next = [...snapshot, candidate];
-    const nextPrompt = composePrompt(boundedRequest, next, items.length);
+    const nextPrompt = composePrompt(boundedRequest, next, items.length, retrieval.strategy);
     if (utf8Length(nextPrompt.system) + utf8Length(nextPrompt.user) > MAX_PROMPT_UTF8_BYTES) break;
     snapshot.push(candidate);
   }
-  return composePrompt(boundedRequest, snapshot, items.length);
+  const evidence = retrieval.evidence.slice(0, snapshot.length);
+  return {
+    prompt: composePrompt(boundedRequest, snapshot, items.length, retrieval.strategy),
+    retrieval: {
+      ...retrieval,
+      evidence,
+      omittedItems: Math.max(0, items.length - evidence.length),
+    },
+  };
 }
 
 export function parseModelCommand(text: string, items: InventoryItem[]): AssistantResult {
@@ -147,6 +187,7 @@ export function parseModelCommand(text: string, items: InventoryItem[]): Assista
   const allowedKeys: Record<string, string[]> = {
     help: ["intent"],
     find: ["intent", "item", "stockLevel", "category", "location"],
+    inspect: ["intent", "item", "field"],
     rename: ["intent", "item", "name", "alternativeNames"],
     aliases: ["intent", "item", "alternativeNames"],
     categorize: ["intent", "item", "addCategories", "removeCategories"],
@@ -159,12 +200,14 @@ export function parseModelCommand(text: string, items: InventoryItem[]): Assista
       return { type: "help", message: ASSISTANT_HELP };
     case "find":
       return parseFind(command, items);
+    case "inspect":
+      return parseInspect(command, items);
     case "rename":
     case "aliases":
     case "categorize":
       return parseMutation(command.intent, command, items);
     default:
-      return unsupported("That action is not available. I can find, rename, add alternative names, or categorize inventory items.");
+      return unsupported("That action is not available. I can inspect, find, rename, add alternative names, or categorize inventory items.");
   }
 }
 
@@ -191,6 +234,12 @@ function parseFind(command: ModelCommand, items: InventoryItem[]): AssistantResu
     matches = matches.filter((item) => fold(item.location).includes(fold(command.location as string)));
   }
   return answerForItems(matches, "match");
+}
+
+function parseInspect(command: ModelCommand, items: InventoryItem[]): AssistantResult {
+  if (typeof command.item !== "string") return unsupported("Use the exact item name so I know what to inspect.");
+  if (!isInspectField(command.field)) return unsupported("The requested inventory detail was not valid.");
+  return answerForReferencedItem(command.item, command.field, items);
 }
 
 function parseMutation(intent: "rename" | "aliases" | "categorize", command: ModelCommand, items: InventoryItem[]): AssistantResult {
@@ -245,6 +294,46 @@ function parseMutation(intent: "rename" | "aliases" | "categorize", command: Mod
     changes,
     summary: summarizeChanges(item, changes),
   };
+}
+
+function answerForReferencedItem(reference: string, field: InspectField, items: InventoryItem[]): AssistantResult {
+  const matches = findItems(reference, items);
+  if (matches.length === 0) return unsupported("I could not find that item. Use a name already in the inventory.");
+  if (matches.length > 1) return unsupported("I found more than one matching item. Use its exact primary name.");
+  return answerForField(matches[0], field);
+}
+
+function answerForField(item: InventoryItem, field: InspectField): AssistantResult {
+  let message: string;
+  switch (field) {
+    case "quantity":
+      message = item.trackingMode === "simple"
+        ? `${item.name} is at ${formatNumber(item.levelPercent)}%.`
+        : `${item.name} has ${formatNumber(item.quantity)} ${item.unit} left.`;
+      break;
+    case "status":
+      message = item.trackingMode === "simple"
+        ? `${item.name} is ${item.stockLevel} at ${formatNumber(item.levelPercent)}%.`
+        : `${item.name} is ${item.stockLevel} with ${formatNumber(item.quantity)} ${item.unit} left.`;
+      break;
+    case "location":
+      message = `${item.name} is in ${item.location}.`;
+      break;
+    case "categories":
+      message = `${item.name} is in ${joinHuman(itemCategories(item))}.`;
+      break;
+    case "forecast":
+      message = item.forecast
+        ? `${item.name} may run out in about ${formatNumber(item.forecast.daysRemaining)} days (${item.forecast.confidence} confidence).`
+        : `There is not enough consumption history to forecast ${item.name} yet.`;
+      break;
+    case "cadence":
+      message = item.cadence
+        ? `${item.name} is used about every ${formatNumber(item.cadence.averageIntervalDays)} days (${formatNumber(item.cadence.eventsPerWeek)} times per week, ${item.cadence.confidence} confidence).`
+        : `There is not enough consumption history to estimate how often ${item.name} is used yet.`;
+      break;
+  }
+  return { type: "answer", message, itemIDs: [item.id] };
 }
 
 function findItems(reference: string, items: InventoryItem[]): InventoryItem[] {
@@ -330,29 +419,21 @@ function parseFirstJSONObject(text: string): ModelCommand {
   throw new Error("missing valid JSON object");
 }
 
-function prioritizeItems(request: string, items: InventoryItem[]): InventoryItem[] {
-  const needle = fold(request);
-  return items.map((item, index) => {
-    const terms = [item.name, ...(item.alternativeNames ?? []), ...itemCategories(item), item.location];
-    const score = terms.reduce((total, term) => total + (needle.includes(fold(term)) ? 1 : 0), 0);
-    return { item, index, score };
-  }).sort((left, right) => right.score - left.score || left.index - right.index).map(({ item }) => item);
-}
-
-function composePrompt(request: string, snapshot: SnapshotItem[], totalItems: number): { system: string; user: string } {
+function composePrompt(request: string, snapshot: SnapshotItem[], totalItems: number, retrievalStrategy: InventoryRetrieval["strategy"]): { system: string; user: string } {
   return {
     system: [
       "You are the private Home OS inventory command parser. Return exactly one compact JSON object and no markdown.",
       "Supported intents:",
       '{"intent":"find","stockLevel":"low|out|full|okay","category":"category","location":"location","item":"existing item name or id"}',
+      '{"intent":"inspect","item":"existing item name or id","field":"status|quantity|location|categories|forecast|cadence"}',
       '{"intent":"rename","item":"existing item name or id","name":"new primary name","alternativeNames":["optional aliases"]}',
       '{"intent":"aliases","item":"existing item name or id","alternativeNames":["complete desired alias list"]}',
       '{"intent":"categorize","item":"existing item name or id","addCategories":["category"],"removeCategories":["category"]}',
       '{"intent":"help"}',
-      "Use only fields shown for the selected intent. Never invent an item id. Preserve the user's language and script.",
+      "Use only fields shown for the selected intent. Never invent an item id or answer with facts; the app executes your plan against current inventory. Preserve the user's language and script.",
       `Allowed categories: ${CATEGORY_OPTIONS.join(", ")}; exact existing custom categories shown in inventory are also allowed.`,
     ].join("\n"),
-    user: JSON.stringify({ request, inventory: snapshot, omittedItemCount: totalItems - snapshot.length }),
+    user: JSON.stringify({ request, inventory: snapshot, omittedItemCount: totalItems - snapshot.length, retrievalStrategy }),
   };
 }
 
@@ -369,6 +450,16 @@ function prioritizeValues(request: string, values: string[]): string[] {
   return values.map((value, index) => ({ value, index, score: needle.includes(fold(value)) ? 1 : 0 }))
     .sort((left, right) => right.score - left.score || left.index - right.index)
     .map(({ value }) => value);
+}
+
+function formatNumber(value: number): string {
+  return new Intl.NumberFormat("en", { maximumFractionDigits: 2 }).format(value);
+}
+
+function joinHuman(values: string[]): string {
+  if (values.length <= 1) return values[0] ?? "no category";
+  if (values.length === 2) return `${values[0]} and ${values[1]}`;
+  return `${values.slice(0, -1).join(", ")}, and ${values.at(-1)}`;
 }
 
 function dedupe(values: readonly string[]): string[] {
@@ -391,6 +482,10 @@ function isPlainObject(value: unknown): value is ModelCommand {
 
 function isStockLevel(value: unknown): value is StockLevel {
   return value === "full" || value === "okay" || value === "low" || value === "out";
+}
+
+function isInspectField(value: unknown): value is InspectField {
+  return value === "status" || value === "quantity" || value === "location" || value === "categories" || value === "forecast" || value === "cadence";
 }
 
 function unsupported(message: string): AssistantResult {

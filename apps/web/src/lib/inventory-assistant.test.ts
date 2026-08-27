@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { InventoryItem } from "./inventory";
-import { buildAssistantPrompt, parseModelCommand, proposalInput, runDeterministicQuery } from "./inventory-assistant";
+import { buildAssistantContext, buildAssistantPrompt, parseModelCommand, proposalInput, runDeterministicQuery } from "./inventory-assistant";
 
 const items = [
   {
@@ -11,6 +11,8 @@ const items = [
   {
     id: "rice", name: "Rice", alternativeNames: ["चावल"], category: "Food", categories: ["Food"], location: "Pantry", unit: "kg",
     trackingMode: "exact", quantity: 3, stockLevel: "okay", levelPercent: 0, minQuantity: 1,
+    forecast: { dailyUsage: 0.5, daysRemaining: 6, confidence: "medium" },
+    cadence: { averageIntervalDays: 3, eventsPerWeek: 2.33, lastConsumedAt: "2026-08-23T10:00:00Z", confidence: "medium" },
     createdAt: "2026-08-24T10:00:00Z", updatedAt: "2026-08-24T10:00:00Z",
   },
 ] satisfies InventoryItem[];
@@ -26,6 +28,34 @@ describe("inventory assistant", () => {
   it("finds an item by Hindi alternative name", () => {
     expect(runDeterministicQuery("Where is चावल?", items)).toEqual({
       type: "answer", message: "Rice is in Pantry.", itemIDs: ["rice"],
+    });
+  });
+
+  it("answers quantity, status, forecast, cadence, categories, and shopping questions from facts", () => {
+    expect(runDeterministicQuery("How much rice is left?", items)).toEqual({
+      type: "answer", message: "Rice has 3 kg left.", itemIDs: ["rice"],
+    });
+    expect(runDeterministicQuery("What is the status of साबुन?", items)).toEqual({
+      type: "answer", message: "Dish soap is low at 25%.", itemIDs: ["soap"],
+    });
+    expect(runDeterministicQuery("When will rice run out?", items)).toEqual({
+      type: "answer", message: "Rice may run out in about 6 days (medium confidence).", itemIDs: ["rice"],
+    });
+    expect(runDeterministicQuery("How often do we use rice?", items)).toEqual({
+      type: "answer", message: "Rice is used about every 3 days (2.33 times per week, medium confidence).", itemIDs: ["rice"],
+    });
+    expect(runDeterministicQuery("What categories is rice in?", items)).toEqual({
+      type: "answer", message: "Rice is in Food.", itemIDs: ["rice"],
+    });
+    expect(runDeterministicQuery("What should I buy?", items)).toMatchObject({ type: "answer", itemIDs: ["soap"] });
+  });
+
+  it("explains when forecast or cadence evidence is not available", () => {
+    expect(runDeterministicQuery("When will dish soap run out?", items)).toEqual({
+      type: "answer", message: "There is not enough consumption history to forecast Dish soap yet.", itemIDs: ["soap"],
+    });
+    expect(runDeterministicQuery("How often do we use dish soap?", items)).toEqual({
+      type: "answer", message: "There is not enough consumption history to estimate how often Dish soap is used yet.", itemIDs: ["soap"],
     });
   });
 
@@ -47,6 +77,14 @@ describe("inventory assistant", () => {
     expect(prompt.system).toContain("Personal care");
     expect(prompt.user).toContain('"id":"soap"');
     expect(prompt.user).toContain("साबुन");
+  });
+
+  it("builds model context from bounded retrieved evidence", () => {
+    const context = buildAssistantContext("Rename साबुन", items);
+    expect(context.retrieval.evidence[0].item.id).toBe("soap");
+    expect(context.retrieval.totalItems).toBe(2);
+    expect(context.prompt.user).toContain('"id":"soap"');
+    expect(context.prompt.user).toContain('"retrievalStrategy":"ranked"');
   });
 
   it("keeps the prompt within its inventory budget and prioritizes the requested item", () => {
@@ -90,6 +128,15 @@ describe("inventory assistant", () => {
     expect(parseModelCommand('{"intent":"categorize","item":"Rice","addCategories":["Secret"]}', items)).toMatchObject({ type: "unsupported" });
   });
 
+  it("executes model inspect plans against authoritative inventory facts", () => {
+    expect(parseModelCommand('{"intent":"inspect","item":"चावल","field":"forecast"}', items)).toEqual({
+      type: "answer", message: "Rice may run out in about 6 days (medium confidence).", itemIDs: ["rice"],
+    });
+    expect(parseModelCommand('{"intent":"inspect","item":"Rice","field":"quantity"}', items)).toEqual({
+      type: "answer", message: "Rice has 3 kg left.", itemIDs: ["rice"],
+    });
+  });
+
   it("preserves current values for an explicit before and after review", () => {
     expect(parseModelCommand('{"intent":"aliases","item":"Dish soap","alternativeNames":[]}', items)).toMatchObject({
       type: "proposal",
@@ -104,6 +151,9 @@ describe("inventory assistant", () => {
     expect(parseModelCommand(JSON.stringify({ intent: "rename", item: "Rice", name: "x".repeat(121) }), items)).toMatchObject({ type: "unsupported" });
     expect(parseModelCommand('{"intent":"delete","item":"Rice"}', items)).toMatchObject({ type: "unsupported" });
     expect(parseModelCommand('{"intent":"rename","item":"Rice","name":"New","location":"Garage"}', items)).toMatchObject({ type: "unsupported" });
+    expect(parseModelCommand('{"intent":"inspect","item":"invented","field":"status"}', items)).toMatchObject({ type: "unsupported" });
+    expect(parseModelCommand('{"intent":"inspect","item":"Rice","field":"price"}', items)).toMatchObject({ type: "unsupported" });
+    expect(parseModelCommand('{"intent":"inspect","item":"Rice","field":"status","answer":"fine"}', items)).toMatchObject({ type: "unsupported" });
     expect(parseModelCommand('{"intent":"help"} trailing {"intent":"delete"}', items)).toMatchObject({ type: "help" });
     expect(parseModelCommand('note {not JSON} then {"intent":"help"}', items)).toMatchObject({ type: "help" });
   });
