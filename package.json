@@ -14,6 +14,6 @@
     "test": "npm run test --workspace @home-os/web && npm run test --workspace @home-os/worker"
   },
   "engines": {
-    "node": ">=22"
+    "node": ">=22.18.0"
   }
 }

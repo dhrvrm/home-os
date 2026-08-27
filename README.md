@@ -34,7 +34,7 @@ The browser applies supported commands locally before the network is used. Start
 
 ## Local development
 
-Requirements: Node.js 22+ and npm 11+.
+Requirements: Node.js 22.18+ and npm 11+.
 
 ```bash
 npm install

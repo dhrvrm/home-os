@@ -50,11 +50,13 @@ export function useInventory() {
       const pending = await homeOSDatabase.outbox.where("state").equals("pending").count();
       if (pending > 0) {
         const result = await syncInventory(homeOSDatabase);
-        setSyncStatus(result.conflicts > 0 ? "attention" : "synced");
+        const unresolved = await homeOSDatabase.outbox.where("state").equals("conflict").count();
+        setSyncStatus(result.conflicts > 0 || unresolved > 0 ? "attention" : "synced");
       } else {
         const active = await listItems();
         await hydrateAuthoritativeItems(homeOSDatabase, active);
-        setSyncStatus("synced");
+        const unresolved = await homeOSDatabase.outbox.where("state").equals("conflict").count();
+        setSyncStatus(unresolved > 0 ? "attention" : "synced");
       }
       const now = new Date().toISOString();
       setLastSyncedAt(now);
