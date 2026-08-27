@@ -14,14 +14,14 @@ Workers and D1 have free plans with daily limits suitable for a small personal h
 
 ## Credentials
 
-The Cloudflare API token is stored in macOS Keychain under service `cloudflare-api-token` and account `dhrvrm-home-os`. Load it without printing it:
+The original Cloudflare API token is stored in macOS Keychain under service `cloudflare-api-token` and account `dhrvrm-home-os`, but it has narrower permissions than this deployment needs. Wrangler OAuth is the default. Load the non-secret account configuration without printing any credential:
 
 ```bash
 source scripts/cloudflare-env.zsh
 npx wrangler whoami
 ```
 
-The script also exports the non-secret Cloudflare account ID. Never commit the token, `.dev.vars`, or a copied shell history containing it. Rotate the API token after the initial deployment because the original value was shared in chat.
+The script exports the non-secret Cloudflare account ID and leaves the OAuth session in control. Setting `HOMEOS_USE_KEYCHAIN_API_TOKEN=1` opts into the narrower Keychain token for a command that supports its scopes. Never commit the token, `.dev.vars`, or a copied shell history containing it. Rotate the API token because the original value was shared in chat.
 
 MCP uses a separate high-entropy credential. Store the production value only as a Worker secret:
 

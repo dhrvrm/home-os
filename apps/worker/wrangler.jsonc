@@ -15,7 +15,7 @@
     {
       "binding": "DB",
       "database_name": "home-os",
-      "database_id": "00000000-0000-0000-0000-000000000000",
+      "database_id": "385f5895-4ddc-48c6-b3fc-cd861989d49b",
       "migrations_dir": "migrations"
     }
   ],
