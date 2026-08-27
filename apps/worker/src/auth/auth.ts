@@ -1,0 +1,91 @@
+import { mcp } from "@better-auth/mcp";
+import { betterAuth } from "better-auth";
+import { jwt, organization } from "better-auth/plugins";
+import type { Env } from "../env";
+import {
+  HOME_OS_AUTH_BASE_PATH,
+  HOME_OS_MCP_PATH,
+  HOME_OS_MCP_SCOPES,
+  HOME_OS_ORGANIZATION_CLAIM,
+  requiresOrganization,
+} from "./constants";
+
+export function createAuth(env: Env) {
+  const baseURL = normalizedBaseURL(env.BETTER_AUTH_URL);
+  const googleConfigured = Boolean(env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET);
+
+  return betterAuth({
+    appName: "Home OS",
+    baseURL,
+    basePath: HOME_OS_AUTH_BASE_PATH,
+    database: env.DB,
+    secret: env.BETTER_AUTH_SECRET,
+    trustedOrigins: [baseURL, "http://localhost:8787", "http://127.0.0.1:8787"],
+    emailAndPassword: { enabled: env.HOMEOS_TEST_AUTH === "true" },
+    socialProviders: googleConfigured
+      ? {
+          google: {
+            clientId: env.GOOGLE_CLIENT_ID!,
+            clientSecret: env.GOOGLE_CLIENT_SECRET!,
+            prompt: "select_account",
+          },
+        }
+      : {},
+    session: {
+      expiresIn: 60 * 60 * 24 * 30,
+      updateAge: 60 * 60 * 24,
+    },
+    advanced: {
+      useSecureCookies: baseURL.startsWith("https://"),
+      defaultCookieAttributes: {
+        httpOnly: true,
+        sameSite: "lax",
+        secure: baseURL.startsWith("https://"),
+      },
+    },
+    plugins: [
+      organization({
+        creatorRole: "owner",
+        membershipLimit: 100,
+        invitationExpiresIn: 60 * 60 * 48,
+        requireEmailVerificationOnInvitation: true,
+        teams: {
+          enabled: true,
+          defaultTeam: { enabled: true },
+          maximumTeams: 50,
+          maximumMembersPerTeam: 100,
+        },
+      }),
+      jwt(),
+      mcp({
+        loginPage: "/sign-in",
+        consentPage: "/consent",
+        resource: `${baseURL}${HOME_OS_MCP_PATH}`,
+        scopes: [...HOME_OS_MCP_SCOPES],
+        allowDynamicClientRegistration: true,
+        allowUnauthenticatedClientRegistration: true,
+        accessTokenExpiresIn: 60 * 60,
+        refreshTokenExpiresIn: 60 * 60 * 24 * 30,
+        postLogin: {
+          page: "/consent",
+          shouldRedirect: async ({ session, scopes }) =>
+            requiresOrganization(scopes) && !session.activeOrganizationId,
+          consentReferenceId: async ({ session, scopes }) => {
+            if (!requiresOrganization(scopes)) return undefined;
+            return typeof session.activeOrganizationId === "string"
+              ? session.activeOrganizationId
+              : undefined;
+          },
+        },
+        customAccessTokenClaims: async ({ referenceId }) =>
+          referenceId ? { [HOME_OS_ORGANIZATION_CLAIM]: referenceId } : {},
+      }),
+    ],
+  });
+}
+
+function normalizedBaseURL(value: string): string {
+  return value.replace(/\/+$/, "");
+}
+
+export type HomeOSAuth = ReturnType<typeof createAuth>;

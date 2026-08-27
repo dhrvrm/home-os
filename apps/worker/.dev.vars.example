@@ -1,1 +1,4 @@
-HOMEOS_MCP_TOKEN=replace-with-a-long-random-local-token
+BETTER_AUTH_URL=http://localhost:8787
+BETTER_AUTH_SECRET=replace-with-at-least-32-random-characters
+GOOGLE_CLIENT_ID=replace-with-your-google-client-id
+GOOGLE_CLIENT_SECRET=replace-with-your-google-client-secret

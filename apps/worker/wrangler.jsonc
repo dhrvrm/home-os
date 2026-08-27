@@ -9,7 +9,7 @@
     "binding": "ASSETS",
     "not_found_handling": "single-page-application",
     "html_handling": "auto-trailing-slash",
-    "run_worker_first": ["/api/*", "/mcp", "/mcp/*", "/healthz", "/readyz"]
+    "run_worker_first": ["/api/*", "/mcp", "/mcp/*", "/.well-known/*", "/healthz", "/readyz"]
   },
   "d1_databases": [
     {
@@ -20,7 +20,8 @@
     }
   ],
   "vars": {
-    "HOMEOS_DEFAULT_HOUSEHOLD_ID": "home"
+    "HOMEOS_DEFAULT_HOUSEHOLD_ID": "home",
+    "BETTER_AUTH_URL": "https://home-os.dhruvverma028.workers.dev"
   },
   "observability": {
     "enabled": true

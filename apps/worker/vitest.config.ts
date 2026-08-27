@@ -10,7 +10,14 @@ export default defineConfig(async () => {
       cloudflareTest({
         wrangler: { configPath: "./wrangler.jsonc" },
         miniflare: {
-          bindings: { TEST_MIGRATIONS: migrations, HOMEOS_MCP_TOKEN: "test-mcp-token" },
+          bindings: {
+            TEST_MIGRATIONS: migrations,
+            BETTER_AUTH_URL: "https://home-os.test",
+            BETTER_AUTH_SECRET: "home-os-test-secret-that-is-at-least-32-characters",
+            GOOGLE_CLIENT_ID: "test-google-client-id",
+            GOOGLE_CLIENT_SECRET: "test-google-client-secret",
+            HOMEOS_TEST_AUTH: "true",
+          },
         },
       }),
     ],
