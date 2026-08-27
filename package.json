@@ -2,7 +2,8 @@
   "name": "home-os",
   "private": true,
   "workspaces": [
-    "apps/web"
+    "apps/web",
+    "apps/worker"
   ],
   "scripts": {
     "build": "npm run build --workspace @home-os/web",
@@ -10,7 +11,7 @@
     "dev:web": "npm run dev --workspace @home-os/web",
     "lint": "npm run lint --workspace @home-os/web",
     "smoke": "node scripts/smoke.mjs",
-    "test": "npm run test --workspace @home-os/web"
+    "test": "npm run test --workspace @home-os/web && npm run test --workspace @home-os/worker"
   },
   "engines": {
     "node": ">=22"

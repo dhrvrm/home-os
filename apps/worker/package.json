@@ -1,0 +1,25 @@
+{
+  "name": "@home-os/worker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "wrangler deploy --dry-run --outdir dist",
+    "cf-typegen": "wrangler types worker-configuration.d.ts",
+    "deploy": "wrangler deploy",
+    "dev": "wrangler dev",
+    "lint": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.30.0",
+    "hono": "4.13.5",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-plugin": "1.1.1",
+    "typescript": "5.9.2",
+    "vitest": "4.1.11",
+    "wrangler": "4.125.0"
+  }
+}

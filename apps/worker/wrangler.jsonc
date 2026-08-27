@@ -1,0 +1,28 @@
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "home-os",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-27",
+  "compatibility_flags": ["nodejs_compat"],
+  "assets": {
+    "directory": "../web/out",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "html_handling": "auto-trailing-slash",
+    "run_worker_first": ["/api/*", "/mcp", "/mcp/*", "/healthz", "/readyz"]
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "home-os",
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "vars": {
+    "HOMEOS_DEFAULT_HOUSEHOLD_ID": "home"
+  },
+  "observability": {
+    "enabled": true
+  }
+}

@@ -6,7 +6,7 @@
 
 **Architecture:** A single Cloudflare Worker serves the static Next.js PWA, a Hono `/api/v1` application API, and an authenticated stateless `/mcp` endpoint. D1 is the shared household source of truth; Dexie is the browser-local working database and outbox; every accepted command flows through one application service and appends an audit event, regardless of whether it originated in the PWA, sync, MCP, import, or automation. The first deployment remains a modular monolith: later contacts, expenses, chores, documents, notifications, and integration modules reuse household identity, commands, audit, sync, and MCP authorization rather than creating separate runtimes.
 
-**Tech Stack:** TypeScript 5.9, Cloudflare Workers Static Assets, Hono, D1, Dexie 4, Next.js static export, Vitest with Cloudflare Workers pool, Model Context Protocol 2025-11-25 Streamable HTTP, Wrangler 4.125.0.
+**Tech Stack:** TypeScript 5.9, Cloudflare Workers Static Assets, Hono, D1, Dexie 4, Next.js static export, Vitest 4 with Cloudflare's Vitest plugin, Model Context Protocol 2025-11-25 Streamable HTTP, Wrangler 4.125.0.
 
 ---
 
