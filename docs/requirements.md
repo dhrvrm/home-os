@@ -38,12 +38,12 @@ This ledger defines the intended Home OS product and the measurable behavior of 
 
 | ID | Requirement | Acceptance | Release state |
 |---|---|---|---|
-| FR-AST-01 | Answer common inventory questions from local structured data without loading a model. | Quantity, status, location, category, low/out, forecast, cadence, and count tests pass while the runtime factory remains unused. | Current iteration |
-| FR-AST-02 | Retrieve relevant records locally for ambiguous or free-form language. | Unicode-aware retrieval ranks exact primary/alternative names, categories, locations, stock facets, and token overlap; at most 12 records enter model context. | Current iteration |
-| FR-AST-03 | Use the browser model only as an allowlisted query/action planner. | The model emits one schema-validated JSON plan; application code computes facts from current inventory and rejects invented items, fields, categories, IDs, and extra keys. | Current iteration |
+| FR-AST-01 | Answer common inventory questions from local structured data without loading a model. | Quantity, status, location, category, low/out, forecast, cadence, and count tests pass while the runtime factory remains unused. | Shipped |
+| FR-AST-02 | Retrieve relevant records locally for ambiguous or free-form language. | Unicode-aware retrieval ranks exact primary/alternative names, categories, locations, stock facets, and token overlap; at most 12 records enter model context. | Shipped |
+| FR-AST-03 | Use the browser model only as an allowlisted query/action planner. | The model emits one schema-validated JSON plan; application code computes facts from current inventory and rejects invented items, fields, categories, IDs, and extra keys. | Shipped |
 | FR-AST-04 | Require explicit consent before the optional model download. | Deterministic queries work with the model off; no runtime or model request begins until “Enable local assistant” is activated. | Shipped |
 | FR-AST-05 | Require visible confirmation before any model-interpreted mutation. | Rename, alias, and category changes render current/proposed values and apply only after “Confirm change”; cancel performs no write. | Shipped |
-| FR-AST-06 | Explain answer provenance and graceful degradation. | Answers identify local inventory as their source; model-routed answers report retrieved-record count; storage/runtime errors leave deterministic queries available. | Current iteration |
+| FR-AST-06 | Explain answer provenance and graceful degradation. | Answers identify local inventory as their source; model-routed answers report retrieved-record count; storage/runtime errors leave deterministic queries available. | Shipped |
 
 ### Notifications
 
@@ -92,14 +92,14 @@ This ledger defines the intended Home OS product and the measurable behavior of 
 | ID | Quality | Requirement and acceptance measure | Release state |
 |---|---|---|---|
 | NFR-AVL-01 | Availability | `/healthz` proves process health and `/readyz` proves D1 access; a D1/API outage does not prevent cached inventory reads or supported local commands. | Shipped |
-| NFR-OFF-01 | Offline | After one successful load, the app shell and cached inventory open offline; supported inventory commands queue locally; deterministic assistant queries continue without model/network. | Shipped; assistant coverage expanded current iteration |
-| NFR-PERF-01 | Query performance | Deterministic query and retrieval code handles 1,000 inventory records without network access and bounds combined model context to 3,800 UTF-8 bytes. | Current iteration |
+| NFR-OFF-01 | Offline | After one successful load, the app shell and cached inventory open offline; supported inventory commands queue locally; deterministic assistant queries continue without model/network. | Shipped |
+| NFR-PERF-01 | Query performance | Deterministic query and retrieval code handles 1,000 inventory records without network access and bounds combined model context to 3,800 UTF-8 bytes. | Shipped |
 | NFR-PERF-02 | Interface performance | Model loading/generation occurs in a worker and does not block React rendering; every long operation exposes progress or an `aria-live` status. | Shipped |
-| NFR-STOR-01 | Model storage | Before a 105 MB model download, estimate quota, reserve at least 32 MiB or 25% headroom, request persistent storage when supported, and fail recoverably when known capacity is insufficient. | Current iteration |
+| NFR-STOR-01 | Model storage | Before a 105 MB model download, estimate quota, reserve at least 32 MiB or 25% headroom, request persistent storage when supported, and fail recoverably when known capacity is insufficient. | Shipped |
 | NFR-STOR-02 | Ephemeral bounds | Local activity is limited to 30 days or 2,000 events; notification inbox/deduplication obeys FR-NTF-02; prompts, retrieved context, model output, and delivery attempts are not durable product records. | Platform policy shipped; pruning/notifications planned — iteration 2 |
 | NFR-PRIV-01 | AI privacy | Inventory, prompts, retrieved evidence, and model output are never sent to a hosted inference API; the only model network request is the consented, revision-pinned weight download. | Shipped |
 | NFR-SEC-01 | Secrets | API/MCP credentials exist only in Worker secrets, OS keychain, or ignored local vars; logs, audit, client bundles, Git history, and error envelopes contain no credentials. | Shipped |
-| NFR-SAFE-01 | Model safety | Model output cannot directly mutate or author facts; plans are allowlisted and validated; accepted mutations require visible confirmation. | Current iteration |
+| NFR-SAFE-01 | Model safety | Model output cannot directly mutate or author facts; plans are allowlisted and validated; accepted mutations require visible confirmation. | Shipped |
 | NFR-INT-01 | Integrity | Domain mutations are validated, idempotent, optimistic-concurrency checked, and atomically commit authoritative projection, operation result, durable event, and audit delta where applicable. | Shipped for inventory |
 | NFR-A11Y-01 | Accessibility | All workflows are keyboard operable, dialogs trap/restore focus, controls have accessible names, status/errors use appropriate live semantics, and WCAG 2.2 AA contrast is the design target. | Shipped for current UI; regression-tested each iteration |
 | NFR-COMP-01 | Compatibility | Current Chromium, Firefox, and Safari can use deterministic/offline behavior; WebGPU is an enhancement and WebAssembly is the model fallback. | Shipped |

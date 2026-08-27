@@ -227,8 +227,8 @@ describe("InventoryApp", () => {
     await screen.findByText("Dish soap");
     await user.click(screen.getByRole("button", { name: "Restock Dish soap" }));
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
-    expect(screen.getByText("Full")).toBeInTheDocument();
-    expect(screen.getByRole("meter", { name: "Dish soap level" })).toHaveAttribute("value", "100");
+    expect(await screen.findByText("Full")).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole("meter", { name: "Dish soap level" })).toHaveAttribute("value", "100"));
   });
 
   it("consumes 25 points from an approximate item", async () => {
