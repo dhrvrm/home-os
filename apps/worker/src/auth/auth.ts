@@ -49,6 +49,22 @@ export function createAuth(env: Env) {
         membershipLimit: 100,
         invitationExpiresIn: 60 * 60 * 48,
         requireEmailVerificationOnInvitation: true,
+        organizationHooks: {
+          afterCreateTeam: async ({ team, user }) => {
+            if (!user) return;
+            const membershipKey = await teamMembershipKey(team.id, user.id);
+            await env.DB.batch([
+              env.DB.prepare(
+                `INSERT OR IGNORE INTO teamMember
+                   (id, teamId, userId, membershipKey, createdAt)
+                 VALUES (?, ?, ?, ?, ?)`,
+              ).bind(crypto.randomUUID(), team.id, user.id, membershipKey, Date.now()),
+              env.DB.prepare(
+                `UPDATE team SET memberCount = memberCount + 1, updatedAt = ? WHERE id = ?`,
+              ).bind(Date.now(), team.id),
+            ]);
+          },
+        },
         teams: {
           enabled: true,
           defaultTeam: { enabled: true },
@@ -91,6 +107,15 @@ export function createAuth(env: Env) {
 
 function normalizedBaseURL(value: string): string {
   return value.replace(/\/+$/, "");
+}
+
+async function teamMembershipKey(teamId: string, userId: string): Promise<string> {
+  const input = new TextEncoder().encode(JSON.stringify([teamId, userId]));
+  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", input));
+  return btoa(String.fromCharCode(...digest))
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/, "");
 }
 
 export type HomeOSAuth = ReturnType<typeof createAuth>;

@@ -39,21 +39,98 @@ describe("Home OS authentication", () => {
     );
     expect(response.status).toBe(400);
   });
+
+  it("supports invitations, role changes, groups, and immediate member removal", async () => {
+    const owner = await createUserAndOrganization("organization-owner");
+    const roommate = await createUser("organization-roommate");
+    const auth = createAuth(testEnv);
+
+    const invited = await auth.handler(
+      jsonRequest(
+        "/api/auth/organization/invite-member",
+        { email: roommate.email, role: "member", organizationId: owner.organizationId },
+        owner.jar,
+      ),
+    );
+    expect(invited.status).toBe(200);
+    const invitation = await invited.json<{ id: string }>();
+
+    const accepted = await auth.handler(
+      jsonRequest(
+        "/api/auth/organization/accept-invitation",
+        { invitationId: invitation.id },
+        roommate.jar,
+      ),
+    );
+    expect(accepted.status).toBe(200);
+
+    const fullResponse = await auth.handler(
+      authGet(`/api/auth/organization/get-full-organization?organizationId=${owner.organizationId}`, owner.jar),
+    );
+    expect(fullResponse.status).toBe(200);
+    const full = await fullResponse.json<{ members: Array<{ id: string; userId: string; role: string }> }>();
+    const roommateMember = full.members.find(({ userId }) => userId === roommate.userId);
+    expect(roommateMember).toMatchObject({ role: "member" });
+
+    const updated = await auth.handler(
+      jsonRequest(
+        "/api/auth/organization/update-member-role",
+        { memberId: roommateMember!.id, role: "admin", organizationId: owner.organizationId },
+        owner.jar,
+      ),
+    );
+    expect(updated.status).toBe(200);
+
+    const teamResponse = await auth.handler(
+      jsonRequest(
+        "/api/auth/organization/create-team",
+        { name: "Kitchen", organizationId: owner.organizationId },
+        owner.jar,
+      ),
+    );
+    expect(teamResponse.status).toBe(200);
+    const team = await teamResponse.json<{ id: string }>();
+
+    const addedToTeam = await auth.handler(
+      jsonRequest(
+        "/api/auth/organization/add-team-member",
+        { teamId: team.id, userId: roommate.userId, organizationId: owner.organizationId },
+        owner.jar,
+      ),
+    );
+    expect(addedToTeam.status).toBe(200);
+
+    const teamMembersResponse = await auth.handler(
+      authGet(`/api/auth/organization/list-team-members?teamId=${team.id}`, owner.jar),
+    );
+    expect(teamMembersResponse.status, await teamMembersResponse.clone().text()).toBe(200);
+    await expect(teamMembersResponse.json()).resolves.toEqual(
+      expect.arrayContaining([expect.objectContaining({ userId: roommate.userId, teamId: team.id })]),
+    );
+
+    const removed = await auth.handler(
+      jsonRequest(
+        "/api/auth/organization/remove-member",
+        { memberIdOrEmail: roommateMember!.id, organizationId: owner.organizationId },
+        owner.jar,
+      ),
+    );
+    expect(removed.status).toBe(200);
+
+    const roommateContext = await resolveRequestAuth(
+      new Request("https://home-os.test/api/v1/session", { headers: cookieHeaders(roommate.jar) }),
+      testEnv,
+    );
+    expect(roommateContext?.organizations).toEqual([]);
+    expect(roommateContext?.household).toBeNull();
+  });
 });
 
 async function createUserAndOrganization(prefix: string) {
   const auth = createAuth(testEnv);
+  const user = await createUser(prefix);
+  const { jar } = user;
   const suffix = crypto.randomUUID();
-  const jar = new Map<string, string>();
-  const signedUp = await auth.handler(
-    jsonRequest("/api/auth/sign-up/email", {
-      name: `${prefix} owner`,
-      email: `${prefix}-${suffix}@example.com`,
-      password: "correct-horse-battery-staple",
-    }),
-  );
-  expect(signedUp.status).toBe(200);
-  captureCookies(signedUp, jar);
 
   const created = await auth.handler(
     jsonRequest(
@@ -80,6 +157,33 @@ async function createUserAndOrganization(prefix: string) {
   );
   expect(context).not.toBeNull();
   return { context: context!, organizationId: organization.id, jar };
+}
+
+async function createUser(prefix: string) {
+  const auth = createAuth(testEnv);
+  const suffix = crypto.randomUUID();
+  const email = `${prefix}-${suffix}@example.com`;
+  const jar = new Map<string, string>();
+  const signedUp = await auth.handler(
+    jsonRequest("/api/auth/sign-up/email", {
+      name: `${prefix} user`,
+      email,
+      password: "correct-horse-battery-staple",
+    }),
+  );
+  expect(signedUp.status).toBe(200);
+  captureCookies(signedUp, jar);
+  const body = await signedUp.json<{ user: { id: string } }>();
+  await testEnv.DB.prepare(`UPDATE "user" SET "emailVerified" = 1 WHERE id = ?`)
+    .bind(body.user.id)
+    .run();
+  return { jar, email, userId: body.user.id };
+}
+
+function authGet(path: string, jar: Map<string, string>): Request {
+  return new Request(`https://home-os.test${path}`, {
+    headers: { Origin: "https://home-os.test", ...cookieHeaders(jar) },
+  });
 }
 
 function jsonRequest(path: string, body: unknown, jar?: Map<string, string>): Request {
