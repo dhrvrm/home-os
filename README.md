@@ -1,6 +1,6 @@
 # Home OS
 
-Home OS is a shared household inventory for roommates. It tracks what is available, where it lives, how quickly it is consumed, and what needs to be bought next.
+Home OS is an offline-first shared operating system for roommates. Inventory is the first complete module: it tracks what is available, where it lives, how quickly it is consumed, and what needs to be bought next. The platform is designed to grow into shopping, notifications, household members and spaces, important contacts and documents, Splitwise-style expenses, chores, maintenance, and carefully authorized automations.
 
 The first release includes:
 
@@ -13,6 +13,8 @@ The first release includes:
 - learned consumption cadence and lightweight run-out forecasts
 - a private in-browser assistant for questions, renaming, alternative names, and categorization
 - an installable, offline-capable PWA
+
+The Cloudflare platform migration is being delivered iteratively. Its stable foundation is a Next.js PWA with Dexie for local-first data, a Hono Worker API, D1 for shared state and audit history, and an authenticated MCP endpoint that exposes only deployed Home OS capabilities. The full information architecture and preserved feature roadmap are documented in [product architecture](docs/product-architecture.md).
 
 Simple items start at the level you choose. Each **Use** action subtracts 25 points and **Restock** returns the item to 100. After two consumption events, Home OS begins showing the item's typical usage interval.
 

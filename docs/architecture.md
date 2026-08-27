@@ -1,24 +1,25 @@
 # Architecture
 
-Home OS starts as one small system with two deployable nodes: a static web client and an inventory API. The HTTP relation between them is deliberately narrow so the UI, persistence, and future household modules can change independently.
+Home OS is an offline-first household system delivered as one Cloudflare modular monolith. Inventory is the first complete product module. Household identity, synchronization, audit history, and authorized MCP access form the platform used by later contacts, expenses, chores, documents, notification, and automation modules.
 
 ## Runtime shape
 
 ```text
-Next.js static PWA
-       |
-       | JSON over /api/v1
-       v
-Go HTTP API
-       |
-       | repository interface
-       v
-SQLite file
+Next.js PWA ── local commands ──> Dexie projections + outbox
+     │                                  │
+     └──────── Cloudflare Worker <──── sync
+                 ├── Hono /api/v1
+                 ├── authenticated /mcp
+                 ├── D1 shared state and audit
+                 ├── R2 documents in a later module
+                 └── Queue/Cron notifications in a later module
 ```
 
-The web application is a client-side Next.js export. It has no Next.js server dependency and can be served as ordinary static assets. Its service worker caches the application shell and same-origin static files. API calls remain network-first; after a successful inventory load, a validated read-only copy is saved locally and shown with a clear offline banner if the API later becomes unavailable. Mutations stay disabled until connectivity returns.
+The web application remains a client-side Next.js export with no Next.js server dependency. Cloudflare Workers Static Assets serves the application and model runtime. The service worker caches the application shell; it does not treat Cache Storage as a database.
 
-The Go application owns validation, stock transitions, and forecasting. HTTP handlers translate requests into domain operations. The SQLite package implements the domain repository interface, so persistence can be replaced without moving business rules into the transport layer.
+Dexie stores browser-local projections, stock events, recent activity, sync state, and an outbox. A local command updates its projection and outbox atomically, so supported inventory actions never depend on current connectivity. Sync runs at startup, on visibility regain, on the browser `online` event, and by manual retry. Background Sync is an optional enhancement rather than a correctness requirement.
+
+The Worker owns validation, stock transitions, forecasting, authorization, conflict resolution, and accepted audit history. Hono HTTP routes, the sync endpoint, and MCP tools translate external requests into the same application queries and commands. D1 is the canonical shared household state.
 
 ## Inventory model
 
@@ -46,6 +47,9 @@ The current version is namespaced under `/api/v1`:
 - `GET /api/v1/items/{id}/events`
 - `POST /api/v1/items/{id}/events`
 - `GET /api/v1/export`
+- `POST /api/v1/sync`
+- `GET /api/v1/activity`
+- `GET /api/v1/items/{id}/activity`
 
 Responses use one envelope:
 
@@ -53,18 +57,24 @@ Responses use one envelope:
 {"data": {}, "error": null}
 ```
 
-Errors replace `data` with `null` and include a stable code plus a readable message. Request bodies are size-limited, writes are validated in the domain service, and an inventory event plus its resulting item state is committed in one SQLite transaction.
+Errors replace `data` with `null` and include a stable code plus a readable message. Request bodies are size-limited, writes are validated in the domain service, and an inventory event plus its resulting item state, idempotency result, and audit event are committed as one D1 batch.
 
 Item responses include both `categories` and the compatibility `category` projection. New clients should send `categories` and `alternativeNames`; older requests that send only `category` remain valid.
 
-## Persistence and concurrency
+## Persistence, concurrency, and audit
 
-SQLite is configured with foreign keys, WAL mode, a busy timeout, and one database connection. The Go service serializes stock mutations so concurrent roommate actions cannot overwrite one another between the domain read and database write. That is a good fit for a household-sized, single-process write workload and avoids pretending a single file is a distributed database. The database file must live on durable local or mounted storage.
+All entity mutations carry an operation ID and expected version. D1 stores processed operation results for idempotent replay and rejects stale writes as explicit conflicts instead of silently overwriting roommate changes. The browser retains conflicting intent for review.
 
-Opening an older database adds the percentage and archive columns in place and maps existing simple states to percentages (`full=100`, `okay=50`, `low=25`, `out=0`). It also creates normalized child tables for alternative names and category memberships, adds optional event notes, then idempotently backfills each legacy singular category as the item's first category. Archive and restore are soft lifecycle operations and retain stock history. Back up the database before deploying a new binary even though the migrations preserve existing item and event rows.
+Accepted commands append a household-scoped audit event with an authoritative sequence, entity, action, actor, device, source, client time, server time, operation ID, and safe field-level deltas. Audit events are immutable. Corrections are later events. Consumption events remain first-class durable history because forecasting depends on them; notifications and delivery attempts remain bounded projections.
 
-Cloudflare Workers do not provide a durable local filesystem. Workers Static Assets can host the PWA, but the Go API and SQLite file must run elsewhere. A future Cloudflare-native adapter would consist of a Worker API and D1 repository behind the same `/api/v1` contract. It should be added only when its operational benefit justifies maintaining a second runtime.
+The browser stores only recent activity. D1 retains authoritative history and supplies a sequence cursor for synchronization. Durable Objects are not required for the initial household-sized workload; optimistic versions and atomic D1 batches provide the needed behavior with fewer moving parts.
+
+## MCP
+
+The `/mcp` endpoint uses the current stateless Streamable HTTP transport. The first release is read-only and exposes household summary, inventory search and detail, low-stock state, consumption history, and activity. MCP uses application services rather than direct SQL, so household scope, validation, and future authorization rules cannot be bypassed.
+
+The personal deployment requires a dedicated Worker secret. Multi-member and third-party MCP access will use OAuth 2.1 with audience-bound access tokens and module-specific scopes before any write tools are exposed.
 
 ## Growth boundaries
 
-Contacts, shared expenses, chores, and MCP integrations are not folded into the inventory package. Each should become a separate domain package with its own models and repository port, while household identity and membership become shared concepts only when a second subsystem actually needs them.
+Inventory, contacts, expenses, chores, documents, notifications, and automations remain separate product modules. They share household identity, command metadata, authorization, audit, and sync infrastructure without sharing internal models. The complete information architecture and iteration order are recorded in [product architecture](product-architecture.md).
