@@ -77,21 +77,21 @@ The first MCP release is read-only and exposes household summary, inventory sear
 
 Write tools enter in later module iterations only after their underlying application commands, permissions, idempotency, conflict handling, and audit behavior exist. Destructive or financially meaningful tools require explicit scopes and client-visible confirmation semantics.
 
-The initial personal deployment uses a dedicated high-entropy bearer credential stored as a Cloudflare Worker secret. Multi-member or third-party MCP clients require OAuth 2.1 with audience-bound tokens and separately grantable scopes such as `home:read`, `inventory:read`, `inventory:write`, `activity:read`, `expenses:read`, and `expenses:write`.
+The current deployment uses OAuth 2.1 with PKCE, dynamic client registration, audience-bound tokens, and an organization claim. The initial read-only scopes are `inventory:read` and `activity:read`; later modules add separately grantable scopes such as `inventory:write`, `expenses:read`, and `expenses:write` only when their permission and audit semantics ship.
 
 ## Iteration map
 
-### 1. Platform and complete inventory
+### 1. Platform, household access, and complete inventory
 
-Cloudflare Worker, Hono, D1, Dexie, offline writes, synchronization, conflicts, audit history, deployment, and read-only MCP inventory access. Inventory retains simple and exact tracking, alternative names in any language, multiple categories, locations, shopping state, consumption history, cadence, forecasting, archive, restore, export, and a private retrieval-grounded browser assistant.
+Cloudflare Worker, Hono, D1, Google sign-in, organizations, invitations, owner/admin/member roles, groups, household-isolated Dexie data, offline writes, synchronization, conflicts, audit history, deployment, and OAuth-protected read-only MCP inventory access. Inventory retains simple and exact tracking, alternative names in any language, multiple categories, locations, shopping state, consumption history, cadence, forecasting, archive, restore, export, and a private retrieval-grounded browser assistant.
 
 ### 2. Shopping and notifications
 
 Derived and manual shopping entries, assignees, low-stock and predicted-run-out rules, bounded notification inbox, Web Push, preferences, quiet hours, and scheduled reminders using Cron and Queues.
 
-### 3. Household
+### 3. Household spaces and advanced permissions
 
-Roommates, invitations, roles, rooms, storage spaces, device sessions, and per-module permissions. Household membership becomes the shared authorization source for both HTTP and MCP.
+Rooms, storage spaces, named devices, role customization, and per-module permissions build on the shipped organization membership shared by HTTP and MCP.
 
 ### 4. Important contacts and documents
 

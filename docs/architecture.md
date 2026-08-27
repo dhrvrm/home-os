@@ -21,6 +21,14 @@ Dexie stores browser-local projections, stock events, recent activity, sync stat
 
 The Worker owns validation, stock transitions, forecasting, authorization, conflict resolution, and accepted audit history. Hono HTTP routes, the sync endpoint, and MCP tools translate external requests into the same application queries and commands. D1 is the canonical shared household state.
 
+## Identity and household authorization
+
+Better Auth runs at `/api/auth` in the Worker and stores Google identities, sessions, organizations, memberships, invitations, teams, OAuth clients, grants, and signing keys in D1. The PWA is an authentication gate: a signed-in user selects or creates an organization, and the Worker maps that organization to exactly one domain household before any `/api/v1` handler runs.
+
+The organization is the access boundary; the household is the domain-data boundary. An active session alone is insufficient. Each request must also have a live membership in the active organization. Owners and admins manage invitations, roles, members, and groups; members use household features. Removing a membership invalidates both API and MCP access on the next request.
+
+Dexie keeps offline data after sign-out so the device can recover offline, but every projection, activity record, conflict, and outbox operation is keyed by household. Signed-out screens never render a household projection, and switching organizations starts a separately scoped inventory/sync view.
+
 ## Local assistant retrieval
 
 The assistant is a hybrid deterministic/model pipeline. A pure local retrieval module ranks current inventory using Unicode-normalized primary names, alternative names, categories, locations, units, stock facets, and token overlap. It requires no vector database, embedding download, or network call and bounds model evidence to 12 records and 3,800 UTF-8 prompt bytes.
@@ -81,7 +89,7 @@ The browser stores only recent activity. D1 retains authoritative history and su
 
 The `/mcp` endpoint uses the current stateless Streamable HTTP transport. The first release is read-only and exposes household summary, inventory search and detail, low-stock state, consumption history, and activity. MCP uses application services rather than direct SQL, so household scope, validation, and future authorization rules cannot be bypassed.
 
-The personal deployment requires a dedicated Worker secret. Multi-member and third-party MCP access will use OAuth 2.1 with audience-bound access tokens and module-specific scopes before any write tools are exposed.
+MCP clients authenticate through OAuth 2.1 authorization code with PKCE. The Worker publishes protected-resource and authorization-server discovery, permits dynamic client registration, and issues audience-bound JWT access tokens with `inventory:read`, `activity:read`, and an immutable organization reference selected during consent. Every MCP request validates issuer, audience, expiry, scopes, session, and current membership before creating a household-scoped tool server.
 
 ## Growth boundaries
 

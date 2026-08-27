@@ -11,6 +11,7 @@ Inventory currently supports:
 - locations, search, filters, shopping state, archive, restore, and JSON export;
 - immutable consumption history, cadence, and run-out forecasts;
 - local-first edits in Dexie with an idempotent outbox and conflict detection;
+- Google sign-in, isolated homes, owner/admin/member roles, invitations, and groups;
 - a private in-browser assistant with deterministic queries and an optional SmolLM2 135M model;
 - a secured, explicitly read-only MCP inventory and audit interface;
 - one installable PWA and API deployed as a Cloudflare Worker with D1.
@@ -28,7 +29,7 @@ Next.js static PWA
 
 The browser applies supported commands locally before the network is used. Startup, reconnect, and manual sync send queued operations to D1. Operation IDs make retries idempotent; entity versions turn concurrent roommate edits into visible conflicts instead of silent overwrites.
 
-`/mcp` uses the current stateless MCP SDK v2 path and requires `HOMEOS_MCP_TOKEN`. Its tools can list/search inventory, fetch an item and its history, find low/out stock, and read the audit trail. No MCP write tools are exposed yet.
+`/mcp` uses OAuth 2.1 discovery, authorization code with PKCE, dynamic client registration, and organization-bound access tokens. Its tools can list/search inventory, fetch an item and its history, find low/out stock, and read the audit trail for the home selected during consent. Removed members and expired sessions lose MCP access immediately. No MCP write tools are exposed yet.
 
 ## Browser assistant
 
@@ -47,6 +48,8 @@ npm run dev
 ```
 
 Open `http://localhost:8787`. The launcher builds the static PWA, applies pending local D1 migrations, then Wrangler serves the app, API, MCP endpoint, and database from one origin.
+
+Local Google OAuth uses `http://localhost:8787/api/auth/callback/google`. Production uses `https://home-os.dhruvverma028.workers.dev/api/auth/callback/google`. See [authentication setup](docs/authentication.md) before starting the sign-in flow.
 
 ## Verify
 
@@ -68,7 +71,7 @@ source scripts/cloudflare-env.zsh
 npm run deploy --workspace @home-os/worker
 ```
 
-See [docs/deployment.md](docs/deployment.md) for D1 migrations, Worker secrets, remote verification, cost boundaries, and recovery. The 105 MB browser model is fetched only after consent; it is not part of the Worker upload.
+See [docs/deployment.md](docs/deployment.md) for D1 migrations, Worker secrets, remote verification, cost boundaries, and recovery, and [docs/authentication.md](docs/authentication.md) for Google OAuth and ChatGPT MCP connection. The 105 MB browser model is fetched only after consent; it is not part of the Worker upload.
 
 ## Project structure
 

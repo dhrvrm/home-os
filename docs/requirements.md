@@ -19,7 +19,7 @@ This ledger defines the intended Home OS product and the measurable behavior of 
 | FR-PLT-01 | Serve the installable web application and versioned API from one Cloudflare Worker origin. | `/`, `/manifest.webmanifest`, `/api/v1`, `/healthz`, and `/readyz` are served from the deployed Worker; the web build has no Next.js server dependency. | Shipped |
 | FR-PLT-02 | Keep shared household data in D1 and device projections/outbox state in Dexie. | A fresh local or production database migrates successfully; supported inventory commands update Dexie first and later reconcile through `/api/v1/sync`. | Shipped |
 | FR-PLT-03 | Give every accepted mutation an idempotent operation ID, expected version, actor/source context, and audit event. | Replayed operations return the accepted result, stale versions produce explicit conflicts, and accepted changes append immutable field-level audit deltas. | Shipped |
-| FR-PLT-04 | Support household members, invitations, roles, device sessions, and per-module authorization. | An owner can invite/revoke a roommate; every HTTP and MCP read/write is household- and scope-authorized; removed sessions stop working. | Planned — iteration 3 |
+| FR-PLT-04 | Support household members, invitations, roles, groups, and authorization. | An owner/admin can invite or revoke a roommate and manage roles/groups; every HTTP and MCP read is household- and scope-authorized; removed memberships stop working. | Shipped; named devices and per-module roles planned — iteration 3 |
 | FR-PLT-05 | Support complete export and recoverable archive lifecycles. | A household can export its durable records in a versioned format; archived entities are excluded from active views and can be restored where lifecycle recovery applies. | Inventory shipped; other modules planned with their iterations |
 
 ### Inventory and shopping
@@ -83,7 +83,7 @@ This ledger defines the intended Home OS product and the measurable behavior of 
 
 | ID | Requirement | Acceptance | Release state |
 |---|---|---|---|
-| FR-MCP-01 | Expose authenticated, household-scoped read tools/resources through Streamable HTTP MCP. | Unauthorized requests return 401; authorized initialization and inventory/summary/activity reads succeed without direct SQL access. | Shipped |
+| FR-MCP-01 | Expose OAuth-authenticated, household-scoped read tools/resources through Streamable HTTP MCP. | Discovery and DCR succeed; unauthorized requests return 401; PKCE-authorized inventory/summary/activity reads use the consented organization without direct SQL access. | Shipped |
 | FR-MCP-02 | Expose write tools only through authorized application commands. | Each write scope is separately grantable; idempotency, expected versions, confirmation semantics, and audit metadata match PWA commands. | Planned with owning modules |
 | FR-EXT-01 | Import/export and external connectors are separately authorized and revocable. | Each connector exposes requested scopes and last sync; revocation stops access; inbound records use idempotent external IDs. | Planned — iteration 8 |
 
@@ -98,7 +98,8 @@ This ledger defines the intended Home OS product and the measurable behavior of 
 | NFR-STOR-01 | Model storage | Before a 105 MB model download, estimate quota, reserve at least 32 MiB or 25% headroom, request persistent storage when supported, and fail recoverably when known capacity is insufficient. | Shipped |
 | NFR-STOR-02 | Ephemeral bounds | Local activity is limited to 30 days or 2,000 events; notification inbox/deduplication obeys FR-NTF-02; prompts, retrieved context, model output, and delivery attempts are not durable product records. | Platform policy shipped; pruning/notifications planned — iteration 2 |
 | NFR-PRIV-01 | AI privacy | Inventory, prompts, retrieved evidence, and model output are never sent to a hosted inference API; the only model network request is the consented, revision-pinned weight download. | Shipped |
-| NFR-SEC-01 | Secrets | API/MCP credentials exist only in Worker secrets, OS keychain, or ignored local vars; logs, audit, client bundles, Git history, and error envelopes contain no credentials. | Shipped |
+| NFR-SEC-01 | Secrets | Google OAuth and session-signing credentials exist only in Worker secrets, OS keychain, or ignored local vars; logs, audit, client bundles, Git history, and error envelopes contain no credentials. | Shipped |
+| NFR-SEC-02 | Tenant isolation | Every API, sync, offline-cache, and MCP operation resolves a live membership and household; a user cannot render or query another organization without membership. | Shipped |
 | NFR-SAFE-01 | Model safety | Model output cannot directly mutate or author facts; plans are allowlisted and validated; accepted mutations require visible confirmation. | Shipped |
 | NFR-INT-01 | Integrity | Domain mutations are validated, idempotent, optimistic-concurrency checked, and atomically commit authoritative projection, operation result, durable event, and audit delta where applicable. | Shipped for inventory |
 | NFR-A11Y-01 | Accessibility | All workflows are keyboard operable, dialogs trap/restore focus, controls have accessible names, status/errors use appropriate live semantics, and WCAG 2.2 AA contrast is the design target. | Shipped for current UI; regression-tested each iteration |
@@ -112,10 +113,10 @@ This ledger defines the intended Home OS product and the measurable behavior of 
 
 | Requirement group | Primary implementation | Verification |
 |---|---|---|
-| FR-PLT, NFR-AVL, NFR-INT | `apps/worker/src`, `apps/worker/migrations`, `apps/web/src/offline` | Worker API/sync/audit tests; web offline tests; `scripts/smoke.mjs` |
+| FR-PLT, NFR-AVL, NFR-INT, NFR-SEC-02 | `apps/worker/src/auth`, `apps/worker/src`, `apps/worker/migrations`, `apps/web/src/offline`, browser auth/settings components | Worker auth/API/sync/isolation tests; web auth/role/offline tests; `scripts/smoke.mjs` |
 | FR-INV, FR-SHP-01 | `apps/worker/src/inventory`, `apps/web/src/components`, `apps/web/src/offline` | inventory service/API tests; inventory app and sync tests |
 | FR-AST, NFR-PERF-01, NFR-STOR-01, NFR-SAFE-01 | `apps/web/src/lib/assistant-retrieval.ts`, `inventory-assistant.ts`, `browser-assistant.ts`, assistant UI | retrieval, assistant parser/runtime, and component suites |
-| FR-MCP, NFR-SEC | `apps/worker/src/mcp`, Worker secrets | MCP route tests and production unauthorized/authorized smoke |
+| FR-MCP, NFR-SEC | `apps/worker/src/mcp`, `apps/worker/src/auth`, Worker secrets | OAuth discovery/DCR/token/membership tests and production unauthorized/authorized smoke |
 | Planned module groups | `docs/product-architecture.md` iteration boundaries | Each owning iteration adds domain, adapter, offline, authorization, audit, and acceptance tests before status changes |
 
 Release verification is `npm test && npm run lint && npm run build && npm run smoke`, followed by production health/readiness/API/MCP checks. A requirement moves to **Shipped** only in the same commit series that contains its passing acceptance evidence.
