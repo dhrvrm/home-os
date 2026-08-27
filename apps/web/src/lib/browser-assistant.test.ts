@@ -1,5 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
-import { BrowserAssistant, LOCAL_MODEL, type AssistantRuntime } from "./browser-assistant";
+import {
+  BrowserAssistant,
+  LOCAL_MODEL,
+  MODEL_STORAGE_REQUIRED_BYTES,
+  type AssistantRuntime,
+  type BrowserStorageManager,
+} from "./browser-assistant";
 
 function fakeRuntime(overrides: Partial<AssistantRuntime> = {}): AssistantRuntime {
   return {
@@ -12,6 +18,70 @@ function fakeRuntime(overrides: Partial<AssistantRuntime> = {}): AssistantRuntim
 }
 
 describe("BrowserAssistant", () => {
+  it("estimates model capacity and requests persistent storage after preparation", async () => {
+    const storage: BrowserStorageManager = {
+      estimate: vi.fn(async () => ({ usage: 10_000_000, quota: 500_000_000 })),
+      persisted: vi.fn(async () => false),
+      persist: vi.fn(async () => true),
+    };
+    const assistant = new BrowserAssistant(async () => fakeRuntime(), storage);
+
+    expect(storage.estimate).not.toHaveBeenCalled();
+    const readiness = await assistant.prepareStorage();
+    expect(readiness).toEqual({
+      canDownload: true,
+      requiredBytes: MODEL_STORAGE_REQUIRED_BYTES,
+      availableBytes: 490_000_000,
+      persisted: true,
+      reason: "ready",
+    });
+    expect(storage.persist).toHaveBeenCalledOnce();
+  });
+
+  it("fails before runtime creation when known storage is insufficient", async () => {
+    const factory = vi.fn(async () => fakeRuntime());
+    const storage: BrowserStorageManager = {
+      estimate: vi.fn(async () => ({ usage: 90_000_000, quota: 100_000_000 })),
+      persist: vi.fn(async () => true),
+    };
+    const assistant = new BrowserAssistant(factory, storage);
+    await expect(assistant.prepareStorage()).resolves.toMatchObject({
+      canDownload: false, availableBytes: 10_000_000, reason: "insufficient-storage",
+    });
+    await expect(assistant.load()).rejects.toThrow("not enough browser storage");
+    expect(factory).not.toHaveBeenCalled();
+    expect(storage.persist).not.toHaveBeenCalled();
+  });
+
+  it("allows a recoverable attempt when storage estimation is unavailable", async () => {
+    const missing = new BrowserAssistant(async () => fakeRuntime(), {});
+    await expect(missing.prepareStorage()).resolves.toEqual({
+      canDownload: true,
+      requiredBytes: MODEL_STORAGE_REQUIRED_BYTES,
+      availableBytes: null,
+      persisted: null,
+      reason: "estimate-unavailable",
+    });
+
+    const rejected = new BrowserAssistant(async () => fakeRuntime(), {
+      estimate: vi.fn(async () => { throw new Error("estimate blocked"); }),
+    });
+    await expect(rejected.prepareStorage()).resolves.toMatchObject({ canDownload: true, reason: "estimate-unavailable" });
+  });
+
+  it("does not request persistence when browser storage is already persistent", async () => {
+    const storage: BrowserStorageManager = {
+      estimate: vi.fn(async () => ({ usage: 0, quota: 500_000_000 })),
+      persisted: vi.fn(async () => true),
+      persist: vi.fn(async () => true),
+    };
+    const assistant = new BrowserAssistant(async () => fakeRuntime(), storage);
+    await assistant.prepareStorage();
+    await assistant.prepareStorage();
+    expect(storage.estimate).toHaveBeenCalledOnce();
+    expect(storage.persist).not.toHaveBeenCalled();
+  });
+
   it("loads once, reports progress, and reuses the runtime", async () => {
     const runtime = fakeRuntime();
     const factory = vi.fn(async () => runtime);
@@ -59,8 +129,9 @@ describe("BrowserAssistant", () => {
       })),
     });
     const assistant = new BrowserAssistant(async () => loading);
+    await assistant.prepareStorage();
     const load = assistant.load();
-    await Promise.resolve();
+    await vi.waitFor(() => expect(loading.loadModelFromUrl).toHaveBeenCalledOnce());
     await assistant.dispose();
     await expect(load).rejects.toThrow("Aborted");
     expect(loading.exit).toHaveBeenCalledOnce();

@@ -8,6 +8,23 @@ export const LOCAL_MODEL = {
   sha256: "2e8040ceae7815abe0dcb3540b9995eaa1fa0d2ca9e797d0a635ae4433c68c2d",
 } as const;
 
+const MODEL_STORAGE_HEADROOM_BYTES = Math.max(32 * 1024 * 1024, Math.ceil(LOCAL_MODEL.sizeBytes * 0.25));
+export const MODEL_STORAGE_REQUIRED_BYTES = LOCAL_MODEL.sizeBytes + MODEL_STORAGE_HEADROOM_BYTES;
+
+export interface ModelStorageReadiness {
+  canDownload: boolean;
+  requiredBytes: number;
+  availableBytes: number | null;
+  persisted: boolean | null;
+  reason: "ready" | "insufficient-storage" | "estimate-unavailable";
+}
+
+export interface BrowserStorageManager {
+  estimate?: () => Promise<{ usage?: number; quota?: number }>;
+  persist?: () => Promise<boolean>;
+  persisted?: () => Promise<boolean>;
+}
+
 export interface AssistantProgress {
   loaded: number;
   total: number;
@@ -38,8 +55,13 @@ export class BrowserAssistant {
   private loadController: AbortController | null = null;
   private disposed = false;
   private listeners = new Set<(progress: AssistantProgress) => void>();
+  private storageReadiness: ModelStorageReadiness | null = null;
+  private storagePreparation: Promise<ModelStorageReadiness> | null = null;
 
-  constructor(private readonly runtimeFactory: AssistantRuntimeFactory = createWllamaRuntime) {}
+  constructor(
+    private readonly runtimeFactory: AssistantRuntimeFactory = createWllamaRuntime,
+    private readonly storageManager: BrowserStorageManager = defaultStorageManager(),
+  ) {}
 
   onProgress(listener: (progress: AssistantProgress) => void): () => void {
     this.listeners.add(listener);
@@ -50,11 +72,33 @@ export class BrowserAssistant {
     if (this.disposed) throw new Error("The local assistant has been closed.");
     if (this.runtime) return;
     if (this.loading) return this.loading;
+    const readiness = await this.prepareStorage();
+    if (!readiness.canDownload) {
+      throw new Error("There is not enough browser storage for the local model. Free device space or clear site data, then retry.");
+    }
+    if (this.disposed) throw new Error("The local assistant has been closed.");
+    if (this.runtime) return;
+    if (this.loading) return this.loading;
     this.loading = this.loadOnce();
     try {
       await this.loading;
     } finally {
       this.loading = null;
+    }
+  }
+
+  async prepareStorage(): Promise<ModelStorageReadiness> {
+    if (this.disposed) throw new Error("The local assistant has been closed.");
+    if (this.storageReadiness) return this.storageReadiness;
+    if (this.storagePreparation) return this.storagePreparation;
+    const preparation = inspectModelStorage(this.storageManager);
+    this.storagePreparation = preparation;
+    try {
+      const readiness = await preparation;
+      if (readiness.canDownload) this.storageReadiness = readiness;
+      return readiness;
+    } finally {
+      if (this.storagePreparation === preparation) this.storagePreparation = null;
     }
   }
 
@@ -87,6 +131,7 @@ export class BrowserAssistant {
     const runtime = this.runtime;
     this.runtime = null;
     this.loading = null;
+    this.storagePreparation = null;
     this.listeners.clear();
     if (runtime) await runtime.exit();
   }
@@ -125,7 +170,61 @@ export class BrowserAssistant {
 
 async function createWllamaRuntime(): Promise<AssistantRuntime> {
   const { LoggerWithoutDebug, Wllama } = await import("@wllama/wllama/esm/index.js");
-  const runtime = new Wllama({ default: "/vendor/wllama.wasm" }, { logger: LoggerWithoutDebug, suppressNativeLog: true });
+  const runtime = new Wllama(
+    { default: "/vendor/wllama.wasm" },
+    { logger: LoggerWithoutDebug, suppressNativeLog: true, allowOffline: true },
+  );
   runtime.setCompat({ worker: "/vendor/wllama-compat.js", wasm: "/vendor/wllama-compat.wasm" }, "firefox_safari");
   return runtime;
+}
+
+async function inspectModelStorage(storage: BrowserStorageManager): Promise<ModelStorageReadiness> {
+  if (!storage.estimate) return unavailableReadiness();
+  let estimate: { usage?: number; quota?: number };
+  try {
+    estimate = await storage.estimate();
+  } catch {
+    return unavailableReadiness();
+  }
+  if (!Number.isFinite(estimate.quota)) return unavailableReadiness();
+  const usage = Number.isFinite(estimate.usage) ? Math.max(0, estimate.usage ?? 0) : 0;
+  const availableBytes = Math.max(0, (estimate.quota ?? 0) - usage);
+  if (availableBytes < MODEL_STORAGE_REQUIRED_BYTES) {
+    return {
+      canDownload: false,
+      requiredBytes: MODEL_STORAGE_REQUIRED_BYTES,
+      availableBytes,
+      persisted: null,
+      reason: "insufficient-storage",
+    };
+  }
+
+  let persisted: boolean | null = null;
+  try {
+    persisted = storage.persisted ? await storage.persisted() : null;
+    if (persisted !== true && storage.persist) persisted = await storage.persist();
+  } catch {
+    persisted = null;
+  }
+  return {
+    canDownload: true,
+    requiredBytes: MODEL_STORAGE_REQUIRED_BYTES,
+    availableBytes,
+    persisted,
+    reason: "ready",
+  };
+}
+
+function unavailableReadiness(): ModelStorageReadiness {
+  return {
+    canDownload: true,
+    requiredBytes: MODEL_STORAGE_REQUIRED_BYTES,
+    availableBytes: null,
+    persisted: null,
+    reason: "estimate-unavailable",
+  };
+}
+
+function defaultStorageManager(): BrowserStorageManager {
+  return typeof navigator === "undefined" ? {} : (navigator.storage ?? {});
 }
