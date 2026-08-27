@@ -56,7 +56,12 @@ export function createAuth(env: Env) {
           maximumMembersPerTeam: 100,
         },
       }),
-      jwt(),
+      jwt({
+        jwt: {
+          issuer: `${baseURL}${HOME_OS_AUTH_BASE_PATH}`,
+          audience: `${baseURL}${HOME_OS_MCP_PATH}`,
+        },
+      }),
       mcp({
         loginPage: "/sign-in",
         consentPage: "/consent",

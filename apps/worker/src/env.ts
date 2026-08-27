@@ -7,5 +7,4 @@ export interface Env {
   GOOGLE_CLIENT_ID?: string;
   GOOGLE_CLIENT_SECRET?: string;
   HOMEOS_TEST_AUTH?: string;
-  HOMEOS_MCP_TOKEN?: string;
 }

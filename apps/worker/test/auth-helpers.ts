@@ -1,5 +1,8 @@
-import { exports } from "cloudflare:workers";
+import { env, exports } from "cloudflare:workers";
 import { expect } from "vitest";
+import type { Env } from "../src/env";
+
+const testEnv = env as unknown as Env;
 
 export interface AuthenticatedHome {
   cookie: string;
@@ -7,6 +10,7 @@ export interface AuthenticatedHome {
   organizationId: string;
   householdId: string;
   membershipId: string;
+  sessionId: string;
   role: string;
 }
 
@@ -50,12 +54,19 @@ export async function createAuthenticatedHome(prefix: string): Promise<Authentic
       household: { id: string };
     };
   }>();
+  const session = await testEnv.DB.prepare(
+    "SELECT id FROM session WHERE userId = ? ORDER BY createdAt DESC LIMIT 1",
+  )
+    .bind(envelope.data.user.id)
+    .first<{ id: string }>();
+  expect(session).not.toBeNull();
   return {
     cookie,
     userId: envelope.data.user.id,
     organizationId: envelope.data.activeOrganization.id,
     householdId: envelope.data.household.id,
     membershipId: envelope.data.membership.id,
+    sessionId: session!.id,
     role: envelope.data.membership.role,
   };
 }

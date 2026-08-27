@@ -29,6 +29,7 @@ app.get("/readyz", async (context) => {
 });
 
 app.all("/api/auth/*", (context) => createAuth(context.env).handler(context.req.raw));
+app.all("/.well-known/*", (context) => createAuth(context.env).handler(context.req.raw));
 
 app.get("/api/v1/session", async (context) => {
   const auth = await resolveRequestAuth(context.req.raw, context.env);

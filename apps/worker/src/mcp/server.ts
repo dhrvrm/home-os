@@ -12,10 +12,9 @@ const readOnlyAnnotations = {
   openWorldHint: false,
 } as const;
 
-export function createHomeOSMcpServer(env: Env): McpServer {
+export function createHomeOSMcpServer(env: Env, householdId: string): McpServer {
   const server = new McpServer({ name: "home-os", version: "0.1.0" });
   const inventory = new InventoryService(new D1InventoryRepository(env.DB));
-  const householdId = env.HOMEOS_DEFAULT_HOUSEHOLD_ID;
 
   server.registerTool(
     "inventory_list",
