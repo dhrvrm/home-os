@@ -16,7 +16,7 @@ export interface ModelStorageReadiness {
   requiredBytes: number;
   availableBytes: number | null;
   persisted: boolean | null;
-  reason: "ready" | "insufficient-storage" | "estimate-unavailable";
+  reason: "ready" | "cached" | "insufficient-storage" | "estimate-unavailable";
 }
 
 export interface BrowserStorageManager {
@@ -48,6 +48,7 @@ export interface AssistantRuntime {
 }
 
 export type AssistantRuntimeFactory = () => Promise<AssistantRuntime>;
+export type ModelCacheInspector = () => Promise<boolean>;
 
 export class BrowserAssistant {
   private runtime: AssistantRuntime | null = null;
@@ -61,6 +62,7 @@ export class BrowserAssistant {
   constructor(
     private readonly runtimeFactory: AssistantRuntimeFactory = createWllamaRuntime,
     private readonly storageManager: BrowserStorageManager = defaultStorageManager(),
+    private readonly cacheInspector: ModelCacheInspector = defaultModelCacheInspector,
   ) {}
 
   onProgress(listener: (progress: AssistantProgress) => void): () => void {
@@ -91,7 +93,7 @@ export class BrowserAssistant {
     if (this.disposed) throw new Error("The local assistant has been closed.");
     if (this.storageReadiness) return this.storageReadiness;
     if (this.storagePreparation) return this.storagePreparation;
-    const preparation = inspectModelStorage(this.storageManager);
+    const preparation = inspectModelStorage(this.storageManager, this.cacheInspector);
     this.storagePreparation = preparation;
     try {
       const readiness = await preparation;
@@ -142,7 +144,7 @@ export class BrowserAssistant {
     const runtime = await this.runtimeFactory();
     try {
       await runtime.loadModelFromUrl(
-        `https://huggingface.co/${LOCAL_MODEL.repo}/resolve/${LOCAL_MODEL.revision}/${LOCAL_MODEL.file}`,
+        modelSourceURL(),
         {
           n_ctx: 4096,
           seed: 42,
@@ -178,15 +180,28 @@ async function createWllamaRuntime(): Promise<AssistantRuntime> {
   return runtime;
 }
 
-async function inspectModelStorage(storage: BrowserStorageManager): Promise<ModelStorageReadiness> {
-  if (!storage.estimate) return unavailableReadiness();
+async function inspectModelStorage(storage: BrowserStorageManager, cacheInspector: ModelCacheInspector): Promise<ModelStorageReadiness> {
+  try {
+    if (await cacheInspector()) {
+      return {
+        canDownload: true,
+        requiredBytes: MODEL_STORAGE_REQUIRED_BYTES,
+        availableBytes: null,
+        persisted: await requestPersistence(storage),
+        reason: "cached",
+      };
+    }
+  } catch {
+    // A cache inspection failure must not prevent a normal quota check and download attempt.
+  }
+  if (!storage.estimate) return unavailableReadiness(await requestPersistence(storage));
   let estimate: { usage?: number; quota?: number };
   try {
     estimate = await storage.estimate();
   } catch {
-    return unavailableReadiness();
+    return unavailableReadiness(await requestPersistence(storage));
   }
-  if (!Number.isFinite(estimate.quota)) return unavailableReadiness();
+  if (!Number.isFinite(estimate.quota)) return unavailableReadiness(await requestPersistence(storage));
   const usage = Number.isFinite(estimate.usage) ? Math.max(0, estimate.usage ?? 0) : 0;
   const availableBytes = Math.max(0, (estimate.quota ?? 0) - usage);
   if (availableBytes < MODEL_STORAGE_REQUIRED_BYTES) {
@@ -199,32 +214,46 @@ async function inspectModelStorage(storage: BrowserStorageManager): Promise<Mode
     };
   }
 
-  let persisted: boolean | null = null;
-  try {
-    persisted = storage.persisted ? await storage.persisted() : null;
-    if (persisted !== true && storage.persist) persisted = await storage.persist();
-  } catch {
-    persisted = null;
-  }
   return {
     canDownload: true,
     requiredBytes: MODEL_STORAGE_REQUIRED_BYTES,
     availableBytes,
-    persisted,
+    persisted: await requestPersistence(storage),
     reason: "ready",
   };
 }
 
-function unavailableReadiness(): ModelStorageReadiness {
+function unavailableReadiness(persisted: boolean | null): ModelStorageReadiness {
   return {
     canDownload: true,
     requiredBytes: MODEL_STORAGE_REQUIRED_BYTES,
     availableBytes: null,
-    persisted: null,
+    persisted,
     reason: "estimate-unavailable",
   };
 }
 
 function defaultStorageManager(): BrowserStorageManager {
   return typeof navigator === "undefined" ? {} : (navigator.storage ?? {});
+}
+
+async function requestPersistence(storage: BrowserStorageManager): Promise<boolean | null> {
+  try {
+    const persisted = storage.persisted ? await storage.persisted() : null;
+    if (persisted !== true && storage.persist) return await storage.persist();
+    return persisted;
+  } catch {
+    return null;
+  }
+}
+
+async function defaultModelCacheInspector(): Promise<boolean> {
+  if (typeof navigator === "undefined" || !navigator.storage?.getDirectory) return false;
+  const { ModelManager } = await import("@wllama/wllama/esm/index.js");
+  const models = await new ModelManager().getModels();
+  return models.some((model) => model.url === modelSourceURL());
+}
+
+function modelSourceURL(): string {
+  return `https://huggingface.co/${LOCAL_MODEL.repo}/resolve/${LOCAL_MODEL.revision}/${LOCAL_MODEL.file}`;
 }

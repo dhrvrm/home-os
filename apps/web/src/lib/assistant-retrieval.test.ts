@@ -112,10 +112,10 @@ describe("assistant inventory retrieval", () => {
       alternativeNames: index === 999 ? ["आटा"] : [],
     }));
     const result = retrieveInventory("Where is आटा?", many);
-    expect(result.evidence).toHaveLength(12);
+    expect(result.evidence).toHaveLength(1);
     expect(result.evidence[0].item.id).toBe("item-999");
     expect(result.totalItems).toBe(1_000);
-    expect(result.omittedItems).toBe(988);
+    expect(result.omittedItems).toBe(999);
   });
 
   it("honors a smaller explicit limit and handles an empty collection", () => {

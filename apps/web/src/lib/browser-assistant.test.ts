@@ -53,6 +53,20 @@ describe("BrowserAssistant", () => {
     expect(storage.persist).not.toHaveBeenCalled();
   });
 
+  it("loads an already cached model even when first-download capacity is unavailable", async () => {
+    const runtime = fakeRuntime();
+    const factory = vi.fn(async () => runtime);
+    const assistant = new BrowserAssistant(factory, {
+      estimate: vi.fn(async () => ({ usage: 90_000_000, quota: 100_000_000 })),
+      persisted: vi.fn(async () => true),
+    }, async () => true);
+
+    await expect(assistant.prepareStorage()).resolves.toMatchObject({ canDownload: true, reason: "cached", persisted: true });
+    await assistant.load();
+    expect(factory).toHaveBeenCalledOnce();
+    expect(runtime.loadModelFromUrl).toHaveBeenCalledOnce();
+  });
+
   it("allows a recoverable attempt when storage estimation is unavailable", async () => {
     const missing = new BrowserAssistant(async () => fakeRuntime(), {});
     await expect(missing.prepareStorage()).resolves.toEqual({

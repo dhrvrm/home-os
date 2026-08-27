@@ -45,15 +45,9 @@ export function retrieveInventory(request: string, items: InventoryItem[], limit
     .filter(({ score }) => score > 0)
     .sort((left, right) => right.score - left.score || left.index - right.index);
   const strategy = matches.length > 0 ? "ranked" : "attention-fallback";
-  const selected = [...matches];
-
-  if (selected.length < safeLimit) {
-    const selectedIDs = new Set(selected.map(({ item }) => item.id));
-    const fallback = ranked
-      .filter(({ item }) => !selectedIDs.has(item.id))
-      .sort((left, right) => attentionRank(left.item) - attentionRank(right.item) || left.index - right.index);
-    selected.push(...fallback.slice(0, safeLimit - selected.length));
-  }
+  const selected = matches.length > 0
+    ? matches
+    : ranked.sort((left, right) => attentionRank(left.item) - attentionRank(right.item) || left.index - right.index);
 
   const evidence = selected.slice(0, safeLimit).map(({ item, score, matchedFields }) => ({
     item,
