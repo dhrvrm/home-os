@@ -4,7 +4,7 @@ import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent as Reac
 import { ArrowRight, Check, Cpu, HardDrive, LockKey, Sparkle, WarningCircle, X } from "@phosphor-icons/react";
 import { BrowserAssistant, LOCAL_MODEL, type AssistantProgress } from "@/lib/browser-assistant";
 import {
-  buildAssistantPrompt,
+  buildAssistantContext,
   parseModelCommand,
   proposalInput,
   runDeterministicQuery,
@@ -21,6 +21,7 @@ interface InventoryAssistantProps {
 }
 
 type ModelState = "idle" | "loading" | "ready" | "thinking" | "error";
+type AssistantProvenance = { mode: "deterministic" | "model"; recordCount: number };
 
 const SUGGESTIONS = [
   "What is running low?",
@@ -34,6 +35,7 @@ export function InventoryAssistant({ assistant, items, onApply, onClose }: Inven
   const [request, setRequest] = useState("");
   const [pendingRequest, setPendingRequest] = useState<string | null>(null);
   const [result, setResult] = useState<AssistantResult | null>(null);
+  const [provenance, setProvenance] = useState<AssistantProvenance | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [applying, setApplying] = useState(false);
   const [applied, setApplied] = useState(false);
@@ -74,12 +76,14 @@ export function InventoryAssistant({ assistant, items, onApply, onClose }: Inven
     if (!trimmed) return;
     setRequest(trimmed);
     setResult(null);
+    setProvenance(null);
     setError(null);
     setApplied(false);
     const local = runDeterministicQuery(trimmed, items);
     if (local) {
       setPendingRequest(null);
       setResult(local);
+      if (local.type === "answer") setProvenance({ mode: "deterministic", recordCount: local.itemIDs.length });
       return;
     }
     if (modelState !== "ready") {
@@ -93,6 +97,12 @@ export function InventoryAssistant({ assistant, items, onApply, onClose }: Inven
     setModelState("loading");
     setError(null);
     try {
+      const readiness = await assistant.prepareStorage();
+      if (!readiness.canDownload) {
+        setModelState("error");
+        setError(`${formatBytes(readiness.requiredBytes)} required; ${formatBytes(readiness.availableBytes ?? 0)} available. Free device space or clear this site's data, then retry.`);
+        return;
+      }
       await assistant.load();
       setModelState("ready");
       if (pendingRequest) await generate(pendingRequest);
@@ -107,8 +117,10 @@ export function InventoryAssistant({ assistant, items, onApply, onClose }: Inven
     setPendingRequest(null);
     setError(null);
     try {
-      const output = await assistant.generate(buildAssistantPrompt(value, items));
+      const context = buildAssistantContext(value, items);
+      const output = await assistant.generate(context.prompt);
       setResult(parseModelCommand(output, items));
+      setProvenance({ mode: "model", recordCount: context.retrieval.evidence.length });
       setModelState("ready");
     } catch (cause) {
       setModelState("ready");
@@ -123,6 +135,7 @@ export function InventoryAssistant({ assistant, items, onApply, onClose }: Inven
       await onApply({ ...proposal, changes: proposalInput(proposal) });
       setApplied(true);
       setResult(null);
+      setProvenance(null);
     } catch (cause) {
       setError(messageFor(cause, "The proposed change could not be saved."));
     } finally {
@@ -207,7 +220,11 @@ export function InventoryAssistant({ assistant, items, onApply, onClose }: Inven
 
           {modelState === "thinking" && <p className="assistant-thinking" aria-live="polite"><Sparkle size={17} weight="fill" aria-hidden="true" /> Interpreting this request on your device…</p>}
 
-          {result && <AssistantResultView result={result} applying={applying} onApply={apply} onCancel={() => setResult(null)} />}
+          {result && <AssistantResultView result={result} applying={applying} onApply={apply} onCancel={() => {
+            setResult(null);
+            setProvenance(null);
+          }} />}
+          {result && provenance && <p className="assistant-provenance" role="status">{provenanceLabel(provenance)}</p>}
 
           {applied && <p className="assistant-success" role="status"><Check size={18} weight="bold" aria-hidden="true" /> Inventory updated after your confirmation.</p>}
           {error && <p className="assistant-error" role="alert"><WarningCircle size={19} weight="fill" aria-hidden="true" /> {error}</p>}
@@ -262,6 +279,13 @@ function runtimeStatus(state: ModelState, assistant: BrowserAssistant): string {
   if (state === "ready") return assistant.runtimeLabel();
   if (state === "error") return "Local model paused";
   return "Model off";
+}
+
+function provenanceLabel(provenance: AssistantProvenance): string {
+  const records = `${provenance.recordCount} ${provenance.recordCount === 1 ? "record" : "records"}`;
+  return provenance.mode === "deterministic"
+    ? `Answered from local inventory · ${records}`
+    : `Interpreted locally · ${provenance.recordCount} retrieved ${provenance.recordCount === 1 ? "record" : "records"} · Answer verified against inventory`;
 }
 
 function formatBytes(bytes: number): string {

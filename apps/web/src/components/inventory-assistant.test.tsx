@@ -23,7 +23,10 @@ function runtime(output = '{"intent":"rename","item":"Dish soap","name":"Washing
   };
 }
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+});
 
 describe("InventoryAssistant", () => {
   it("answers deterministic queries without downloading a model", async () => {
@@ -35,6 +38,7 @@ describe("InventoryAssistant", () => {
     expect(localRuntime.loadModelFromUrl).not.toHaveBeenCalled();
     await user.click(screen.getByRole("button", { name: "What is running low?" }));
     expect(screen.getByText(/Dish soap.*matches/)).toBeInTheDocument();
+    expect(screen.getByText("Answered from local inventory · 1 record")).toBeInTheDocument();
     expect(localRuntime.loadModelFromUrl).not.toHaveBeenCalled();
   });
 
@@ -65,6 +69,7 @@ describe("InventoryAssistant", () => {
     expect(screen.getByText("Washing-up liquid")).toBeInTheDocument();
     expect(localRuntime.loadModelFromUrl).toHaveBeenCalledOnce();
     expect(localRuntime.createChatCompletion).toHaveBeenCalledOnce();
+    expect(screen.getByText("Interpreted locally · 1 retrieved record · Answer verified against inventory")).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Confirm change" }));
     expect(onApply).toHaveBeenCalledWith(expect.objectContaining({
@@ -72,6 +77,40 @@ describe("InventoryAssistant", () => {
       changes: { name: "Washing-up liquid" },
     }));
     expect(await screen.findByText("Inventory updated after your confirmation.")).toBeInTheDocument();
+  });
+
+  it("checks model storage after consent and blocks a known insufficient device", async () => {
+    const localRuntime = runtime();
+    const assistant = new BrowserAssistant(async () => localRuntime, {
+      estimate: vi.fn(async () => ({ usage: 90_000_000, quota: 100_000_000 })),
+    });
+    const user = userEvent.setup();
+    render(<InventoryAssistant assistant={assistant} items={[soap]} onApply={vi.fn()} onClose={vi.fn()} />);
+
+    await user.type(screen.getByLabelText("Ask about inventory or propose an edit"), "Rename Dish soap");
+    await user.click(screen.getByRole("button", { name: "Ask Home" }));
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Enable local assistant" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("139 MB required; 10 MB available");
+    expect(localRuntime.loadModelFromUrl).not.toHaveBeenCalled();
+  });
+
+  it("continues when quota estimation is unavailable and does not persist prompts", async () => {
+    const localRuntime = runtime();
+    const assistant = new BrowserAssistant(async () => localRuntime, {});
+    const storageWrite = vi.spyOn(Storage.prototype, "setItem");
+    const user = userEvent.setup();
+    render(<InventoryAssistant assistant={assistant} items={[soap]} onApply={vi.fn()} onClose={vi.fn()} />);
+
+    await user.type(screen.getByLabelText("Ask about inventory or propose an edit"), "Rename Dish soap");
+    await user.click(screen.getByRole("button", { name: "Ask Home" }));
+    await user.click(screen.getByRole("button", { name: "Enable local assistant" }));
+
+    expect(await screen.findByRole("heading", { name: "Proposed change to Dish soap" })).toBeInTheDocument();
+    expect(localRuntime.loadModelFromUrl).toHaveBeenCalledOnce();
+    expect(storageWrite).not.toHaveBeenCalled();
+    expect(screen.queryByText(/source \d/i)).not.toBeInTheDocument();
   });
 
   it("shows real model download progress", async () => {
