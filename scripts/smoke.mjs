@@ -11,6 +11,7 @@ const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
 const webPort = readPort("HOMEOS_SMOKE_WEB_PORT", 13_100);
 const webOrigin = `http://127.0.0.1:${webPort}`;
 const children = [];
+const cookieJar = new Map();
 const runAbort = new AbortController();
 let stopping = false;
 
@@ -160,10 +161,13 @@ async function waitFor(name, url, record, timeoutMs = 90_000) {
 }
 
 async function request(pathname, { method = "GET", body, expectedStatus = 200 } = {}) {
+  const headers = new Headers(body === undefined ? undefined : { "Content-Type": "application/json" });
+  headers.set("Origin", webOrigin);
+  if (cookieJar.size) headers.set("Cookie", cookieValue());
   const response = await fetch(new URL(pathname, webOrigin), {
     method,
     body: body === undefined ? undefined : JSON.stringify(body),
-    headers: body === undefined ? undefined : { "Content-Type": "application/json" },
+    headers,
     signal: requestSignal(10_000),
   });
   const text = await response.text();
@@ -182,16 +186,75 @@ async function request(pathname, { method = "GET", body, expectedStatus = 200 } 
   return envelope.data;
 }
 
+async function rawRequest(pathname, { method = "GET", body, expectedStatus = 200 } = {}) {
+  const headers = new Headers(body === undefined ? undefined : { "Content-Type": "application/json" });
+  headers.set("Origin", webOrigin);
+  if (cookieJar.size) headers.set("Cookie", cookieValue());
+  const response = await fetch(new URL(pathname, webOrigin), {
+    method,
+    body: body === undefined ? undefined : JSON.stringify(body),
+    headers,
+    redirect: "manual",
+    signal: requestSignal(10_000),
+  });
+  captureCookies(response);
+  const text = await response.text();
+  assert.equal(response.status, expectedStatus, `${method} ${pathname}: ${text.slice(0, 500)}`);
+  return text ? JSON.parse(text) : null;
+}
+
+function captureCookies(response) {
+  const values = response.headers.getSetCookie?.() ?? [];
+  for (const value of values) {
+    const pair = value.split(";", 1)[0];
+    const separator = pair.indexOf("=");
+    if (separator > 0) cookieJar.set(pair.slice(0, separator), pair.slice(separator + 1));
+  }
+}
+
+function cookieValue() {
+  return [...cookieJar].map(([name, value]) => `${name}=${value}`).join("; ");
+}
+
 function step(message) {
   console.log(`[smoke] ${message}`);
 }
 
 async function runJourney() {
-  step("1/9 empty inventory loads through the unified Worker");
+  step("1/13 unauthenticated inventory is gated");
+  const unauthorized = await rawRequest("/api/v1/items", { expectedStatus: 401 });
+  assert.equal(unauthorized.data, null);
+  assert.equal(unauthorized.error.code, "unauthorized");
+
+  step("2/13 test identity signs in and creates an active home");
+  const suffix = crypto.randomUUID();
+  await rawRequest("/api/auth/sign-up/email", {
+    method: "POST",
+    body: { name: "Smoke owner", email: `smoke-${suffix}@example.com`, password: "correct-horse-battery-staple" },
+  });
+  const organization = await rawRequest("/api/auth/organization/create", {
+    method: "POST",
+    body: { name: "Smoke home", slug: `smoke-${suffix}` },
+  });
+  await rawRequest("/api/auth/organization/set-active", {
+    method: "POST",
+    body: { organizationId: organization.id },
+  });
+  const session = await request("/api/v1/session");
+  assert.equal(session.authenticated, true);
+  assert.equal(session.activeOrganization.id, organization.id);
+  assert.equal(session.membership.role, "owner");
+
+  step("3/13 MCP OAuth protected-resource discovery is available");
+  const discovery = await rawRequest("/.well-known/oauth-protected-resource/mcp");
+  assert.equal(discovery.resource, `${webOrigin}/mcp`);
+  assert.ok(discovery.scopes_supported.includes("inventory:read"));
+
+  step("4/13 empty inventory loads through the authenticated Worker");
   const empty = await request("/api/v1/items");
   assert.deepEqual(empty.items, []);
 
-  step("2/9 exact item can be created");
+  step("5/13 exact item can be created");
   const created = await request("/api/v1/items", {
     method: "POST",
     expectedStatus: 201,
@@ -215,7 +278,7 @@ async function runJourney() {
   assert.deepEqual(item.alternativeNames, ["बासमती चावल", "Rice"]);
   assert.deepEqual(item.categories, ["Food", "Staples"]);
 
-  step("3/9 item location can be edited without changing stock");
+  step("6/13 item location can be edited without changing stock");
   const patched = await request(`/api/v1/items/${encodeURIComponent(item.id)}`, {
     method: "PATCH",
     body: { location: "Kitchen shelf" },
@@ -223,7 +286,7 @@ async function runJourney() {
   assert.equal(patched.item.location, "Kitchen shelf");
   assert.equal(patched.item.quantity, 5);
 
-  step("4/9 exact consumption updates quantity");
+  step("7/13 exact consumption updates quantity");
   const consumed = await request(`/api/v1/items/${encodeURIComponent(item.id)}/events`, {
     method: "POST",
     expectedStatus: 201,
@@ -231,7 +294,7 @@ async function runJourney() {
   });
   assert.equal(consumed.item.quantity, 3.5);
 
-  step("5/9 immutable event history records the consumption");
+  step("8/13 immutable event history records the consumption");
   const history = await request(`/api/v1/items/${encodeURIComponent(item.id)}/events`);
   assert.ok(Array.isArray(history.events));
   assert.equal(history.events.length, 1);
@@ -240,24 +303,24 @@ async function runJourney() {
   assert.equal(history.events[0].quantity, 1.5);
   assert.equal(history.events[0].note, "Smoke test consumption");
 
-  step("6/9 archive removes the item from active inventory");
+  step("9/13 archive removes the item from active inventory");
   const archived = await request(`/api/v1/items/${encodeURIComponent(item.id)}`, { method: "DELETE" });
   assert.equal(archived.item.id, item.id);
   assert.equal(typeof archived.item.archivedAt, "string");
   const activeAfterArchive = await request("/api/v1/items");
   assert.deepEqual(activeAfterArchive.items, []);
 
-  step("7/9 archived inventory lists the item explicitly");
+  step("10/13 archived inventory lists the item explicitly");
   const archivedList = await request("/api/v1/items?archived=only");
   assert.equal(archivedList.items.length, 1);
   assert.equal(archivedList.items[0].id, item.id);
 
-  step("8/9 archived item can be restored");
+  step("11/13 archived item can be restored");
   const restored = await request(`/api/v1/items/${encodeURIComponent(item.id)}/restore`, { method: "POST" });
   assert.equal(restored.item.id, item.id);
   assert.equal(restored.item.archivedAt, null);
 
-  step("9/9 reload returns the restored persisted projection");
+  step("12/13 reload returns the restored persisted projection");
   const reloaded = await request(`/api/v1/items/${encodeURIComponent(item.id)}`);
   assert.equal(reloaded.item.id, item.id);
   assert.equal(reloaded.item.location, "Kitchen shelf");
@@ -265,6 +328,11 @@ async function runJourney() {
   assert.equal(reloaded.item.archivedAt, null);
   const activeReload = await request("/api/v1/items");
   assert.deepEqual(activeReload.items.map((entry) => entry.id), [item.id]);
+
+  step("13/13 sign-out revokes API access");
+  await rawRequest("/api/auth/sign-out", { method: "POST", body: {} });
+  const signedOut = await rawRequest("/api/v1/items", { expectedStatus: 401 });
+  assert.equal(signedOut.error.code, "unauthorized");
 }
 
 async function main() {
@@ -283,6 +351,12 @@ async function main() {
       String(webPort),
       "--persist-to",
       tempDir,
+      "--var",
+      `BETTER_AUTH_URL:${webOrigin}`,
+      "--var",
+      "BETTER_AUTH_SECRET:smoke-test-secret-at-least-thirty-two-characters",
+      "--var",
+      "HOMEOS_TEST_AUTH:true",
     ], {
       cwd: rootDir,
       env: { ...process.env, NEXT_TELEMETRY_DISABLED: "1" },
