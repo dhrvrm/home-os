@@ -130,7 +130,7 @@ export class InventoryService {
       context,
       action: "inventory.item.created",
       expectedVersion: 0,
-      changes: [{ op: "add", path: "/", value: auditItem(item) }],
+      changes: createdFields(item),
     });
   }
 
@@ -348,7 +348,18 @@ function changedFields(
   return changes;
 }
 
-function auditItem(item: InventoryItem): Record<string, unknown> {
-  const { forecast: _forecast, cadence: _cadence, ...durable } = item;
-  return durable;
+function createdFields(item: InventoryItem): AuditChange[] {
+  const fields: Array<keyof InventoryItem> = [
+    "name",
+    "alternativeNames",
+    "categories",
+    "location",
+    "unit",
+    "trackingMode",
+    "quantity",
+    "stockLevel",
+    "levelPercent",
+    "minQuantity",
+  ];
+  return fields.map((field) => ({ op: "add", path: `/${field}`, value: item[field] }));
 }
