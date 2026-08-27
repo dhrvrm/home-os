@@ -30,8 +30,20 @@ export interface InventoryItem {
   minQuantity: number;
   forecast?: Forecast;
   cadence?: Cadence;
+  archivedAt?: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface StockEvent {
+  id: string;
+  itemId: string;
+  type: EventType;
+  quantity: number;
+  stockLevel?: StockLevel;
+  levelPercent: number;
+  note?: string;
+  occurredAt: string;
 }
 
 export interface CreateItemInput {
@@ -52,10 +64,22 @@ export interface ApplyEventInput {
   quantity?: number;
   stockLevel?: StockLevel;
   levelPercent?: number;
+  note?: string;
 }
 
-export interface UpdateItemMetadataInput {
+export interface UpdateItemInput {
   name?: string;
   alternativeNames?: string[];
   categories?: string[];
+  location?: string;
+  unit?: string;
+  minQuantity?: number;
+}
+
+export type UpdateItemMetadataInput = UpdateItemInput;
+
+export interface InventoryExport {
+  version: 1;
+  exportedAt: string;
+  items: Array<{ item: InventoryItem; events: StockEvent[] }>;
 }

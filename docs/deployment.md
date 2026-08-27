@@ -4,19 +4,19 @@ This project intentionally separates the static PWA from the stateful Go API.
 
 ## Local development
 
-Run the API:
+Start the complete local stack:
 
 ```bash
-make dev-api
+make dev
 ```
 
-Run the web app in another terminal:
+The defaults are `http://localhost:8080` for the API and `http://localhost:3100` for the web app. The local web server proxies `/api`, `/healthz`, and `/readyz` to the API. Copy `.env.example` values into your shell or local environment when changing addresses or allowed origins.
+
+Before deploying, run the isolated real-stack check:
 
 ```bash
-make dev-web
+make smoke
 ```
-
-The defaults are `http://localhost:8080` for the API and `http://localhost:3000` for the web app. Copy `.env.example` values into your shell or local environment when changing addresses or allowed origins.
 
 ## Free practical setup
 

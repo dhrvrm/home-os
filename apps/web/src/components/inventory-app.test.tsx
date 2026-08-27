@@ -1,9 +1,11 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { saveInventoryCache } from "@/lib/inventory-cache";
+import type { InventoryItem } from "@/lib/inventory";
 import { InventoryApp } from "./inventory-app";
 
-const soap = {
+const soap: InventoryItem = {
   id: "soap",
   name: "Dish soap",
   alternativeNames: ["साबुन", "Soap"],
@@ -26,7 +28,7 @@ const soap = {
   updatedAt: "2026-08-24T10:00:00Z",
 };
 
-const rice = {
+const rice: InventoryItem = {
   id: "rice",
   name: "Rice",
   alternativeNames: ["चावल"],
@@ -45,6 +47,7 @@ const rice = {
 
 afterEach(() => {
   cleanup();
+  localStorage.clear();
   vi.unstubAllGlobals();
 });
 
@@ -67,6 +70,16 @@ describe("InventoryApp", () => {
     render(<InventoryApp />);
     expect(await screen.findByText("Inventory could not be loaded")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Try again" })).toBeInTheDocument();
+  });
+
+  it("shows a validated saved copy when the API is offline", async () => {
+    saveInventoryCache([soap], localStorage, new Date("2026-08-27T08:00:00Z"));
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("offline")));
+    render(<InventoryApp />);
+
+    expect(await screen.findByText("Showing a saved copy")).toBeInTheDocument();
+    expect(screen.getByText("Dish soap")).toBeInTheDocument();
+    for (const button of screen.getAllByRole("button", { name: "Add item" })) expect(button).toBeDisabled();
   });
 
   it("filters by search and category", async () => {
@@ -161,5 +174,109 @@ describe("InventoryApp", () => {
     const eventRequest = fetchMock.mock.calls[1][1] as RequestInit;
     expect(JSON.parse(String(eventRequest.body))).toEqual({ type: "consume", quantity: 25 });
     expect(screen.getByText("0%")).toBeInTheDocument();
+  });
+
+  it("edits an item directly and displays immutable history", async () => {
+    const updated = { ...rice, location: "Kitchen shelf" };
+    const history = { id: "event-1", itemId: "rice", type: "consume", quantity: 0.5, stockLevel: "okay", levelPercent: 0, note: "Made dinner", occurredAt: "2026-08-26T10:00:00Z" };
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ data: { items: [rice] }, error: null }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ data: { events: [history] }, error: null }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ data: { item: updated }, error: null }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+    render(<InventoryApp />);
+
+    await screen.findByText("Rice");
+    await user.click(screen.getByRole("button", { name: "View details for Rice" }));
+    expect(await screen.findByText("Made dinner")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Edit item" }));
+    const dialog = screen.getByRole("dialog", { name: "Edit Rice" });
+    await user.clear(within(dialog).getByLabelText("Location"));
+    await user.type(within(dialog).getByLabelText("Location"), "Kitchen shelf");
+    await user.click(within(dialog).getByRole("button", { name: "Save changes" }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
+    expect(JSON.parse(String((fetchMock.mock.calls[2][1] as RequestInit).body))).toMatchObject({ location: "Kitchen shelf" });
+  });
+
+  it("accepts an exact consumption quantity", async () => {
+    const updated = { ...rice, quantity: 0.5, stockLevel: "low" };
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ data: { items: [rice] }, error: null }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ data: { item: updated }, error: null }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+    render(<InventoryApp />);
+
+    await screen.findByText("Rice");
+    await user.click(screen.getByRole("button", { name: "Use Rice" }));
+    const dialog = screen.getByRole("dialog", { name: "Use Rice" });
+    const quantity = within(dialog).getByLabelText("Quantity (kg)");
+    await user.clear(quantity);
+    await user.type(quantity, "2.5");
+    await user.click(within(dialog).getByRole("button", { name: "Use stock" }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    expect(JSON.parse(String((fetchMock.mock.calls[1][1] as RequestInit).body))).toMatchObject({ type: "consume", quantity: 2.5 });
+  });
+
+  it("adjusts a simple item to an arbitrary meter level", async () => {
+    const updated = { ...soap, levelPercent: 35, stockLevel: "okay" as const };
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ data: { items: [soap] }, error: null }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ data: { events: [] }, error: null }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ data: { item: updated }, error: null }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+    render(<InventoryApp />);
+
+    await screen.findByText("Dish soap");
+    await user.click(screen.getByRole("button", { name: "View details for Dish soap" }));
+    await user.click(await screen.findByRole("button", { name: "Adjust stock" }));
+    const dialog = screen.getByRole("dialog", { name: "Adjust Dish soap" });
+    fireEvent.change(within(dialog).getByRole("slider", { name: "Current level" }), { target: { value: "35" } });
+    await user.click(within(dialog).getByRole("button", { name: "Adjust stock" }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
+    expect(JSON.parse(String((fetchMock.mock.calls[2][1] as RequestInit).body))).toMatchObject({ type: "mark_level", levelPercent: 35 });
+  });
+
+  it("turns low inventory into a functional shopping list", async () => {
+    const updated = { ...soap, stockLevel: "full", levelPercent: 100 };
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ data: { items: [soap] }, error: null }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ data: { item: updated }, error: null }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+    render(<InventoryApp />);
+
+    await screen.findByText("Dish soap");
+    await user.click(within(screen.getByRole("navigation", { name: "Primary navigation" })).getByRole("button", { name: "Shopping" }));
+    expect(screen.getByRole("heading", { name: "Buy next" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Restock Dish soap from shopping list" }));
+    expect(await screen.findByText("Nothing needs buying")).toBeInTheDocument();
+  });
+
+  it("archives and restores an item without deleting it", async () => {
+    const archived = { ...soap, archivedAt: "2026-08-27T08:00:00Z" };
+    const restored = { ...soap, archivedAt: null };
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ data: { items: [soap] }, error: null }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ data: { events: [] }, error: null }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ data: { item: archived }, error: null }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ data: { item: restored }, error: null }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    const user = userEvent.setup();
+    render(<InventoryApp />);
+
+    await screen.findByText("Dish soap");
+    await user.click(screen.getByRole("button", { name: "View details for Dish soap" }));
+    await user.click(await screen.findByRole("button", { name: "Archive item" }));
+    await user.click(screen.getByRole("button", { name: "Archived" }));
+    await user.click(await screen.findByRole("button", { name: "Restore" }));
+    await user.click(screen.getByRole("button", { name: "Active" }));
+    expect(await screen.findByText("Dish soap")).toBeInTheDocument();
   });
 });

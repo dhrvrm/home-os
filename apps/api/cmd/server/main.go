@@ -20,7 +20,7 @@ func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	address := envOr("HOMEOS_ADDR", ":8080")
 	databasePath := envOr("HOMEOS_DB_PATH", "./data/home-os.db")
-	origins := splitCSV(envOr("HOMEOS_ALLOWED_ORIGINS", "http://localhost:3000,http://localhost:8787"))
+	origins := splitCSV(envOr("HOMEOS_ALLOWED_ORIGINS", "http://localhost:3100,http://127.0.0.1:3100,http://localhost:8787"))
 
 	repository, err := sqlite.Open(databasePath)
 	if err != nil {

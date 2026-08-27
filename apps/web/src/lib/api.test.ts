@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { updateItemMetadata } from "./api";
+import { listItems, updateItemMetadata } from "./api";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -14,9 +14,20 @@ describe("inventory metadata API", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     await expect(updateItemMetadata("soap", { name: "Washing-up liquid", categories: ["Cleaning", "Kitchen"] })).resolves.toEqual(item);
-    expect(fetchMock).toHaveBeenCalledWith("http://localhost:8080/api/v1/items/soap", expect.objectContaining({
+    expect(fetchMock).toHaveBeenCalledWith("/api/v1/items/soap", expect.objectContaining({
       method: "PATCH",
       body: JSON.stringify({ name: "Washing-up liquid", categories: ["Cleaning", "Kitchen"] }),
     }));
+  });
+
+  it("times out a stalled request with an actionable error code", async () => {
+    vi.stubGlobal("fetch", vi.fn((_url: string, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
+      init?.signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")));
+    })));
+
+    await expect(listItems({ timeoutMs: 1 })).rejects.toMatchObject({
+      code: "timeout",
+      message: "The Home OS API took too long to respond. Try again.",
+    });
   });
 });

@@ -1,4 +1,12 @@
-import type { ApplyEventInput, CreateItemInput, InventoryItem, UpdateItemMetadataInput } from "./inventory";
+import type {
+  ApplyEventInput,
+  CreateItemInput,
+  InventoryExport,
+  InventoryItem,
+  StockEvent,
+  UpdateItemInput,
+  UpdateItemMetadataInput,
+} from "./inventory";
 
 interface APIErrorBody {
   code: string;
@@ -22,17 +30,48 @@ export class APIError extends Error {
   }
 }
 
-const API_URL = (process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8080").replace(/\/$/, "");
+export interface APIRequestOptions {
+  signal?: AbortSignal;
+  timeoutMs?: number;
+}
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+export interface ListItemsOptions extends APIRequestOptions {
+  archived?: "only" | "include";
+}
+
+const API_URL = (process.env.NEXT_PUBLIC_API_URL ?? "").replace(/\/$/, "");
+const DEFAULT_TIMEOUT_MS = 10_000;
+
+async function request<T>(path: string, init?: RequestInit, options: APIRequestOptions = {}): Promise<T> {
   let response: Response;
+  const controller = new AbortController();
+  let timedOut = false;
+  const timeout = window.setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, options.timeoutMs ?? DEFAULT_TIMEOUT_MS);
+  const cancel = () => controller.abort(options.signal?.reason);
+  options.signal?.addEventListener("abort", cancel, { once: true });
   try {
     response = await fetch(`${API_URL}${path}`, {
       ...init,
+      signal: controller.signal,
       headers: { "Content-Type": "application/json", ...init?.headers },
     });
   } catch {
+    if (timedOut) {
+      throw new APIError("The Home OS API took too long to respond. Try again.", "timeout");
+    }
+    if (options.signal?.aborted) {
+      throw new APIError("The request was cancelled.", "cancelled");
+    }
+    if (typeof navigator !== "undefined" && navigator.onLine === false) {
+      throw new APIError("You are offline. Home OS will show the latest saved copy when available.", "offline");
+    }
     throw new APIError("The Home OS API is unavailable. Check your connection and try again.", "network_error");
+  } finally {
+    window.clearTimeout(timeout);
+    options.signal?.removeEventListener("abort", cancel);
   }
 
   let envelope: Envelope<T>;
@@ -55,9 +94,15 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return envelope.data;
 }
 
-export async function listItems(): Promise<InventoryItem[]> {
-  const data = await request<{ items: InventoryItem[] }>("/api/v1/items");
+export async function listItems(options: ListItemsOptions = {}): Promise<InventoryItem[]> {
+  const path = options.archived ? `/api/v1/items?archived=${options.archived}` : "/api/v1/items";
+  const data = await request<{ items: InventoryItem[] }>(path, undefined, options);
   return data.items;
+}
+
+export async function getItem(itemID: string, options?: APIRequestOptions): Promise<InventoryItem> {
+  const data = await request<{ item: InventoryItem }>(`/api/v1/items/${encodeURIComponent(itemID)}`, undefined, options);
+  return data.item;
 }
 
 export async function createItem(input: CreateItemInput): Promise<InventoryItem> {
@@ -77,9 +122,32 @@ export async function applyEvent(itemID: string, input: ApplyEventInput): Promis
 }
 
 export async function updateItemMetadata(itemID: string, input: UpdateItemMetadataInput): Promise<InventoryItem> {
+  return updateItem(itemID, input);
+}
+
+export async function updateItem(itemID: string, input: UpdateItemInput): Promise<InventoryItem> {
   const data = await request<{ item: InventoryItem }>(`/api/v1/items/${encodeURIComponent(itemID)}`, {
     method: "PATCH",
     body: JSON.stringify(input),
   });
   return data.item;
+}
+
+export async function listItemEvents(itemID: string, options?: APIRequestOptions): Promise<StockEvent[]> {
+  const data = await request<{ events: StockEvent[] }>(`/api/v1/items/${encodeURIComponent(itemID)}/events`, undefined, options);
+  return data.events;
+}
+
+export async function archiveItem(itemID: string): Promise<InventoryItem> {
+  const data = await request<{ item: InventoryItem }>(`/api/v1/items/${encodeURIComponent(itemID)}`, { method: "DELETE" });
+  return data.item;
+}
+
+export async function restoreItem(itemID: string): Promise<InventoryItem> {
+  const data = await request<{ item: InventoryItem }>(`/api/v1/items/${encodeURIComponent(itemID)}/restore`, { method: "POST" });
+  return data.item;
+}
+
+export async function exportInventory(): Promise<InventoryExport> {
+  return request<InventoryExport>("/api/v1/export");
 }

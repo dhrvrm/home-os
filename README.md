@@ -8,6 +8,8 @@ The first release includes:
 - exact quantity tracking for items that need it
 - alternative names in any language, multiple categories, locations, search, and quick filters
 - purchase and consumption history
+- edit, archive, restore, and JSON backup workflows
+- a shopping view derived from low and out-of-stock items
 - learned consumption cadence and lightweight run-out forecasts
 - a private in-browser assistant for questions, renaming, alternative names, and categorization
 - an installable, offline-capable PWA
@@ -43,16 +45,12 @@ Requirements: Go 1.24+, Node.js 22+, and npm 11+.
 ```bash
 npm install
 go work sync
-make dev-api
+make dev
 ```
 
-In another terminal:
+Open `http://localhost:3100`. The launcher starts both services, verifies their ports and readiness, and shuts both down together. The web app uses a same-origin development proxy, so it cannot silently drift to a different API port. Runtime data is stored in `apps/api/data/home-os.db` unless `HOMEOS_DB_PATH` is set.
 
-```bash
-make dev-web
-```
-
-Open `http://localhost:3000`. Runtime data is stored in `apps/api/data/home-os.db` unless `HOMEOS_DB_PATH` is set.
+To run the services separately, use `make dev-api` and `make dev-web`. The defaults are API port `8080` and web port `3100`.
 
 ## Verify
 
@@ -60,7 +58,10 @@ Open `http://localhost:3000`. Runtime data is stored in `apps/api/data/home-os.d
 make test
 make lint
 make build
+make smoke
 ```
+
+`make smoke` starts an isolated real API, temporary SQLite database, and web proxy, then verifies create, edit, decimal consumption, history, archive, restore, and persistence.
 
 ## Deploy
 

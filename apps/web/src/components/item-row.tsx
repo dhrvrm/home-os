@@ -1,16 +1,19 @@
 "use client";
 
-import { ArrowCounterClockwise, Minus, Package, Warning } from "@phosphor-icons/react";
+import { ArrowCounterClockwise, Minus, Package, SlidersHorizontal, Warning } from "@phosphor-icons/react";
 import { cadenceLabel, forecastLabel, quantityLabel, relativeUpdate, stockLabel } from "@/lib/format";
 import type { ApplyEventInput, InventoryItem } from "@/lib/inventory";
 
 interface ItemRowProps {
   item: InventoryItem;
   pending: boolean;
+  disabled?: boolean;
   onAction: (item: InventoryItem, input: ApplyEventInput) => Promise<void>;
+  onOpenStock: (item: InventoryItem, action: "consume" | "restock") => void;
+  onDetails: (item: InventoryItem) => void;
 }
 
-export function ItemRow({ item, pending, onAction }: ItemRowProps) {
+export function ItemRow({ item, pending, disabled = false, onAction, onOpenStock, onDetails }: ItemRowProps) {
   const consumeQuantity = item.trackingMode === "exact" ? 1 : 25;
   const restockQuantity = item.trackingMode === "exact" ? Math.max(1, item.minQuantity || 1) : undefined;
   return (
@@ -37,11 +40,14 @@ export function ItemRow({ item, pending, onAction }: ItemRowProps) {
         <span>{item.trackingMode === "exact" && item.forecast ? forecastLabel(item.forecast) : relativeUpdate(item.updatedAt)}</span>
       </div>
       <div className="item-actions">
-        <button className="button button--small button--quiet" type="button" disabled={pending || item.stockLevel === "out"} onClick={() => onAction(item, { type: "consume", quantity: consumeQuantity })} aria-label={`Use ${item.name}`}>
+        <button className="button button--small button--quiet" type="button" disabled={disabled || pending || item.stockLevel === "out"} onClick={() => item.trackingMode === "exact" ? onOpenStock(item, "consume") : onAction(item, { type: "consume", quantity: consumeQuantity })} aria-label={`Use ${item.name}`}>
           <Minus size={16} weight="bold" aria-hidden="true" /> Use
         </button>
-        <button className="button button--small button--restock" type="button" disabled={pending} onClick={() => onAction(item, { type: "restock", quantity: restockQuantity })} aria-label={`Restock ${item.name}`}>
+        <button className="button button--small button--restock" type="button" disabled={disabled || pending} onClick={() => item.trackingMode === "exact" ? onOpenStock(item, "restock") : onAction(item, { type: "restock", quantity: restockQuantity })} aria-label={`Restock ${item.name}`}>
           <ArrowCounterClockwise size={16} weight="bold" aria-hidden="true" /> Restock
+        </button>
+        <button className="icon-button icon-button--small" type="button" disabled={pending} onClick={() => onDetails(item)} aria-label={`View details for ${item.name}`}>
+          <SlidersHorizontal size={16} aria-hidden="true" />
         </button>
       </div>
     </article>

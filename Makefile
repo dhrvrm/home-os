@@ -1,10 +1,16 @@
-.PHONY: dev-api dev-web test lint build
+.PHONY: dev dev-api dev-web smoke test lint build
+
+dev:
+	node scripts/dev.mjs
 
 dev-api:
 	cd apps/api && go run ./cmd/server
 
 dev-web:
 	npm run dev --workspace @home-os/web
+
+smoke:
+	node scripts/smoke.mjs
 
 test:
 	go test ./apps/api/...

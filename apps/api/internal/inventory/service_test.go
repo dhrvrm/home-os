@@ -20,11 +20,24 @@ func newMemoryRepository() *memoryRepository {
 	return &memoryRepository{items: make(map[string]Item), events: make(map[string][]StockEvent)}
 }
 
+func (r *memoryRepository) Ping(context.Context) error { return nil }
+
 func (r *memoryRepository) ListItems(_ context.Context, filter Filter) ([]Item, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	items := make([]Item, 0, len(r.items))
 	for _, item := range r.items {
+		switch filter.Archived {
+		case ArchivedOnly:
+			if item.ArchivedAt == nil {
+				continue
+			}
+		case ArchivedInclude:
+		default:
+			if item.ArchivedAt != nil {
+				continue
+			}
+		}
 		if filter.Category != "" && item.Category != filter.Category {
 			continue
 		}
@@ -53,13 +66,39 @@ func (r *memoryRepository) CreateItem(_ context.Context, item Item) (Item, error
 	return item, nil
 }
 
-func (r *memoryRepository) UpdateItemMetadata(_ context.Context, item Item) (Item, error) {
+func (r *memoryRepository) UpdateItem(_ context.Context, item Item) (Item, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if _, ok := r.items[item.ID]; !ok {
 		return Item{}, ErrNotFound
 	}
 	r.items[item.ID] = item
+	return item, nil
+}
+
+func (r *memoryRepository) ArchiveItem(_ context.Context, itemID string, archivedAt time.Time) (Item, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	item, ok := r.items[itemID]
+	if !ok {
+		return Item{}, ErrNotFound
+	}
+	item.ArchivedAt = &archivedAt
+	item.UpdatedAt = archivedAt
+	r.items[itemID] = item
+	return item, nil
+}
+
+func (r *memoryRepository) RestoreItem(_ context.Context, itemID string, restoredAt time.Time) (Item, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	item, ok := r.items[itemID]
+	if !ok {
+		return Item{}, ErrNotFound
+	}
+	item.ArchivedAt = nil
+	item.UpdatedAt = restoredAt
+	r.items[itemID] = item
 	return item, nil
 }
 
@@ -322,7 +361,7 @@ func TestServiceRejectsSimpleLevelOutsideRange(t *testing.T) {
 	}
 }
 
-func TestServiceRestocksItem(t *testing.T) {
+func TestServiceRestocksExactItemToDerivedLevel(t *testing.T) {
 	repo := newMemoryRepository()
 	repo.items["rice"] = Item{ID: "rice", Name: "Rice", TrackingMode: TrackingExact, Quantity: 0, MinQuantity: 1, StockLevel: StockOut, Unit: "kg"}
 	service := NewService(repo, WithIDGenerator(func() string { return "event-1" }))
@@ -331,7 +370,7 @@ func TestServiceRestocksItem(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ApplyEvent() error = %v", err)
 	}
-	if item.Quantity != 5 || item.StockLevel != StockFull {
+	if item.Quantity != 5 || item.StockLevel != StockOkay {
 		t.Fatalf("unexpected stock: %#v", item)
 	}
 }
@@ -438,3 +477,168 @@ func TestCalculateCadenceConfidenceIncreasesWithSamples(t *testing.T) {
 		})
 	}
 }
+
+func TestServiceRejectsOversizedCoreFieldsOnCreate(t *testing.T) {
+	service := NewService(newMemoryRepository())
+	for _, test := range []struct {
+		name  string
+		input CreateItemInput
+		field string
+	}{
+		{name: "name", input: CreateItemInput{Name: strings.Repeat("界", 121)}, field: "name"},
+		{name: "location", input: CreateItemInput{Name: "Rice", Location: strings.Repeat("界", 81)}, field: "location"},
+		{name: "unit", input: CreateItemInput{Name: "Rice", Unit: strings.Repeat("界", 31)}, field: "unit"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := service.CreateItem(context.Background(), test.input)
+			var validation ValidationError
+			if !errors.As(err, &validation) || validation.Field != test.field {
+				t.Fatalf("CreateItem() error = %#v, want field %q", err, test.field)
+			}
+		})
+	}
+}
+
+func TestServiceUpdatesCompleteItemWithoutChangingStock(t *testing.T) {
+	repo := newMemoryRepository()
+	created := time.Date(2026, 8, 24, 12, 0, 0, 0, time.UTC)
+	updatedAt := created.Add(time.Hour)
+	repo.items["rice"] = Item{
+		ID: "rice", Name: "Rice", Category: "Food", Categories: []string{"Food"}, Location: "Pantry",
+		Unit: "kg", TrackingMode: TrackingExact, Quantity: 4, StockLevel: StockOkay, LevelPercent: 0,
+		MinQuantity: 1, CreatedAt: created, UpdatedAt: created,
+	}
+	service := NewService(repo, WithClock(func() time.Time { return updatedAt }))
+	name := "Basmati rice"
+	aliases := []string{"चावल"}
+	categories := []string{"Food", "Staples"}
+	location := "Kitchen shelf"
+	unit := "bag"
+	minimum := 6.0
+
+	item, err := service.UpdateItem(context.Background(), "rice", UpdateItemInput{
+		Name: &name, AlternativeNames: &aliases, Categories: &categories, Location: &location, Unit: &unit, MinQuantity: &minimum,
+	})
+	if err != nil {
+		t.Fatalf("UpdateItem() error = %v", err)
+	}
+	if item.Name != name || item.Location != location || item.Unit != unit || item.MinQuantity != minimum {
+		t.Fatalf("metadata was not updated: %#v", item)
+	}
+	if item.Quantity != 4 || item.StockLevel != StockOkay || item.LevelPercent != 0 {
+		t.Fatalf("stock changed outside an event: %#v", item)
+	}
+	if !item.UpdatedAt.Equal(updatedAt) || !item.CreatedAt.Equal(created) {
+		t.Fatalf("unexpected timestamps: %#v", item)
+	}
+}
+
+func TestServiceRejectsInvalidCompleteItemUpdate(t *testing.T) {
+	repo := newMemoryRepository()
+	repo.items["rice"] = Item{ID: "rice", Name: "Rice", Category: "Food", Categories: []string{"Food"}, Location: "Pantry", Unit: "kg"}
+	service := NewService(repo)
+	negative := -1.0
+
+	for _, test := range []struct {
+		name  string
+		input UpdateItemInput
+		field string
+	}{
+		{name: "name", input: UpdateItemInput{Name: stringPointer(strings.Repeat("界", 121))}, field: "name"},
+		{name: "location", input: UpdateItemInput{Location: stringPointer(strings.Repeat("界", 81))}, field: "location"},
+		{name: "unit", input: UpdateItemInput{Unit: stringPointer(strings.Repeat("界", 31))}, field: "unit"},
+		{name: "minimum", input: UpdateItemInput{MinQuantity: &negative}, field: "minQuantity"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := service.UpdateItem(context.Background(), "rice", test.input)
+			var validation ValidationError
+			if !errors.As(err, &validation) || validation.Field != test.field {
+				t.Fatalf("UpdateItem() error = %#v, want field %q", err, test.field)
+			}
+		})
+	}
+}
+
+func TestServiceExactRestockDerivesStateFromResultingQuantity(t *testing.T) {
+	repo := newMemoryRepository()
+	repo.items["rice"] = Item{ID: "rice", Name: "Rice", TrackingMode: TrackingExact, Quantity: 0, MinQuantity: 10, StockLevel: StockOut}
+	service := NewService(repo, WithIDGenerator(func() string { return "event-1" }))
+
+	item, err := service.ApplyEvent(context.Background(), "rice", ApplyEventInput{Type: EventRestock, Quantity: 1})
+	if err != nil {
+		t.Fatalf("ApplyEvent() error = %v", err)
+	}
+	if item.Quantity != 1 || item.StockLevel != StockLow {
+		t.Fatalf("restocked item = %#v, want quantity 1 and low", item)
+	}
+}
+
+func TestServiceExactOverConsumptionRecordsActualAvailableQuantity(t *testing.T) {
+	repo := newMemoryRepository()
+	repo.items["milk"] = Item{ID: "milk", Name: "Milk", TrackingMode: TrackingExact, Quantity: 3, MinQuantity: 1, StockLevel: StockOkay}
+	service := NewService(repo, WithIDGenerator(func() string { return "event-1" }))
+
+	item, err := service.ApplyEvent(context.Background(), "milk", ApplyEventInput{Type: EventConsume, Quantity: 8, Note: "Used for guests"})
+	if err != nil {
+		t.Fatalf("ApplyEvent() error = %v", err)
+	}
+	if item.Quantity != 0 || item.StockLevel != StockOut {
+		t.Fatalf("consumed item = %#v", item)
+	}
+	events := repo.events["milk"]
+	if len(events) != 1 || events[0].Quantity != 3 || events[0].Note != "Used for guests" {
+		t.Fatalf("events = %#v, want actual quantity 3 with note", events)
+	}
+}
+
+func TestServiceValidatesEventNoteLength(t *testing.T) {
+	repo := newMemoryRepository()
+	repo.items["soap"] = Item{ID: "soap", Name: "Soap", TrackingMode: TrackingSimple, LevelPercent: 50, StockLevel: StockOkay}
+	service := NewService(repo)
+
+	_, err := service.ApplyEvent(context.Background(), "soap", ApplyEventInput{Type: EventConsume, Note: strings.Repeat("界", 241)})
+	var validation ValidationError
+	if !errors.As(err, &validation) || validation.Field != "note" {
+		t.Fatalf("ApplyEvent() error = %#v, want note validation", err)
+	}
+	if len(repo.events["soap"]) != 0 {
+		t.Fatalf("invalid note recorded events: %#v", repo.events["soap"])
+	}
+}
+
+func TestServiceArchivesAndRestoresWithoutLosingHistory(t *testing.T) {
+	repo := newMemoryRepository()
+	now := time.Date(2026, 8, 27, 12, 0, 0, 0, time.UTC)
+	repo.items["soap"] = Item{ID: "soap", Name: "Soap", Category: "Cleaning", Categories: []string{"Cleaning"}, TrackingMode: TrackingSimple, LevelPercent: 50, StockLevel: StockOkay}
+	repo.events["soap"] = []StockEvent{{ID: "event-1", ItemID: "soap", Type: EventConsume, Quantity: 25, OccurredAt: now.Add(-time.Hour)}}
+	service := NewService(repo, WithClock(func() time.Time { return now }))
+
+	archived, err := service.ArchiveItem(context.Background(), "soap")
+	if err != nil {
+		t.Fatalf("ArchiveItem() error = %v", err)
+	}
+	if archived.ArchivedAt == nil || !archived.ArchivedAt.Equal(now) {
+		t.Fatalf("archived item = %#v", archived)
+	}
+	active, err := service.ListItems(context.Background(), Filter{})
+	if err != nil || len(active) != 0 {
+		t.Fatalf("active items = %#v, error = %v", active, err)
+	}
+	archivedItems, err := service.ListItems(context.Background(), Filter{Archived: ArchivedOnly})
+	if err != nil || len(archivedItems) != 1 {
+		t.Fatalf("archived items = %#v, error = %v", archivedItems, err)
+	}
+	events, err := service.ListEvents(context.Background(), "soap", time.Time{})
+	if err != nil || len(events) != 1 || events[0].ID != "event-1" {
+		t.Fatalf("events after archive = %#v, error = %v", events, err)
+	}
+	restored, err := service.RestoreItem(context.Background(), "soap")
+	if err != nil {
+		t.Fatalf("RestoreItem() error = %v", err)
+	}
+	if restored.ArchivedAt != nil {
+		t.Fatalf("restored item = %#v", restored)
+	}
+}
+
+func stringPointer(value string) *string { return &value }

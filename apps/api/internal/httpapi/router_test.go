@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/dhrvrm/home-os/apps/api/internal/inventory"
 )
@@ -21,11 +22,26 @@ type fakeInventoryService struct {
 	eventItemID string
 	event       inventory.ApplyEventInput
 	err         error
+	events      []inventory.StockEvent
 }
+
+func (s *fakeInventoryService) Ping(context.Context) error { return s.err }
 
 func (s *fakeInventoryService) ListItems(_ context.Context, filter inventory.Filter) ([]inventory.Item, error) {
 	s.listFilter = filter
 	return s.items, s.err
+}
+
+func (s *fakeInventoryService) GetItem(_ context.Context, itemID string) (inventory.Item, error) {
+	if s.err != nil {
+		return inventory.Item{}, s.err
+	}
+	for _, item := range s.items {
+		if item.ID == itemID {
+			return item, nil
+		}
+	}
+	return inventory.Item{ID: itemID, Name: "Item"}, nil
 }
 
 func (s *fakeInventoryService) CreateItem(_ context.Context, input inventory.CreateItemInput) (inventory.Item, error) {
@@ -43,7 +59,7 @@ func (s *fakeInventoryService) CreateItem(_ context.Context, input inventory.Cre
 	return item, nil
 }
 
-func (s *fakeInventoryService) UpdateItemMetadata(_ context.Context, itemID string, input inventory.UpdateItemMetadataInput) (inventory.Item, error) {
+func (s *fakeInventoryService) UpdateItem(_ context.Context, itemID string, input inventory.UpdateItemInput) (inventory.Item, error) {
 	s.metadataID = itemID
 	s.metadata = input
 	if s.err != nil {
@@ -65,6 +81,28 @@ func (s *fakeInventoryService) UpdateItemMetadata(_ context.Context, itemID stri
 	return item, nil
 }
 
+func (s *fakeInventoryService) ListEvents(_ context.Context, itemID string, _ time.Time) ([]inventory.StockEvent, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
+	return s.events, nil
+}
+
+func (s *fakeInventoryService) ArchiveItem(_ context.Context, itemID string) (inventory.Item, error) {
+	if s.err != nil {
+		return inventory.Item{}, s.err
+	}
+	now := time.Date(2026, 8, 27, 8, 0, 0, 0, time.UTC)
+	return inventory.Item{ID: itemID, ArchivedAt: &now}, nil
+}
+
+func (s *fakeInventoryService) RestoreItem(_ context.Context, itemID string) (inventory.Item, error) {
+	if s.err != nil {
+		return inventory.Item{}, s.err
+	}
+	return inventory.Item{ID: itemID}, nil
+}
+
 func (s *fakeInventoryService) ApplyEvent(_ context.Context, itemID string, input inventory.ApplyEventInput) (inventory.Item, error) {
 	s.eventItemID = itemID
 	s.event = input
@@ -84,16 +122,34 @@ func TestHealth(t *testing.T) {
 	}
 }
 
+func TestReadyChecksStorage(t *testing.T) {
+	t.Run("ready", func(t *testing.T) {
+		response := httptest.NewRecorder()
+		NewRouter(&fakeInventoryService{}, Config{}).ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+		if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"status":"ready"`) {
+			t.Fatalf("response = %d %s", response.Code, response.Body.String())
+		}
+	})
+
+	t.Run("storage unavailable", func(t *testing.T) {
+		response := httptest.NewRecorder()
+		NewRouter(&fakeInventoryService{err: errors.New("database unavailable")}, Config{}).ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+		if response.Code != http.StatusServiceUnavailable || !strings.Contains(response.Body.String(), `"code":"not_ready"`) {
+			t.Fatalf("response = %d %s", response.Code, response.Body.String())
+		}
+	})
+}
+
 func TestListItemsParsesFilters(t *testing.T) {
 	service := &fakeInventoryService{items: []inventory.Item{{ID: "item-1", Name: "Soap"}}}
-	request := httptest.NewRequest(http.MethodGet, "/api/v1/items?q=soap&category=Cleaning&stockLevel=low", nil)
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/items?q=soap&category=Cleaning&stockLevel=low&archived=only", nil)
 	response := httptest.NewRecorder()
 	NewRouter(service, Config{}).ServeHTTP(response, request)
 
 	if response.Code != http.StatusOK {
 		t.Fatalf("response = %d %s", response.Code, response.Body.String())
 	}
-	if service.listFilter.Query != "soap" || service.listFilter.Category != "Cleaning" || service.listFilter.StockLevel != inventory.StockLow {
+	if service.listFilter.Query != "soap" || service.listFilter.Category != "Cleaning" || service.listFilter.StockLevel != inventory.StockLow || service.listFilter.Archived != inventory.ArchivedOnly {
 		t.Fatalf("filter = %#v", service.listFilter)
 	}
 	var envelope struct {
@@ -103,6 +159,34 @@ func TestListItemsParsesFilters(t *testing.T) {
 	}
 	if err := json.Unmarshal(response.Body.Bytes(), &envelope); err != nil || len(envelope.Data.Items) != 1 {
 		t.Fatalf("decode response: %v, body = %s", err, response.Body.String())
+	}
+}
+
+func TestItemLifecycleAndExportRoutes(t *testing.T) {
+	event := inventory.StockEvent{ID: "event-1", ItemID: "rice", Type: inventory.EventConsume, Quantity: 1, Note: "Dinner"}
+	service := &fakeInventoryService{items: []inventory.Item{{ID: "rice", Name: "Rice"}}, events: []inventory.StockEvent{event}}
+
+	tests := []struct {
+		name   string
+		method string
+		path   string
+		body   string
+		want   string
+	}{
+		{name: "get", method: http.MethodGet, path: "/api/v1/items/rice", want: `"id":"rice"`},
+		{name: "history", method: http.MethodGet, path: "/api/v1/items/rice/events", want: `"note":"Dinner"`},
+		{name: "archive", method: http.MethodDelete, path: "/api/v1/items/rice", want: `"archivedAt":"2026-08-27T08:00:00Z"`},
+		{name: "restore", method: http.MethodPost, path: "/api/v1/items/rice/restore", want: `"archivedAt":null`},
+		{name: "export", method: http.MethodGet, path: "/api/v1/export", want: `"version":1`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			response := httptest.NewRecorder()
+			NewRouter(service, Config{}).ServeHTTP(response, httptest.NewRequest(test.method, test.path, strings.NewReader(test.body)))
+			if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), test.want) {
+				t.Fatalf("response = %d %s", response.Code, response.Body.String())
+			}
+		})
 	}
 }
 
@@ -161,7 +245,7 @@ func TestUpdateItemMetadata(t *testing.T) {
 
 func TestUpdateItemMetadataRejectsUnknownJSONAndMapsErrors(t *testing.T) {
 	t.Run("unknown field", func(t *testing.T) {
-		request := httptest.NewRequest(http.MethodPatch, "/api/v1/items/soap", strings.NewReader(`{"location":"Garage"}`))
+		request := httptest.NewRequest(http.MethodPatch, "/api/v1/items/soap", strings.NewReader(`{"quantity":4}`))
 		response := httptest.NewRecorder()
 		NewRouter(&fakeInventoryService{}, Config{}).ServeHTTP(response, request)
 		if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "unknown field") {
@@ -255,6 +339,9 @@ func TestCORSRejectsDisallowedOriginBeforeMutation(t *testing.T) {
 
 	if response.Code != http.StatusForbidden {
 		t.Fatalf("response = %d %s", response.Code, response.Body.String())
+	}
+	if !strings.Contains(response.Header().Get("Content-Type"), "application/json") || !strings.Contains(response.Body.String(), `"code":"origin_not_allowed"`) {
+		t.Fatalf("CORS error is not structured JSON: headers=%#v body=%s", response.Header(), response.Body.String())
 	}
 	if service.created.Name != "" {
 		t.Fatalf("disallowed request reached service with input %#v", service.created)

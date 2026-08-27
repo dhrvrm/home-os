@@ -56,6 +56,18 @@ func (t EventType) Valid() bool {
 	return t == EventConsume || t == EventRestock || t == EventMarkLevel
 }
 
+type ArchivedFilter string
+
+const (
+	ArchivedExclude ArchivedFilter = ""
+	ArchivedOnly    ArchivedFilter = "only"
+	ArchivedInclude ArchivedFilter = "include"
+)
+
+func (f ArchivedFilter) Valid() bool {
+	return f == ArchivedExclude || f == ArchivedOnly || f == ArchivedInclude
+}
+
 type Confidence string
 
 const (
@@ -94,6 +106,7 @@ type Item struct {
 	Cadence          *Cadence     `json:"cadence,omitempty"`
 	CreatedAt        time.Time    `json:"createdAt"`
 	UpdatedAt        time.Time    `json:"updatedAt"`
+	ArchivedAt       *time.Time   `json:"archivedAt"`
 }
 
 type StockEvent struct {
@@ -103,6 +116,7 @@ type StockEvent struct {
 	Quantity     float64    `json:"quantity"`
 	StockLevel   StockLevel `json:"stockLevel,omitempty"`
 	LevelPercent float64    `json:"levelPercent"`
+	Note         string     `json:"note"`
 	OccurredAt   time.Time  `json:"occurredAt"`
 }
 
@@ -110,6 +124,7 @@ type Filter struct {
 	Query      string
 	Category   string
 	StockLevel StockLevel
+	Archived   ArchivedFilter
 }
 
 type CreateItemInput struct {
@@ -126,15 +141,21 @@ type CreateItemInput struct {
 	MinQuantity      float64      `json:"minQuantity"`
 }
 
-type UpdateItemMetadataInput struct {
+type UpdateItemInput struct {
 	Name             *string   `json:"name"`
 	AlternativeNames *[]string `json:"alternativeNames"`
 	Categories       *[]string `json:"categories"`
+	Location         *string   `json:"location"`
+	Unit             *string   `json:"unit"`
+	MinQuantity      *float64  `json:"minQuantity"`
 }
+
+type UpdateItemMetadataInput = UpdateItemInput
 
 type ApplyEventInput struct {
 	Type         EventType  `json:"type"`
 	Quantity     float64    `json:"quantity"`
 	StockLevel   StockLevel `json:"stockLevel"`
 	LevelPercent *float64   `json:"levelPercent"`
+	Note         string     `json:"note"`
 }

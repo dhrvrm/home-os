@@ -6,8 +6,10 @@
   ],
   "scripts": {
     "build": "npm run build --workspace @home-os/web",
-    "dev": "npm run dev --workspace @home-os/web",
+    "dev": "node scripts/dev.mjs",
+    "dev:web": "npm run dev --workspace @home-os/web",
     "lint": "npm run lint --workspace @home-os/web",
+    "smoke": "node scripts/smoke.mjs",
     "test": "npm run test --workspace @home-os/web"
   },
   "engines": {

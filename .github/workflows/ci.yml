@@ -45,5 +45,8 @@ jobs:
       - name: Lint web
         run: npm run lint --workspace @home-os/web
 
+      - name: Smoke test real local stack
+        run: npm run smoke
+
       - name: Build applications
         run: make build

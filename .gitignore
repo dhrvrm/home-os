@@ -5,6 +5,7 @@ node_modules/
 .next/
 out/
 coverage/
+*.tsbuildinfo
 apps/web/public/vendor/wllama.wasm
 apps/web/public/vendor/wllama-compat.js
 apps/web/public/vendor/wllama-compat.wasm

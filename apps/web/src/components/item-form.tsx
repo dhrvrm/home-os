@@ -49,13 +49,15 @@ export function ItemForm({ pending, error, onClose, onSubmit }: ItemFormProps) {
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const data = new FormData(event.currentTarget);
+    const customCategories = String(data.get("customCategories") ?? "").split(",").map((value) => value.trim()).filter(Boolean);
+    const categories = Array.from(new Map([...data.getAll("categories").map(String), ...customCategories].map((value) => [value.toLocaleLowerCase(), value])).values());
     await onSubmit({
       name: String(data.get("name") ?? ""),
       alternativeNames: String(data.get("alternativeNames") ?? "")
         .split(",")
         .map((name) => name.trim())
         .filter(Boolean),
-      categories: data.getAll("categories").map(String),
+      categories,
       location: String(data.get("location") ?? "Unassigned"),
       unit: String(data.get("unit") ?? "item"),
       trackingMode: mode,
@@ -123,6 +125,11 @@ export function ItemForm({ pending, error, onClose, onSubmit }: ItemFormProps) {
               ))}
             </div>
           </fieldset>
+          <label className="field field--wide">
+            <span>Custom categories</span>
+            <input name="customCategories" placeholder="Staples, Festival supplies" />
+            <small className="field__help">Separate custom categories with commas.</small>
+          </label>
           <label className="field field--wide">
             <span>Location</span>
             <input name="location" defaultValue="Pantry" maxLength={80} />

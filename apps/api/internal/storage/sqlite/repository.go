@@ -94,6 +94,10 @@ func Open(path string) (*Repository, error) {
 		_ = db.Close()
 		return nil, err
 	}
+	if err := migrateLifecycle(db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	if err := migrateItemMetadata(db); err != nil {
 		_ = db.Close()
 		return nil, err
@@ -103,9 +107,27 @@ func Open(path string) (*Repository, error) {
 
 func (r *Repository) Close() error { return r.db.Close() }
 
+func (r *Repository) Ping(ctx context.Context) error {
+	var value int
+	if err := r.db.QueryRowContext(ctx, `SELECT 1`).Scan(&value); err != nil {
+		return fmt.Errorf("ping sqlite: %w", err)
+	}
+	return nil
+}
+
 func (r *Repository) ListItems(ctx context.Context, filter inventory.Filter) ([]inventory.Item, error) {
-	query := `SELECT id, name, category, location, unit, tracking_mode, quantity, stock_level, level_percent, min_quantity, created_at, updated_at FROM items WHERE 1 = 1`
+	if !filter.Archived.Valid() {
+		return nil, inventory.ValidationError{Field: "archived", Message: "must be only or include"}
+	}
+	query := `SELECT id, name, category, location, unit, tracking_mode, quantity, stock_level, level_percent, min_quantity, created_at, updated_at, archived_at FROM items WHERE 1 = 1`
 	args := make([]any, 0, 7)
+	switch filter.Archived {
+	case inventory.ArchivedOnly:
+		query += " AND archived_at IS NOT NULL"
+	case inventory.ArchivedInclude:
+	default:
+		query += " AND archived_at IS NULL"
+	}
 	if value := strings.TrimSpace(filter.Query); value != "" {
 		query += ` AND (
             homeos_contains_fold(name, ?) OR homeos_contains_fold(category, ?) OR homeos_contains_fold(location, ?) OR
@@ -152,7 +174,7 @@ func (r *Repository) ListItems(ctx context.Context, filter inventory.Filter) ([]
 }
 
 func (r *Repository) GetItem(ctx context.Context, id string) (inventory.Item, error) {
-	row := r.db.QueryRowContext(ctx, `SELECT id, name, category, location, unit, tracking_mode, quantity, stock_level, level_percent, min_quantity, created_at, updated_at FROM items WHERE id = ?`, id)
+	row := r.db.QueryRowContext(ctx, `SELECT id, name, category, location, unit, tracking_mode, quantity, stock_level, level_percent, min_quantity, created_at, updated_at, archived_at FROM items WHERE id = ?`, id)
 	item, err := scanItem(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return inventory.Item{}, inventory.ErrNotFound
@@ -182,8 +204,12 @@ func (r *Repository) CreateItem(ctx context.Context, item inventory.Item) (inven
 		return inventory.Item{}, fmt.Errorf("begin inventory item: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	_, err = tx.ExecContext(ctx, `INSERT INTO items (id, name, category, location, unit, tracking_mode, quantity, stock_level, level_percent, min_quantity, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		item.ID, item.Name, item.Category, item.Location, item.Unit, item.TrackingMode, item.Quantity, item.StockLevel, item.LevelPercent, item.MinQuantity, formatTime(item.CreatedAt), formatTime(item.UpdatedAt))
+	var archivedAt any
+	if item.ArchivedAt != nil {
+		archivedAt = formatTime(*item.ArchivedAt)
+	}
+	_, err = tx.ExecContext(ctx, `INSERT INTO items (id, name, category, location, unit, tracking_mode, quantity, stock_level, level_percent, min_quantity, created_at, updated_at, archived_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		item.ID, item.Name, item.Category, item.Location, item.Unit, item.TrackingMode, item.Quantity, item.StockLevel, item.LevelPercent, item.MinQuantity, formatTime(item.CreatedAt), formatTime(item.UpdatedAt), archivedAt)
 	if err != nil {
 		return inventory.Item{}, fmt.Errorf("create inventory item: %w", err)
 	}
@@ -196,15 +222,25 @@ func (r *Repository) CreateItem(ctx context.Context, item inventory.Item) (inven
 	return item, nil
 }
 
-func (r *Repository) UpdateItemMetadata(ctx context.Context, item inventory.Item) (inventory.Item, error) {
+func (r *Repository) UpdateItem(ctx context.Context, item inventory.Item) (inventory.Item, error) {
+	if len(item.Categories) == 0 {
+		item.Categories = []string{item.Category}
+	}
+	if strings.TrimSpace(item.Categories[0]) == "" {
+		item.Categories[0] = "Other"
+	}
+	item.Category = item.Categories[0]
+	if item.AlternativeNames == nil {
+		item.AlternativeNames = []string{}
+	}
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return inventory.Item{}, fmt.Errorf("begin item metadata update: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	result, err := tx.ExecContext(ctx, `UPDATE items SET name = ?, category = ?, updated_at = ? WHERE id = ?`,
-		item.Name, item.Category, formatTime(item.UpdatedAt), item.ID)
+	result, err := tx.ExecContext(ctx, `UPDATE items SET name = ?, category = ?, location = ?, unit = ?, min_quantity = ?, updated_at = ? WHERE id = ?`,
+		item.Name, item.Category, item.Location, item.Unit, item.MinQuantity, formatTime(item.UpdatedAt), item.ID)
 	if err != nil {
 		return inventory.Item{}, fmt.Errorf("update item metadata: %w", err)
 	}
@@ -230,6 +266,41 @@ func (r *Repository) UpdateItemMetadata(ctx context.Context, item inventory.Item
 	return item, nil
 }
 
+func (r *Repository) UpdateItemMetadata(ctx context.Context, item inventory.Item) (inventory.Item, error) {
+	return r.UpdateItem(ctx, item)
+}
+
+func (r *Repository) ArchiveItem(ctx context.Context, itemID string, archivedAt time.Time) (inventory.Item, error) {
+	return r.setArchived(ctx, itemID, archivedAt, true)
+}
+
+func (r *Repository) RestoreItem(ctx context.Context, itemID string, restoredAt time.Time) (inventory.Item, error) {
+	return r.setArchived(ctx, itemID, restoredAt, false)
+}
+
+func (r *Repository) setArchived(ctx context.Context, itemID string, changedAt time.Time, archived bool) (inventory.Item, error) {
+	var (
+		result sql.Result
+		err    error
+	)
+	if archived {
+		result, err = r.db.ExecContext(ctx, `UPDATE items SET archived_at = ?, updated_at = ? WHERE id = ?`, formatTime(changedAt), formatTime(changedAt), itemID)
+	} else {
+		result, err = r.db.ExecContext(ctx, `UPDATE items SET archived_at = NULL, updated_at = ? WHERE id = ?`, formatTime(changedAt), itemID)
+	}
+	if err != nil {
+		return inventory.Item{}, fmt.Errorf("update item archive state: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return inventory.Item{}, fmt.Errorf("check item archive update: %w", err)
+	}
+	if rows == 0 {
+		return inventory.Item{}, inventory.ErrNotFound
+	}
+	return r.GetItem(ctx, itemID)
+}
+
 func (r *Repository) ApplyEvent(ctx context.Context, event inventory.StockEvent, next inventory.Item) (inventory.Item, error) {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -237,8 +308,8 @@ func (r *Repository) ApplyEvent(ctx context.Context, event inventory.StockEvent,
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	result, err := tx.ExecContext(ctx, `UPDATE items SET name = ?, category = ?, location = ?, unit = ?, tracking_mode = ?, quantity = ?, stock_level = ?, level_percent = ?, min_quantity = ?, updated_at = ? WHERE id = ?`,
-		next.Name, next.Category, next.Location, next.Unit, next.TrackingMode, next.Quantity, next.StockLevel, next.LevelPercent, next.MinQuantity, formatTime(next.UpdatedAt), next.ID)
+	result, err := tx.ExecContext(ctx, `UPDATE items SET quantity = ?, stock_level = ?, level_percent = ?, updated_at = ? WHERE id = ?`,
+		next.Quantity, next.StockLevel, next.LevelPercent, formatTime(next.UpdatedAt), next.ID)
 	if err != nil {
 		return inventory.Item{}, fmt.Errorf("update inventory item: %w", err)
 	}
@@ -249,8 +320,8 @@ func (r *Repository) ApplyEvent(ctx context.Context, event inventory.StockEvent,
 	if rows == 0 {
 		return inventory.Item{}, inventory.ErrNotFound
 	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO stock_events (id, item_id, event_type, quantity, stock_level, level_percent, occurred_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		event.ID, event.ItemID, event.Type, event.Quantity, event.StockLevel, event.LevelPercent, formatTime(event.OccurredAt))
+	_, err = tx.ExecContext(ctx, `INSERT INTO stock_events (id, item_id, event_type, quantity, stock_level, level_percent, note, occurred_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		event.ID, event.ItemID, event.Type, event.Quantity, event.StockLevel, event.LevelPercent, event.Note, formatTime(event.OccurredAt))
 	if err != nil {
 		return inventory.Item{}, fmt.Errorf("record inventory event: %w", err)
 	}
@@ -261,7 +332,7 @@ func (r *Repository) ApplyEvent(ctx context.Context, event inventory.StockEvent,
 }
 
 func (r *Repository) ListEvents(ctx context.Context, itemID string, since time.Time) ([]inventory.StockEvent, error) {
-	query := `SELECT id, item_id, event_type, quantity, stock_level, level_percent, occurred_at FROM stock_events WHERE item_id = ?`
+	query := `SELECT id, item_id, event_type, quantity, stock_level, level_percent, note, occurred_at FROM stock_events WHERE item_id = ?`
 	args := []any{itemID}
 	if !since.IsZero() {
 		query += " AND occurred_at >= ?"
@@ -277,7 +348,7 @@ func (r *Repository) ListEvents(ctx context.Context, itemID string, since time.T
 	for rows.Next() {
 		var event inventory.StockEvent
 		var occurredAt string
-		if err := rows.Scan(&event.ID, &event.ItemID, &event.Type, &event.Quantity, &event.StockLevel, &event.LevelPercent, &occurredAt); err != nil {
+		if err := rows.Scan(&event.ID, &event.ItemID, &event.Type, &event.Quantity, &event.StockLevel, &event.LevelPercent, &event.Note, &occurredAt); err != nil {
 			return nil, fmt.Errorf("scan inventory event: %w", err)
 		}
 		parsed, err := parseTime(occurredAt)
@@ -300,7 +371,8 @@ type rowScanner interface {
 func scanItem(row rowScanner) (inventory.Item, error) {
 	var item inventory.Item
 	var createdAt, updatedAt string
-	if err := row.Scan(&item.ID, &item.Name, &item.Category, &item.Location, &item.Unit, &item.TrackingMode, &item.Quantity, &item.StockLevel, &item.LevelPercent, &item.MinQuantity, &createdAt, &updatedAt); err != nil {
+	var archivedAt sql.NullString
+	if err := row.Scan(&item.ID, &item.Name, &item.Category, &item.Location, &item.Unit, &item.TrackingMode, &item.Quantity, &item.StockLevel, &item.LevelPercent, &item.MinQuantity, &createdAt, &updatedAt, &archivedAt); err != nil {
 		return inventory.Item{}, err
 	}
 	created, err := parseTime(createdAt)
@@ -313,6 +385,13 @@ func scanItem(row rowScanner) (inventory.Item, error) {
 	}
 	item.CreatedAt = created
 	item.UpdatedAt = updated
+	if archivedAt.Valid {
+		archived, err := parseTime(archivedAt.String)
+		if err != nil {
+			return inventory.Item{}, err
+		}
+		item.ArchivedAt = &archived
+	}
 	return item, nil
 }
 
@@ -416,6 +495,25 @@ func migratePercentages(db *sql.DB) error {
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit percentage migration: %w", err)
+	}
+	return nil
+}
+
+func migrateLifecycle(db *sql.DB) error {
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin lifecycle migration: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if _, err := ensureColumn(tx, "items", "archived_at", `ALTER TABLE items ADD COLUMN archived_at TEXT`); err != nil {
+		return err
+	}
+	if _, err := ensureColumn(tx, "stock_events", "note", `ALTER TABLE stock_events ADD COLUMN note TEXT NOT NULL DEFAULT ''`); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit lifecycle migration: %w", err)
 	}
 	return nil
 }

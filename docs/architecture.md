@@ -16,7 +16,7 @@ Go HTTP API
 SQLite file
 ```
 
-The web application is a client-side Next.js export. It has no Next.js server dependency and can be served as ordinary static assets. Its service worker caches the application shell and same-origin static files; API calls remain network-first so stale inventory is never presented as current data.
+The web application is a client-side Next.js export. It has no Next.js server dependency and can be served as ordinary static assets. Its service worker caches the application shell and same-origin static files. API calls remain network-first; after a successful inventory load, a validated read-only copy is saved locally and shown with a clear offline banner if the API later becomes unavailable. Mutations stay disabled until connectivity returns.
 
 The Go application owns validation, stock transitions, and forecasting. HTTP handlers translate requests into domain operations. The SQLite package implements the domain repository interface, so persistence can be replaced without moving business rules into the transport layer.
 
@@ -36,9 +36,16 @@ An item has one primary `name`, zero or more language-agnostic `alternativeNames
 The current version is namespaced under `/api/v1`:
 
 - `GET /healthz`
-- `GET /api/v1/items?q=&category=&stockLevel=`
+- `GET /readyz`
+- `GET /api/v1/items?q=&category=&stockLevel=&archived=`
 - `POST /api/v1/items`
+- `GET /api/v1/items/{id}`
+- `PATCH /api/v1/items/{id}`
+- `DELETE /api/v1/items/{id}`
+- `POST /api/v1/items/{id}/restore`
+- `GET /api/v1/items/{id}/events`
 - `POST /api/v1/items/{id}/events`
+- `GET /api/v1/export`
 
 Responses use one envelope:
 
@@ -54,7 +61,7 @@ Item responses include both `categories` and the compatibility `category` projec
 
 SQLite is configured with foreign keys, WAL mode, a busy timeout, and one database connection. The Go service serializes stock mutations so concurrent roommate actions cannot overwrite one another between the domain read and database write. That is a good fit for a household-sized, single-process write workload and avoids pretending a single file is a distributed database. The database file must live on durable local or mounted storage.
 
-Opening an older database adds the percentage columns in place and maps existing simple states to percentages (`full=100`, `okay=50`, `low=25`, `out=0`). It also creates normalized child tables for alternative names and category memberships, then idempotently backfills each legacy singular category as the item's first category. Back up the database before deploying a new binary even though the migrations preserve existing item and event rows.
+Opening an older database adds the percentage and archive columns in place and maps existing simple states to percentages (`full=100`, `okay=50`, `low=25`, `out=0`). It also creates normalized child tables for alternative names and category memberships, adds optional event notes, then idempotently backfills each legacy singular category as the item's first category. Archive and restore are soft lifecycle operations and retain stock history. Back up the database before deploying a new binary even though the migrations preserve existing item and event rows.
 
 Cloudflare Workers do not provide a durable local filesystem. Workers Static Assets can host the PWA, but the Go API and SQLite file must run elsewhere. A future Cloudflare-native adapter would consist of a Worker API and D1 repository behind the same `/api/v1` contract. It should be added only when its operational benefit justifies maintaining a second runtime.
 

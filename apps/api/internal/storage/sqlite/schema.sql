@@ -10,7 +10,8 @@ CREATE TABLE IF NOT EXISTS items (
     level_percent REAL NOT NULL DEFAULT 0 CHECK (level_percent >= 0 AND level_percent <= 100),
     min_quantity REAL NOT NULL DEFAULT 0 CHECK (min_quantity >= 0),
     created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
+    updated_at TEXT NOT NULL,
+    archived_at TEXT
 );
 
 CREATE TABLE IF NOT EXISTS stock_events (
@@ -20,6 +21,7 @@ CREATE TABLE IF NOT EXISTS stock_events (
     quantity REAL NOT NULL DEFAULT 0,
     stock_level TEXT NOT NULL CHECK (stock_level IN ('full', 'okay', 'low', 'out')),
     level_percent REAL NOT NULL DEFAULT 0 CHECK (level_percent >= 0 AND level_percent <= 100),
+    note TEXT NOT NULL DEFAULT '',
     occurred_at TEXT NOT NULL
 );
 
