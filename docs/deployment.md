@@ -1,76 +1,107 @@
-# Deployment
+# Cloudflare deployment and operations
 
-This project intentionally separates the static PWA from the stateful Go API.
+Home OS deploys as one Cloudflare Worker. Workers Static Assets serves the exported Next.js PWA; Hono serves `/api/v1`, health checks, synchronization, and `/mcp`; D1 stores authoritative household state and audit history. There is no separately hosted backend or database process.
 
-## Local development
+## Services and free-tier shape
 
-Start the complete local stack:
+- **Workers Static Assets:** PWA shell and bundled Wllama runtimes.
+- **Worker:** API, sync, and stateless MCP protocol handling.
+- **D1:** inventory projections, immutable stock events, idempotency records, and audit events.
+- **Browser IndexedDB/Dexie:** local projections, recent activity, and queued writes. It is not a backup for D1.
+- **Browser origin-private storage:** optional 105 MB GGUF model, downloaded only after consent.
 
-```bash
-make dev
-```
+Workers and D1 have free plans with daily limits suitable for a small personal household. Confirm current limits before relying on them. Later document storage belongs in R2; notification delivery can add Cron Triggers and Queues only when that module ships.
 
-The defaults are `http://localhost:8080` for the API and `http://localhost:3100` for the web app. The local web server proxies `/api`, `/healthz`, and `/readyz` to the API. Copy `.env.example` values into your shell or local environment when changing addresses or allowed origins.
+## Credentials
 
-Before deploying, run the isolated real-stack check:
-
-```bash
-make smoke
-```
-
-## Free practical setup
-
-The lowest-cost deployment that preserves the requested Go and SQLite stack is:
-
-1. Publish `apps/web/out` with Cloudflare Workers Static Assets.
-2. Run the Go binary on an always-on laptop, mini PC, Raspberry Pi, NAS, or other home server.
-3. Keep the SQLite file on that machine's persistent disk.
-4. Protect the API with an authentication layer before exposing it beyond a trusted network.
-5. Expose only the protected API through Cloudflare Tunnel and set `NEXT_PUBLIC_API_URL` to that HTTPS hostname before building the PWA.
-
-Cloudflare Tunnel is available on all plans and creates an outbound connection, so the home network does not need an inbound port opened. A tunnel is transport, not application authentication; do not publish this MVP API directly to the Internet without an access policy or an API authentication feature. The home machine must remain online for inventory changes to work.
-
-Build and publish the PWA after authenticating Wrangler:
+The Cloudflare API token is stored in macOS Keychain under service `cloudflare-api-token` and account `dhrvrm-home-os`. Load it without printing it:
 
 ```bash
-NEXT_PUBLIC_API_URL=https://api.example.com npm run build --workspace @home-os/web
-npm run deploy --workspace @home-os/web
+source scripts/cloudflare-env.zsh
+npx wrangler whoami
 ```
 
-Cloudflare now recommends Workers for new projects. Static asset requests are free and unlimited; the Free plan currently allows 20,000 files per Worker version and a 25 MiB maximum per asset. These are current platform terms, not a permanent promise. See the official [Pages migration guidance](https://developers.cloudflare.com/pages/migrations/), [Static Assets documentation](https://developers.cloudflare.com/workers/static-assets/), and [Static Assets limits](https://developers.cloudflare.com/workers/static-assets/billing-and-limitations/).
+The script also exports the non-secret Cloudflare account ID. Never commit the token, `.dev.vars`, or a copied shell history containing it. Rotate the API token after the initial deployment because the original value was shared in chat.
 
-## Run the API on persistent storage
-
-Build the server:
+MCP uses a separate high-entropy credential. Store the production value only as a Worker secret:
 
 ```bash
-make build
+source scripts/cloudflare-env.zsh
+openssl rand -base64 36 | tr -d '\n' | npx wrangler secret put HOMEOS_MCP_TOKEN --config apps/worker/wrangler.jsonc
 ```
 
-Run it with explicit production settings:
+Save the generated MCP credential in a password manager before piping it if a client will need it later. For local development, copy `apps/worker/.dev.vars.example` to the ignored `apps/worker/.dev.vars` and replace its placeholder.
+
+## First deployment
+
+1. Install and verify everything:
+
+   ```bash
+   npm ci
+   npm test
+   npm run lint
+   npm run build
+   npm run smoke
+   ```
+
+2. Create D1 once and place its returned `database_id` in `apps/worker/wrangler.jsonc`:
+
+   ```bash
+   source scripts/cloudflare-env.zsh
+   npx wrangler d1 create home-os --config apps/worker/wrangler.jsonc
+   ```
+
+3. Apply all remote migrations:
+
+   ```bash
+   npx wrangler d1 migrations apply home-os --remote --config apps/worker/wrangler.jsonc
+   ```
+
+4. Set `HOMEOS_MCP_TOKEN`, then deploy the unified Worker:
+
+   ```bash
+   npm run build --workspace @home-os/web
+   npm run deploy --workspace @home-os/worker
+   ```
+
+5. Verify the deployed URL:
+
+   ```bash
+   curl -fsS https://home-os.<workers-subdomain>.workers.dev/healthz
+   curl -fsS https://home-os.<workers-subdomain>.workers.dev/readyz
+   curl -fsS https://home-os.<workers-subdomain>.workers.dev/api/v1/items
+   ```
+
+Use an MCP Inspector or client with `Authorization: Bearer <HOMEOS_MCP_TOKEN>` for `/mcp`. Opening `/mcp` in a browser is not a protocol test.
+
+## Local stack
 
 ```bash
-HOMEOS_ADDR=:8080 \
-HOMEOS_DB_PATH=/var/lib/home-os/home-os.db \
-HOMEOS_ALLOWED_ORIGINS=https://home.example.com \
-./bin/home-os-api
+cp apps/worker/.dev.vars.example apps/worker/.dev.vars
+npm run dev
 ```
 
-The process user must be able to create and update the database directory. If using a container, mount `/var/lib/home-os` from a persistent host volume. A small VPS is simpler than home hosting but generally is not permanently free.
-
-Back up a live database with SQLite's online backup command:
+The local URL is `http://localhost:8787`. Wrangler keeps local D1 state in its ignored `.wrangler` directory. Local migrations are explicit:
 
 ```bash
-mkdir -p backups
-sqlite3 /var/lib/home-os/home-os.db ".backup 'backups/home-os.db'"
+npm exec --workspace @home-os/worker -- wrangler d1 migrations apply home-os --local
 ```
 
-Copy the backup off the API host and test a restore periodically.
+## CI and release order
 
-## Fully Cloudflare-native alternative
+CI runs both test suites, TypeScript/ESLint checks, the isolated real-Worker smoke test, and both production builds. A release should deploy only after those gates pass. Apply D1 migrations before code that requires them; migrations are forward-only and receive a new numbered SQL file rather than editing an applied file.
 
-A future free-tier Cloudflare-only deployment would replace the Go executable and local SQLite adapter with a TypeScript Worker API plus D1. D1's Free plan currently includes daily read and write quotas, while Worker script requests have their own Free plan quota; confirm the current [Workers pricing](https://developers.cloudflare.com/workers/platform/pricing/) before relying on them.
+## Backup and recovery
 
-This is a different persistence adapter and runtime, not a way to upload a writable SQLite file to Workers. Cloudflare supports Go through WebAssembly rather than as a first-class Worker language, and a Go-on-Wasm D1 bridge would add operational complexity without helping the household use case. The official [Workers language guide](https://developers.cloudflare.com/workers/languages/) documents that boundary.
+Create periodic D1 exports and keep copies outside Cloudflare:
 
-Cloudflare Containers can run a Go server, but they currently require the Workers Paid plan. See the official [Containers documentation](https://developers.cloudflare.com/containers/) and [pricing](https://developers.cloudflare.com/containers/pricing/).
+```bash
+source scripts/cloudflare-env.zsh
+npx wrangler d1 export home-os --remote --output home-os-backup.sql --config apps/worker/wrangler.jsonc
+```
+
+The PWA JSON export is useful for household portability but is not a full audit/idempotency backup. Test restoration into a separate D1 database before depending on a backup procedure.
+
+## Security boundary
+
+The personal deployment uses one household and one MCP Bearer secret. This is adequate only for a controlled personal endpoint. Before roommate accounts or third-party clients are invited, add identity, household membership, role checks, OAuth 2.1 for MCP, scoped grants, token revocation, and an authorization audit. MCP remains read-only until write scopes, confirmations, idempotency, and actor attribution are implemented end to end.

@@ -22,7 +22,7 @@ Home OS was designed after reviewing mature open-source household and inventory 
 - Preserve archived items and their history rather than deleting household records.
 - Export a versioned JSON backup before attempting transactional import.
 - Keep inventory separate from contacts, expenses, chores, and household membership until those domains have their own tested boundaries.
-- Treat offline cached data as read-only until a conflict-safe synchronization protocol exists.
+- Apply supported commands to IndexedDB first, queue them transactionally, and reconcile with idempotent operation IDs plus optimistic versions so offline inventory remains writable.
 
 ## Source policy
 

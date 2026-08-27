@@ -13,13 +13,11 @@ apps/web/public/vendor/wllama-compat.wasm
 .wrangler/
 .wrangler-dry-run/
 
-# Go
-bin/
-*.test
-
 # Runtime data and local configuration
 .env
 .env.local
+*.dev.vars
+!.dev.vars.example
 !.env.example
 data/
 *.db

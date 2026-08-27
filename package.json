@@ -6,10 +6,10 @@
     "apps/worker"
   ],
   "scripts": {
-    "build": "npm run build --workspace @home-os/web",
+    "build": "npm run build --workspace @home-os/web && npm run build --workspace @home-os/worker",
     "dev": "node scripts/dev.mjs",
     "dev:web": "npm run dev --workspace @home-os/web",
-    "lint": "npm run lint --workspace @home-os/web",
+    "lint": "npm run lint --workspace @home-os/web && npm run lint --workspace @home-os/worker",
     "smoke": "node scripts/smoke.mjs",
     "test": "npm run test --workspace @home-os/web && npm run test --workspace @home-os/worker"
   },

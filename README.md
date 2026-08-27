@@ -1,84 +1,81 @@
 # Home OS
 
-Home OS is an offline-first shared operating system for roommates. Inventory is the first complete module: it tracks what is available, where it lives, how quickly it is consumed, and what needs to be bought next. The platform is designed to grow into shopping, notifications, household members and spaces, important contacts and documents, Splitwise-style expenses, chores, maintenance, and carefully authorized automations.
+Home OS is an offline-first shared operating system for roommates. Inventory is the first complete module; the same household, sync, audit, and MCP foundations are designed to grow into shopping and notifications, important contacts and documents, Splitwise-style expenses, chores, maintenance, and controlled automations.
 
-The first release includes:
+Inventory currently supports:
 
-- a simple 0-100 stock meter with `full`, `okay`, `low`, and `out` states
-- exact quantity tracking for items that need it
-- alternative names in any language, multiple categories, locations, search, and quick filters
-- purchase and consumption history
-- edit, archive, restore, and JSON backup workflows
-- a shopping view derived from low and out-of-stock items
-- learned consumption cadence and lightweight run-out forecasts
-- a private in-browser assistant for questions, renaming, alternative names, and categorization
-- an installable, offline-capable PWA
+- simple 0–100 stock levels and exact quantity tracking;
+- alternative names in any language and multiple categories;
+- locations, search, filters, shopping state, archive, restore, and JSON export;
+- immutable consumption history, cadence, and run-out forecasts;
+- local-first edits in Dexie with an idempotent outbox and conflict detection;
+- a private in-browser assistant with deterministic queries and an optional SmolLM2 135M model;
+- a secured, explicitly read-only MCP inventory and audit interface;
+- one installable PWA and API deployed as a Cloudflare Worker with D1.
 
-The Cloudflare platform migration is being delivered iteratively. Its stable foundation is a Next.js PWA with Dexie for local-first data, a Hono Worker API, D1 for shared state and audit history, and an authenticated MCP endpoint that exposes only deployed Home OS capabilities. The full information architecture and preserved feature roadmap are documented in [product architecture](docs/product-architecture.md).
+The full information architecture and preserved roadmap are in [docs/product-architecture.md](docs/product-architecture.md).
 
-Simple items start at the level you choose. Each **Use** action subtracts 25 points and **Restock** returns the item to 100. After two consumption events, Home OS begins showing the item's typical usage interval.
+## Architecture
 
-Each item has one primary display name and can also have alternative names, such as a Hindi household name or a common brand name. Search matches every name and every category. An item may belong to several categories, and appears under each matching category filter.
+```text
+Next.js static PWA
+  └─ Dexie projections + transactional outbox
+       └─ Hono Worker /api/v1 + /mcp
+            └─ D1 authoritative inventory + audit history
+```
 
-## Local inventory assistant
+The browser applies supported commands locally before the network is used. Startup, reconnect, and manual sync send queued operations to D1. Operation IDs make retries idempotent; entity versions turn concurrent roommate edits into visible conflicts instead of silent overwrites.
 
-**Ask Home** handles common inventory questions directly in the app, including counts, locations, and low/out-of-stock lists. These deterministic answers do not load an AI model.
+`/mcp` uses the current stateless MCP SDK v2 path and requires `HOMEOS_MCP_TOKEN`. Its tools can list/search inventory, fetch an item and its history, find low/out stock, and read the audit trail. No MCP write tools are exposed yet.
 
-Free-form requests can optionally use SmolLM2 135M Instruct through Wllama/llama.cpp. The first use asks for permission before downloading a 105 MB Q4 model from Hugging Face. The model is cached in the browser's origin-private storage and inference runs in Wllama's local worker using WebGPU when available or WebAssembly as a fallback. No hosted inference API receives the inventory.
+## Browser assistant
 
-Use a current Chromium, Firefox, or Safari release with WebAssembly SIMD. Home OS packages both Wllama's modern runtime and its pinned compatibility runtime, so older WebAssembly paths do not fetch executable code from a third-party CDN. Allow roughly 130 MB of free browser storage for the model and cache metadata; CPU-only generation is slower than WebGPU.
+**Ask Home** answers common counts, locations, and low-stock questions deterministically without a model. Free-form rename and categorization requests can optionally download SmolLM2 135M Instruct (about 105 MB) into origin-private browser storage. Wllama runs it locally with WebGPU or WebAssembly; inventory is not sent to a hosted inference API. Model output is allowlisted, displayed as a proposal, and requires confirmation.
 
-Generated output is treated as untrusted. It is parsed through an allowlist and can only propose a primary name, alternative names, or categories for an existing item. Home OS displays the exact proposal and requires confirmation before calling the metadata API. The model cannot directly mutate inventory.
+## Local development
 
-The small model is intentionally limited: it is best at short, explicit requests with an exact item name, and its generated Hindi is weaker than its English. Hindi and other scripts remain fully supported for saved alternative names and deterministic item matching.
-
-## Stack
-
-- Go API using the standard HTTP library
-- SQLite single-file persistence
-- Next.js static SPA with TypeScript
-- Wllama with a small GGUF model for browser-local inference
-- Cloudflare Workers Static Assets deployment for the PWA
-
-## Run locally
-
-Requirements: Go 1.24+, Node.js 22+, and npm 11+.
+Requirements: Node.js 22+ and npm 11+.
 
 ```bash
 npm install
-go work sync
-make dev
+cp apps/worker/.dev.vars.example apps/worker/.dev.vars
+npm run dev
 ```
 
-Open `http://localhost:3100`. The launcher starts both services, verifies their ports and readiness, and shuts both down together. The web app uses a same-origin development proxy, so it cannot silently drift to a different API port. Runtime data is stored in `apps/api/data/home-os.db` unless `HOMEOS_DB_PATH` is set.
+Open `http://localhost:8787`. The launcher builds the static PWA, then Wrangler serves the app, API, MCP endpoint, and local D1 from one origin. Apply local migrations after adding a migration:
 
-To run the services separately, use `make dev-api` and `make dev-web`. The defaults are API port `8080` and web port `3100`.
+```bash
+npm exec --workspace @home-os/worker -- wrangler d1 migrations apply home-os --local
+```
 
 ## Verify
 
 ```bash
-make test
-make lint
-make build
-make smoke
+npm test
+npm run lint
+npm run build
+npm run smoke
 ```
 
-`make smoke` starts an isolated real API, temporary SQLite database, and web proxy, then verifies create, edit, decimal consumption, history, archive, restore, and persistence.
+The smoke test creates isolated local D1 state, starts the real unified Worker, and exercises the inventory lifecycle through HTTP.
 
 ## Deploy
 
-`npm run deploy --workspace @home-os/web` publishes the static PWA to Cloudflare Workers Static Assets. The build copies the pinned 8.1 MB modern Wllama runtime and 15 MB compatibility runtime into the static export; the 105 MB model is not deployed to Cloudflare and is fetched only after consent. The Go API requires a host with a persistent volume; see [deployment guidance](docs/deployment.md) for the free and paid options.
+Cloudflare credentials are kept out of Git. On the configured Mac, the API token is read from Keychain:
+
+```bash
+source scripts/cloudflare-env.zsh
+npm run deploy --workspace @home-os/worker
+```
+
+See [docs/deployment.md](docs/deployment.md) for D1 migrations, Worker secrets, remote verification, cost boundaries, and recovery. The 105 MB browser model is fetched only after consent; it is not part of the Worker upload.
 
 ## Project structure
 
 ```text
-apps/api   Go domain, SQLite adapter, and HTTP transport
-apps/web   Next.js SPA, PWA shell, and Worker assets config
-docs       Architecture and deployment decisions
+apps/web       Next.js PWA, Dexie offline store, and browser assistant
+apps/worker    Hono API, D1 repositories/migrations, sync, audit, and MCP
+docs           Architecture, product roadmap, research, and operations
 ```
 
-The product and license research behind the inventory decisions is recorded in [docs/research.md](docs/research.md). Home OS uses those projects as behavioral references only; no third-party application source was copied into this MIT repository.
-
-## License
-
-MIT
+Home OS is MIT licensed. Reviewed open-source projects informed behavior only; no third-party application source was copied. See [docs/research.md](docs/research.md).

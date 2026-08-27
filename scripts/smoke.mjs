@@ -8,9 +8,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const apiPort = readPort("HOMEOS_SMOKE_API_PORT", 18_080);
 const webPort = readPort("HOMEOS_SMOKE_WEB_PORT", 13_100);
-const apiOrigin = `http://127.0.0.1:${apiPort}`;
 const webOrigin = `http://127.0.0.1:${webPort}`;
 const children = [];
 const runAbort = new AbortController();
@@ -78,6 +76,18 @@ function startChild(name, command, args, options) {
     }
   });
   return record;
+}
+
+async function runOnce(name, command, args, options) {
+  const child = spawn(command, args, { ...options, stdio: ["ignore", "pipe", "pipe"] });
+  let output = "";
+  child.stdout.on("data", (chunk) => { output += chunk.toString(); });
+  child.stderr.on("data", (chunk) => { output += chunk.toString(); });
+  const code = await new Promise((resolve, reject) => {
+    child.once("error", reject);
+    child.once("close", resolve);
+  });
+  if (code !== 0) throw new Error(`${name} failed with exit code ${code}:\n${output.slice(-12_000)}`);
 }
 
 function isRunning(record) {
@@ -177,7 +187,7 @@ function step(message) {
 }
 
 async function runJourney() {
-  step("1/9 empty inventory loads through the web proxy");
+  step("1/9 empty inventory loads through the unified Worker");
   const empty = await request("/api/v1/items");
   assert.deepEqual(empty.items, []);
 
@@ -216,6 +226,7 @@ async function runJourney() {
   step("4/9 exact consumption updates quantity");
   const consumed = await request(`/api/v1/items/${encodeURIComponent(item.id)}/events`, {
     method: "POST",
+    expectedStatus: 201,
     body: { type: "consume", quantity: 1.5, note: "Smoke test consumption" },
   });
   assert.equal(consumed.item.quantity, 3.5);
@@ -257,48 +268,29 @@ async function runJourney() {
 }
 
 async function main() {
-  if (apiPort === webPort) throw new Error("HOMEOS_SMOKE_API_PORT and HOMEOS_SMOKE_WEB_PORT must be different.");
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "home-os-smoke-"));
   try {
-    await Promise.all([
-      preflightPort("HOMEOS_SMOKE_API_PORT", apiPort),
-      preflightPort("HOMEOS_SMOKE_WEB_PORT", webPort),
-    ]);
-    const webOrigins = [`http://localhost:${webPort}`, webOrigin].join(",");
-    step(`starting isolated stack (database ${path.basename(tempDir)})`);
-    const api = startChild("API", "go", ["run", "./cmd/server"], {
-      cwd: path.join(rootDir, "apps", "api"),
-      env: {
-        ...process.env,
-        HOMEOS_ADDR: `127.0.0.1:${apiPort}`,
-        HOMEOS_ALLOWED_ORIGINS: webOrigins,
-        HOMEOS_DB_PATH: path.join(tempDir, "home-os.db"),
-      },
-    });
-    const web = startChild("web app", executable("npm"), [
-      "run",
-      "dev",
-      "--workspace",
-      "@home-os/web",
-      "--",
+    await preflightPort("HOMEOS_SMOKE_WEB_PORT", webPort);
+    step(`building and migrating isolated Worker state (${path.basename(tempDir)})`);
+    await runOnce("web build", executable("npm"), ["run", "build", "--workspace", "@home-os/web"], { cwd: rootDir });
+    await runOnce("D1 migrations", executable("npx"), [
+      "wrangler", "d1", "migrations", "apply", "home-os", "--local",
+      "--persist-to", tempDir, "--config", "apps/worker/wrangler.jsonc",
+    ], { cwd: rootDir });
+    const web = startChild("unified Worker", executable("npx"), [
+      "wrangler", "dev", "--local", "--config", "apps/worker/wrangler.jsonc",
       "--port",
       String(webPort),
+      "--persist-to",
+      tempDir,
     ], {
       cwd: rootDir,
-      env: {
-        ...process.env,
-        HOMEOS_API_PROXY: apiOrigin,
-        NEXT_PUBLIC_API_URL: "",
-        NEXT_TELEMETRY_DISABLED: "1",
-      },
+      env: { ...process.env, NEXT_TELEMETRY_DISABLED: "1" },
     });
-    await Promise.all([
-      waitFor("API", `${apiOrigin}/readyz`, api),
-      waitFor("web app", `${webOrigin}/`, web),
-    ]);
+    await waitFor("unified Worker", `${webOrigin}/readyz`, web);
     step("isolated stack is ready");
     await runJourney();
-    step("PASS: real API, SQLite persistence, and web proxy completed the inventory lifecycle");
+    step("PASS: Worker, D1, static PWA, and inventory lifecycle completed");
   } catch (error) {
     const diagnostics = childDiagnostics();
     throw new Error(`${error.message}${diagnostics}`);
