@@ -3,18 +3,17 @@ import type { HomeOSDatabase } from "./db";
 import type { OutboxOperation, OutboxOperationKind, StoredInventoryItem, StoredStockEvent } from "./schema";
 
 export interface LocalCommandOptions {
-  householdId?: string;
+  householdId: string;
+  actorId: string;
   deviceId?: string;
   now?: () => Date;
   newId?: () => string;
 }
 
-const DEFAULT_HOUSEHOLD_ID = "home";
-
 export async function createLocalItem(
   database: HomeOSDatabase,
   input: CreateItemInput,
-  options: LocalCommandOptions = {},
+  options: LocalCommandOptions,
 ): Promise<StoredInventoryItem> {
   const now = commandNow(options);
   const id = commandId(options);
@@ -25,7 +24,7 @@ export async function createLocalItem(
   const levelPercent = trackingMode === "simple" ? clamp(input.levelPercent ?? 50, 0, 100) : 0;
   const item: StoredInventoryItem = {
     id,
-    householdId: options.householdId ?? DEFAULT_HOUSEHOLD_ID,
+    householdId: options.householdId,
     name: input.name.trim(),
     alternativeNames: normalizeList(input.alternativeNames ?? [], input.name),
     category: categories[0] ?? "Other",
@@ -67,10 +66,10 @@ export async function updateLocalItem(
   database: HomeOSDatabase,
   itemId: string,
   input: UpdateItemInput,
-  options: LocalCommandOptions = {},
+  options: LocalCommandOptions,
 ): Promise<StoredInventoryItem> {
   return database.transaction("rw", [database.items, database.outbox], async () => {
-    const current = await requiredItem(database, itemId);
+    const current = await requiredItem(database, itemId, options.householdId);
     const next: StoredInventoryItem = {
       ...current,
       ...(input.name !== undefined ? { name: input.name.trim() } : {}),
@@ -102,10 +101,10 @@ export async function applyLocalStockEvent(
   database: HomeOSDatabase,
   itemId: string,
   input: ApplyEventInput,
-  options: LocalCommandOptions = {},
+  options: LocalCommandOptions,
 ): Promise<StoredInventoryItem> {
   return database.transaction("rw", [database.items, database.stockEvents, database.outbox], async () => {
-    const current = await requiredItem(database, itemId);
+    const current = await requiredItem(database, itemId, options.householdId);
     const next = { ...current, updatedAt: commandNow(options), version: current.version + 1, syncState: "pending" as const };
     let quantity = input.quantity ?? 0;
     if (input.type === "consume") {
@@ -145,7 +144,7 @@ export async function applyLocalStockEvent(
       stockLevel: next.stockLevel,
       levelPercent: next.levelPercent,
       note: input.note?.trim() || "",
-      actorId: "local-owner",
+      actorId: options.actorId,
       occurredAt,
       createdAt: occurredAt,
     };
@@ -165,7 +164,7 @@ export async function applyLocalStockEvent(
 export async function archiveLocalItem(
   database: HomeOSDatabase,
   itemId: string,
-  options: LocalCommandOptions = {},
+  options: LocalCommandOptions,
 ): Promise<StoredInventoryItem> {
   return setLocalArchive(database, itemId, true, options);
 }
@@ -173,13 +172,17 @@ export async function archiveLocalItem(
 export async function restoreLocalItem(
   database: HomeOSDatabase,
   itemId: string,
-  options: LocalCommandOptions = {},
+  options: LocalCommandOptions,
 ): Promise<StoredInventoryItem> {
   return setLocalArchive(database, itemId, false, options);
 }
 
-export async function listLocalItems(database: HomeOSDatabase, archived = false): Promise<StoredInventoryItem[]> {
-  const items = await database.items.toArray();
+export async function listLocalItems(
+  database: HomeOSDatabase,
+  householdId: string,
+  archived = false,
+): Promise<StoredInventoryItem[]> {
+  const items = await database.items.where("householdId").equals(householdId).toArray();
   return items
     .filter((item) => (archived ? item.archivedAt !== null : item.archivedAt === null))
     .sort((left, right) => left.name.localeCompare(right.name));
@@ -192,7 +195,7 @@ async function setLocalArchive(
   options: LocalCommandOptions,
 ): Promise<StoredInventoryItem> {
   return database.transaction("rw", [database.items, database.outbox], async () => {
-    const current = await requiredItem(database, itemId);
+    const current = await requiredItem(database, itemId, options.householdId);
     const next: StoredInventoryItem = {
       ...current,
       archivedAt: archived ? commandNow(options) : null,
@@ -215,9 +218,13 @@ async function setLocalArchive(
   });
 }
 
-async function requiredItem(database: HomeOSDatabase, itemId: string): Promise<StoredInventoryItem> {
+async function requiredItem(
+  database: HomeOSDatabase,
+  itemId: string,
+  householdId: string,
+): Promise<StoredInventoryItem> {
   const item = await database.items.get(itemId);
-  if (!item) throw new Error("Inventory item not found.");
+  if (!item || item.householdId !== householdId) throw new Error("Inventory item not found.");
   return item;
 }
 
@@ -229,10 +236,12 @@ async function outboxOperation(
   expectedVersion: number,
   payload: unknown,
 ): Promise<OutboxOperation> {
-  const previous = await database.outbox.orderBy("order").last();
+  const previous = (
+    await database.outbox.where("householdId").equals(options.householdId).sortBy("order")
+  ).at(-1);
   return {
     operationId: commandId(options),
-    householdId: options.householdId ?? DEFAULT_HOUSEHOLD_ID,
+    householdId: options.householdId,
     deviceId: options.deviceId ?? deviceId(),
     kind,
     entityId,

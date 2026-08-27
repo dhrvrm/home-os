@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
 import {
   APIError,
@@ -35,9 +35,9 @@ import {
 export type InventoryLoadState = "loading" | "ready" | "error";
 export type InventorySyncStatus = "starting" | "syncing" | "synced" | "offline" | "attention";
 
-export function useInventory() {
-  const activeItems = useLiveQuery(() => listLocalItems(homeOSDatabase), [], undefined);
-  const archivedItems = useLiveQuery(() => listLocalItems(homeOSDatabase, true), [], undefined);
+export function useInventory(householdId: string, actorId: string) {
+  const activeItems = useLiveQuery(() => listLocalItems(homeOSDatabase, householdId), [householdId], undefined);
+  const archivedItems = useLiveQuery(() => listLocalItems(homeOSDatabase, householdId, true), [householdId], undefined);
   const [loadState, setLoadState] = useState<InventoryLoadState>("loading");
   const [loadError, setLoadError] = useState<string | null>(null);
   const [syncStatus, setSyncStatus] = useState<InventorySyncStatus>("starting");
@@ -47,25 +47,28 @@ export function useInventory() {
     setLoadError(null);
     setSyncStatus("syncing");
     try {
-      const pending = await homeOSDatabase.outbox.where("state").equals("pending").count();
+      const householdOutbox = await homeOSDatabase.outbox.where("householdId").equals(householdId).toArray();
+      const pending = householdOutbox.filter((operation) => operation.state === "pending").length;
       if (pending > 0) {
-        const result = await syncInventory(homeOSDatabase);
-        const unresolved = await homeOSDatabase.outbox.where("state").equals("conflict").count();
+        const result = await syncInventory(homeOSDatabase, { householdId });
+        const unresolved = (await homeOSDatabase.outbox.where("householdId").equals(householdId).toArray())
+          .filter((operation) => operation.state === "conflict").length;
         setSyncStatus(result.conflicts > 0 || unresolved > 0 ? "attention" : "synced");
       } else {
         const active = await listItems();
-        await hydrateAuthoritativeItems(homeOSDatabase, active);
-        const unresolved = await homeOSDatabase.outbox.where("state").equals("conflict").count();
+        await hydrateAuthoritativeItems(homeOSDatabase, active, householdId);
+        const unresolved = (await homeOSDatabase.outbox.where("householdId").equals(householdId).toArray())
+          .filter((operation) => operation.state === "conflict").length;
         setSyncStatus(unresolved > 0 ? "attention" : "synced");
       }
       const now = new Date().toISOString();
       setLastSyncedAt(now);
-      const local = await listLocalItems(homeOSDatabase);
-      saveInventoryCache(local);
+      const local = await listLocalItems(homeOSDatabase, householdId);
+      if (householdId === "home") saveInventoryCache(local);
       setLoadState("ready");
     } catch (error) {
-      const count = await homeOSDatabase.items.count();
-      const initialized = await homeOSDatabase.syncState.get("home");
+      const count = await homeOSDatabase.items.where("householdId").equals(householdId).count();
+      const initialized = await homeOSDatabase.syncState.get(householdId);
       setSyncStatus("offline");
       if (count > 0 || initialized) {
         setLoadState("ready");
@@ -74,17 +77,18 @@ export function useInventory() {
         setLoadState("error");
       }
     }
-  }, []);
+  }, [householdId]);
 
   useEffect(() => {
     let active = true;
     void (async () => {
-      if (await homeOSDatabase.items.count() === 0) {
+      setLoadState("loading");
+      if (householdId === "home" && await homeOSDatabase.items.where("householdId").equals(householdId).count() === 0) {
         const legacy = loadInventoryCache();
         if (legacy) {
-          await hydrateAuthoritativeItems(homeOSDatabase, legacy.items);
+          await hydrateAuthoritativeItems(homeOSDatabase, legacy.items, householdId);
           await homeOSDatabase.syncState.put({
-            householdId: "home",
+            householdId,
             cursor: 0,
             lastSyncedAt: null,
             lastError: null,
@@ -92,7 +96,7 @@ export function useInventory() {
         }
       }
       if (!active) return;
-      if (await homeOSDatabase.items.count() > 0) setLoadState("ready");
+      if (await homeOSDatabase.items.where("householdId").equals(householdId).count() > 0) setLoadState("ready");
       await refresh();
     })();
     const reconnect = () => { void refresh(); };
@@ -104,14 +108,14 @@ export function useInventory() {
       window.removeEventListener("online", reconnect);
       window.removeEventListener("offline", disconnect);
     };
-  }, [refresh]);
+  }, [householdId, refresh]);
 
   const commit = useCallback(async <T extends StoredInventoryItem>(
     localMutation: () => Promise<T>,
     remoteMutation: (local: T, operation: OutboxOperation, options: MutationRequestOptions) => Promise<InventoryItem>,
   ): Promise<InventoryItem> => {
     const local = await localMutation();
-    const operation = await pendingOperationForItem(homeOSDatabase, local.id);
+    const operation = await pendingOperationForItem(homeOSDatabase, local.id, householdId);
     if (!operation) throw new Error("The local change could not be queued.");
     setSyncStatus("syncing");
     try {
@@ -122,7 +126,7 @@ export function useInventory() {
         clientTime: operation.clientTime,
       };
       const authoritative = await remoteMutation(local, operation, options);
-      const reconciled = await reconcileDirectMutation(homeOSDatabase, operation.operationId, authoritative);
+      const reconciled = await reconcileDirectMutation(homeOSDatabase, operation.operationId, authoritative, householdId);
       setSyncStatus("synced");
       setLastSyncedAt(new Date().toISOString());
       return reconciled;
@@ -138,35 +142,37 @@ export function useInventory() {
       setSyncStatus("attention");
       throw error;
     }
-  }, []);
+  }, [householdId]);
+
+  const commandOptions = useMemo(() => ({ householdId, actorId }), [householdId, actorId]);
 
   const add = useCallback((input: CreateItemInput) => commit(
-    () => createLocalItem(homeOSDatabase, input),
+    () => createLocalItem(homeOSDatabase, input, commandOptions),
     (local, _operation, options) => createItem({ ...input, id: local.id }, options),
-  ), [commit]);
+  ), [commit, commandOptions]);
 
   const update = useCallback((itemId: string, input: UpdateItemInput) => commit(
-    () => updateLocalItem(homeOSDatabase, itemId, input),
+    () => updateLocalItem(homeOSDatabase, itemId, input, commandOptions),
     (_local, _operation, options) => updateItem(itemId, input, options),
-  ), [commit]);
+  ), [commit, commandOptions]);
 
   const applyStock = useCallback((itemId: string, input: ApplyEventInput) => commit(
-    () => applyLocalStockEvent(homeOSDatabase, itemId, input),
+    () => applyLocalStockEvent(homeOSDatabase, itemId, input, commandOptions),
     async (_local, operation, options) => {
       const payload = operation.payload as ApplyEventInput;
       return applyEvent(itemId, payload, options);
     },
-  ), [commit]);
+  ), [commit, commandOptions]);
 
   const archive = useCallback((itemId: string) => commit(
-    () => archiveLocalItem(homeOSDatabase, itemId),
+    () => archiveLocalItem(homeOSDatabase, itemId, commandOptions),
     (_local, _operation, options) => archiveItem(itemId, options),
-  ), [commit]);
+  ), [commit, commandOptions]);
 
   const restore = useCallback((itemId: string) => commit(
-    () => restoreLocalItem(homeOSDatabase, itemId),
+    () => restoreLocalItem(homeOSDatabase, itemId, commandOptions),
     (_local, _operation, options) => restoreItem(itemId, options),
-  ), [commit]);
+  ), [commit, commandOptions]);
 
   return {
     items: activeItems ?? [],

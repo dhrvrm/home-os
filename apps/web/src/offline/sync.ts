@@ -29,35 +29,41 @@ interface SyncEnvelope {
 }
 
 export interface SyncOptions {
-  householdId?: string;
+  householdId: string;
   fetcher?: typeof fetch;
 }
 
-const activeSyncs = new WeakMap<HomeOSDatabase, Promise<{ accepted: number; conflicts: number; cursor: number }>>();
+const activeSyncs = new WeakMap<HomeOSDatabase, Map<string, Promise<{ accepted: number; conflicts: number; cursor: number }>>>();
 
 export function syncInventory(
   database: HomeOSDatabase,
-  options: SyncOptions = {},
+  options: SyncOptions,
 ): Promise<{ accepted: number; conflicts: number; cursor: number }> {
-  const active = activeSyncs.get(database);
+  const databaseSyncs = activeSyncs.get(database) ?? new Map();
+  activeSyncs.set(database, databaseSyncs);
+  const active = databaseSyncs.get(options.householdId);
   if (active) return active;
-  const operation = performSync(database, options).finally(() => activeSyncs.delete(database));
-  activeSyncs.set(database, operation);
+  const operation = performSync(database, options).finally(() => {
+    databaseSyncs.delete(options.householdId);
+    if (databaseSyncs.size === 0) activeSyncs.delete(database);
+  });
+  databaseSyncs.set(options.householdId, operation);
   return operation;
 }
 
 export async function hydrateAuthoritativeItems(
   database: HomeOSDatabase,
   items: InventoryItem[],
-  householdId = "home",
+  householdId: string,
 ): Promise<void> {
   await database.transaction("rw", database.items, async () => {
     for (const item of items) {
       const local = await database.items.get(item.id);
+      if (local && local.householdId !== householdId) continue;
       if (local && local.syncState !== "synced") continue;
       await database.items.put({
         ...item,
-        householdId: item.householdId ?? householdId,
+        householdId,
         version: item.version ?? 1,
         archivedAt: item.archivedAt ?? null,
         syncState: "synced",
@@ -70,16 +76,20 @@ export async function reconcileDirectMutation(
   database: HomeOSDatabase,
   operationId: string,
   item: InventoryItem,
-  householdId = "home",
+  householdId: string,
 ): Promise<StoredInventoryItem> {
   const stored: StoredInventoryItem = {
     ...item,
-    householdId: item.householdId ?? householdId,
+    householdId,
     version: item.version ?? 1,
     archivedAt: item.archivedAt ?? null,
     syncState: "synced",
   };
   await database.transaction("rw", [database.items, database.outbox], async () => {
+    const operation = await database.outbox.get(operationId);
+    if (!operation || operation.householdId !== householdId) {
+      throw new Error("The local operation belongs to another household.");
+    }
     await database.items.put(stored);
     await database.outbox.delete(operationId);
   });
@@ -89,9 +99,10 @@ export async function reconcileDirectMutation(
 export async function pendingOperationForItem(
   database: HomeOSDatabase,
   itemId: string,
+  householdId: string,
 ): Promise<OutboxOperation | undefined> {
   const operations = await database.outbox.where("entityId").equals(itemId).sortBy("order");
-  return operations.at(-1);
+  return operations.filter((operation) => operation.householdId === householdId).at(-1);
 }
 
 export async function markDirectConflict(
@@ -109,10 +120,12 @@ async function performSync(
   database: HomeOSDatabase,
   options: SyncOptions,
 ): Promise<{ accepted: number; conflicts: number; cursor: number }> {
-  const householdId = options.householdId ?? "home";
+  const householdId = options.householdId;
   const fetcher = options.fetcher ?? fetch;
   const syncState = (await database.syncState.get(householdId)) ?? emptySyncState(householdId);
-  const operations = await database.outbox.where("state").equals("pending").sortBy("order");
+  const operations = (
+    await database.outbox.where("householdId").equals(householdId).sortBy("order")
+  ).filter((operation) => operation.state === "pending");
   const operationIds = operations.map((operation) => operation.operationId);
   await markOutbox(database, operationIds, "sending");
 
@@ -148,7 +161,7 @@ async function performSync(
         )?.entityId === item.id);
         await database.items.put({
           ...item,
-          householdId: item.householdId ?? householdId,
+          householdId,
           version: item.version ?? 1,
           archivedAt: item.archivedAt ?? null,
           syncState: conflict ? "conflict" : "synced",
@@ -158,8 +171,8 @@ async function performSync(
         await database.stockEvents.bulkPut(
           data.events.map((event) => ({
             ...event,
-            householdId: event.householdId ?? householdId,
-            actorId: event.actorId ?? "local-owner",
+            householdId,
+            actorId: event.actorId ?? "unknown-member",
             createdAt: event.createdAt ?? event.occurredAt,
           })),
         );
@@ -171,8 +184,10 @@ async function performSync(
           error: result.error ?? { code: "conflict", message: "Review this change before retrying." },
         });
       }
-      if (data.activity.length) await database.activity.bulkPut(data.activity);
-      await pruneActivity(database, now);
+      if (data.activity.length) {
+        await database.activity.bulkPut(data.activity.map((event) => ({ ...event, householdId })));
+      }
+      await pruneActivity(database, householdId, now);
       await database.syncState.put({
         householdId,
         cursor: data.cursor,
@@ -208,13 +223,17 @@ async function markOutbox(
   });
 }
 
-async function pruneActivity(database: HomeOSDatabase, now: string): Promise<void> {
+async function pruneActivity(database: HomeOSDatabase, householdId: string, now: string): Promise<void> {
   const cutoff = new Date(new Date(now).getTime() - 30 * 24 * 60 * 60 * 1000).toISOString();
-  await database.activity.where("serverTime").below(cutoff).delete();
-  const count = await database.activity.count();
-  if (count <= 2_000) return;
-  const expired = await database.activity.orderBy("sequence").limit(count - 2_000).primaryKeys();
-  await database.activity.bulkDelete(expired);
+  const householdEvents = await database.activity.where("householdId").equals(householdId).toArray();
+  const expiredByAge = householdEvents.filter((event) => event.serverTime < cutoff).map((event) => event.id);
+  if (expiredByAge.length) await database.activity.bulkDelete(expiredByAge);
+  const retained = householdEvents
+    .filter((event) => !expiredByAge.includes(event.id))
+    .sort((left, right) => left.sequence - right.sequence);
+  if (retained.length > 2_000) {
+    await database.activity.bulkDelete(retained.slice(0, retained.length - 2_000).map((event) => event.id));
+  }
 }
 
 function emptySyncState(householdId: string): HouseholdSyncState {

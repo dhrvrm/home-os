@@ -36,8 +36,11 @@ import { StockDialog } from "./stock-dialog";
 type PrimaryView = "inventory" | "shopping";
 type StockDialogState = { item: InventoryItem; action: "consume" | "restock" | "mark_level" };
 
-export function InventoryApp() {
-  const inventory = useInventory();
+export function InventoryApp({ householdId = "home", actorId = "local-owner" }: {
+  householdId?: string;
+  actorId?: string;
+}) {
+  const inventory = useInventory(householdId, actorId);
   const items = useMemo(() => sortItems(inventory.items), [inventory.items]);
   const archivedItems = useMemo(() => sortItems(inventory.archivedItems), [inventory.archivedItems]);
   const [mutationError, setMutationError] = useState<string | null>(null);
@@ -95,7 +98,7 @@ export function InventoryApp() {
       setSelectedItem((current) => current?.id === updated.id ? updated : current);
       if (selectedItem?.id === updated.id) {
         try {
-          setEvents(await localEvents(updated.id));
+          setEvents(await localEvents(updated.id, householdId));
         } catch (historyError) {
           setEventsError(historyError instanceof Error ? historyError.message : "History could not be refreshed.");
         }
@@ -137,7 +140,7 @@ export function InventoryApp() {
     setEventsError(null);
     setEventsLoading(true);
     try {
-      const local = await localEvents(item.id);
+      const local = await localEvents(item.id, householdId);
       setEvents(local);
       if (inventory.syncStatus !== "offline") {
         try {
@@ -195,7 +198,7 @@ export function InventoryApp() {
         backup = {
           version: 1 as const,
           exportedAt: new Date().toISOString(),
-          items: await Promise.all(allItems.map(async (item) => ({ item, events: await localEvents(item.id) }))),
+          items: await Promise.all(allItems.map(async (item) => ({ item, events: await localEvents(item.id, householdId) }))),
         };
       }
       const url = URL.createObjectURL(new Blob([JSON.stringify(backup, null, 2)], { type: "application/json" }));
@@ -330,8 +333,9 @@ function formatSavedAt(value: string): string {
   return new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(value));
 }
 
-async function localEvents(itemId: string): Promise<StockEvent[]> {
-  return homeOSDatabase.stockEvents.where("itemId").equals(itemId).reverse().sortBy("occurredAt");
+async function localEvents(itemId: string, householdId: string): Promise<StockEvent[]> {
+  const events = await homeOSDatabase.stockEvents.where("itemId").equals(itemId).reverse().sortBy("occurredAt");
+  return events.filter((event) => event.householdId === householdId);
 }
 
 function syncMessage(status: ReturnType<typeof useInventory>["syncStatus"]): ReactNode {

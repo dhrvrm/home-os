@@ -4,6 +4,7 @@ import {
   applyLocalStockEvent,
   archiveLocalItem,
   createLocalItem,
+  listLocalItems,
   restoreLocalItem,
   updateLocalItem,
 } from "./commands";
@@ -13,6 +14,7 @@ describe("offline inventory commands", () => {
   let nextId: number;
   const options = {
     householdId: "home",
+    actorId: "member-1",
     deviceId: "test-device",
     now: () => new Date("2026-08-27T12:00:00.000Z"),
     newId: () => `local-${++nextId}`,
@@ -95,5 +97,32 @@ describe("offline inventory commands", () => {
     expect(archived).toMatchObject({ archivedAt: "2026-08-27T12:00:00.000Z", version: 3 });
     expect(restored).toMatchObject({ archivedAt: null, version: 4 });
     await expect(database.stockEvents.where("itemId").equals(created.id).count()).resolves.toBe(1);
+  });
+
+  it("scopes cached projections and mutations to one household", async () => {
+    const first = await createLocalItem(database, { name: "First home rice" }, options);
+    await createLocalItem(database, { name: "Second home rice" }, {
+      ...options,
+      householdId: "second-home",
+      actorId: "member-2",
+      newId: (() => {
+        let value = 0;
+        return () => `second-${++value}`;
+      })(),
+    });
+
+    await expect(listLocalItems(database, "home")).resolves.toEqual([
+      expect.objectContaining({ id: first.id, name: "First home rice" }),
+    ]);
+    await expect(listLocalItems(database, "second-home")).resolves.toEqual([
+      expect.objectContaining({ name: "Second home rice" }),
+    ]);
+    await expect(
+      updateLocalItem(database, first.id, { name: "Cross-home edit" }, {
+        ...options,
+        householdId: "second-home",
+        actorId: "member-2",
+      }),
+    ).rejects.toThrow("Inventory item not found");
   });
 });

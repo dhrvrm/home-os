@@ -19,6 +19,7 @@ describe("inventory sync client", () => {
   it("sends pending operations and reconciles authoritative projections", async () => {
     const item = await createLocalItem(database, { name: "Soap", levelPercent: 50 }, {
       householdId: "home",
+      actorId: "member-1",
       deviceId: "test-device",
       now: () => new Date("2026-08-27T12:00:00.000Z"),
       newId: (() => {
@@ -59,7 +60,7 @@ describe("inventory sync client", () => {
       ),
     );
 
-    const result = await syncInventory(database, { fetcher });
+    const result = await syncInventory(database, { householdId: "home", fetcher });
 
     expect(result).toEqual({ accepted: 1, conflicts: 0, cursor: 1 });
     expect(fetcher).toHaveBeenCalledOnce();
@@ -77,6 +78,7 @@ describe("inventory sync client", () => {
   it("returns sending operations to pending after a network failure", async () => {
     await createLocalItem(database, { name: "Soap" }, {
       householdId: "home",
+      actorId: "member-1",
       deviceId: "test-device",
       newId: (() => {
         let value = 0;
@@ -85,9 +87,48 @@ describe("inventory sync client", () => {
     });
     const fetcher = vi.fn().mockRejectedValue(new TypeError("offline"));
 
-    await expect(syncInventory(database, { fetcher })).rejects.toThrow("offline");
+    await expect(syncInventory(database, { householdId: "home", fetcher })).rejects.toThrow("offline");
     await expect(database.outbox.toArray()).resolves.toEqual([
       expect.objectContaining({ state: "pending" }),
+    ]);
+  });
+
+  it("sends and reconciles only the selected household outbox", async () => {
+    const makeIds = (prefix: string) => {
+      let value = 0;
+      return () => `${prefix}-${++value}`;
+    };
+    const first = await createLocalItem(database, { name: "First home item" }, {
+      householdId: "first-home",
+      actorId: "first-member",
+      deviceId: "test-device",
+      newId: makeIds("first"),
+    });
+    await createLocalItem(database, { name: "Second home item" }, {
+      householdId: "second-home",
+      actorId: "second-member",
+      deviceId: "test-device",
+      newId: makeIds("second"),
+    });
+    const fetcher = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      data: {
+        results: [{ operationId: "first-2", status: "accepted" }],
+        items: [{ ...first, householdId: "first-home", syncState: undefined }],
+        events: [],
+        activity: [],
+        cursor: 4,
+      },
+      error: null,
+    }), { status: 200, headers: { "Content-Type": "application/json" } }));
+
+    await syncInventory(database, { householdId: "first-home", fetcher });
+
+    const request = fetcher.mock.calls[0]?.[1] as RequestInit;
+    expect(JSON.parse(String(request.body)).operations).toEqual([
+      expect.objectContaining({ operationId: "first-2", householdId: "first-home" }),
+    ]);
+    await expect(database.outbox.where("householdId").equals("second-home").toArray()).resolves.toEqual([
+      expect.objectContaining({ operationId: "second-2", state: "pending" }),
     ]);
   });
 });
