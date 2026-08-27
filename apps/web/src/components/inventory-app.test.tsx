@@ -114,6 +114,20 @@ describe("InventoryApp", () => {
     expect(screen.getByRole("button", { name: "Restock Dish soap" })).toBeDisabled();
   });
 
+  it("closes an open write dialog when connectivity is lost", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ data: { items: [] }, error: null }), { status: 200 })));
+    const user = userEvent.setup();
+    render(<InventoryApp />);
+    await user.click(await screen.findByRole("button", { name: "Add first item" }));
+    expect(screen.getByRole("dialog", { name: "Add an item" })).toBeInTheDocument();
+
+    window.dispatchEvent(new Event("offline"));
+
+    expect(await screen.findByText("Showing a saved copy")).toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "Add an item" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Add first item" })).toBeDisabled();
+  });
+
   it("falls back to the saved copy if the API disappears after startup", async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(new Response(JSON.stringify({ data: { items: [soap] }, error: null }), { status: 200 }))
@@ -237,7 +251,10 @@ describe("InventoryApp", () => {
 
     await screen.findByText("Rice");
     await user.click(screen.getByRole("button", { name: "View details for Rice" }));
-    expect(screen.getByRole("dialog", { name: "Rice" })).toHaveFocus();
+    const details = screen.getByRole("dialog", { name: "Rice" });
+    expect(details).toHaveFocus();
+    expect(fireEvent.keyDown(details, { key: "Tab", shiftKey: true })).toBe(false);
+    expect(within(details).getByRole("button", { name: "Archive item" })).toHaveFocus();
     expect(await screen.findByText("Made dinner")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Edit item" }));
     const dialog = screen.getByRole("dialog", { name: "Edit Rice" });

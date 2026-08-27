@@ -67,6 +67,13 @@ export function InventoryApp() {
   const [pendingItem, setPendingItem] = useState<string | null>(null);
   const [assistant] = useState(() => new BrowserAssistant());
 
+  const closeWriteDialogs = useCallback(() => {
+    setShowForm(false);
+    setShowAssistant(false);
+    setEditingItem(null);
+    setStockDialog(null);
+  }, []);
+
   const load = useCallback(async () => {
     setLoadState("loading");
     setLoadError(null);
@@ -121,7 +128,10 @@ export function InventoryApp() {
     const refresh = () => { if (savedCopyAt) void load(); };
     const markOffline = () => {
       const cached = loadInventoryCache();
-      if (cached) setSavedCopyAt(cached.savedAt);
+      if (cached) {
+        setSavedCopyAt(cached.savedAt);
+        closeWriteDialogs();
+      }
     };
     window.addEventListener("online", refresh);
     window.addEventListener("offline", markOffline);
@@ -129,7 +139,7 @@ export function InventoryApp() {
       window.removeEventListener("online", refresh);
       window.removeEventListener("offline", markOffline);
     };
-  }, [load, savedCopyAt]);
+  }, [closeWriteDialogs, load, savedCopyAt]);
 
   const categories = useMemo(() => ["All", ...Array.from(new Set(items.flatMap(itemCategories))).sort()], [items]);
   const visibleItems = useMemo(() => {
@@ -145,11 +155,12 @@ export function InventoryApp() {
   const locations = new Set(items.map((item) => item.location)).size;
 
   function enterSavedCopyIfUnavailable(error: unknown) {
-    if (!(error instanceof APIError) || (error.code !== "network_error" && error.code !== "offline")) return;
+    if (!(error instanceof APIError) || !["network_error", "offline", "timeout"].includes(error.code)) return;
     const cached = loadInventoryCache();
     if (!cached) return;
     setItems(sortItems(cached.items));
     setSavedCopyAt(cached.savedAt);
+    closeWriteDialogs();
   }
 
   async function addItem(input: CreateItemInput) {
