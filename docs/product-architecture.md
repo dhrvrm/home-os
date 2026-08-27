@@ -83,7 +83,7 @@ The initial personal deployment uses a dedicated high-entropy bearer credential 
 
 ### 1. Platform and complete inventory
 
-Cloudflare Worker, Hono, D1, Dexie, offline writes, synchronization, conflicts, audit history, deployment, and read-only MCP inventory access. Inventory retains simple and exact tracking, alternative names in any language, multiple categories, locations, shopping state, consumption history, cadence, forecasting, archive, restore, and export.
+Cloudflare Worker, Hono, D1, Dexie, offline writes, synchronization, conflicts, audit history, deployment, and read-only MCP inventory access. Inventory retains simple and exact tracking, alternative names in any language, multiple categories, locations, shopping state, consumption history, cadence, forecasting, archive, restore, export, and a private retrieval-grounded browser assistant.
 
 ### 2. Shopping and notifications
 

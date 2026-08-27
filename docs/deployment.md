@@ -8,9 +8,11 @@ Home OS deploys as one Cloudflare Worker. Workers Static Assets serves the expor
 - **Worker:** API, sync, and stateless MCP protocol handling.
 - **D1:** inventory projections, immutable stock events, idempotency records, and audit events.
 - **Browser IndexedDB/Dexie:** local projections, recent activity, and queued writes. It is not a backup for D1.
-- **Browser origin-private storage:** optional 105 MB GGUF model, downloaded only after consent.
+- **Browser origin-private storage:** optional 105 MB GGUF model, downloaded only after consent and reused offline. The client checks quota with at least 32 MiB or 25% headroom and requests persistent storage when the browser supports it.
 
 Workers and D1 have free plans with daily limits suitable for a small personal household. Confirm current limits before relying on them. Later document storage belongs in R2; notification delivery can add Cron Triggers and Queues only when that module ships.
+
+The model file is fetched from its revision-pinned Hugging Face URL by the consenting browser. It is not uploaded with Worker Static Assets or precached by the service worker. Browser storage can still be cleared by the member or, when persistence is not granted, evicted under device pressure; deterministic assistant queries remain available without it.
 
 ## Credentials
 

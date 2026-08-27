@@ -32,7 +32,9 @@ The browser applies supported commands locally before the network is used. Start
 
 ## Browser assistant
 
-**Ask Home** answers common counts, locations, and low-stock questions deterministically without a model. Free-form rename and categorization requests can optionally download SmolLM2 135M Instruct (about 105 MB) into origin-private browser storage. Wllama runs it locally with WebGPU or WebAssembly; inventory is not sent to a hosted inference API. Model output is allowlisted, displayed as a proposal, and requires confirmation.
+**Ask Home** answers counts, quantities, status, locations, categories, low/out stock, forecasts, and cadence directly from local inventory without a model. For ambiguous language and rename/alias/category requests, local Unicode-aware retrieval selects at most 12 relevant records and the optional SmolLM2 135M model emits only an allowlisted query/action plan. Application code verifies that plan against current inventory; the model never authors facts or writes directly.
+
+The model is an explicit, optional download of about 105 MB into origin-private browser storage. Before downloading, Home OS estimates quota, keeps safety headroom, and requests persistent storage when supported. Wllama runs in a worker with WebGPU or WebAssembly and reuses the cached model offline. Prompts, retrieved context, and outputs are ephemeral, and every proposed mutation still requires confirmation.
 
 ## Local development
 

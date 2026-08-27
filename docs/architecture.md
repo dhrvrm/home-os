@@ -21,6 +21,14 @@ Dexie stores browser-local projections, stock events, recent activity, sync stat
 
 The Worker owns validation, stock transitions, forecasting, authorization, conflict resolution, and accepted audit history. Hono HTTP routes, the sync endpoint, and MCP tools translate external requests into the same application queries and commands. D1 is the canonical shared household state.
 
+## Local assistant retrieval
+
+The assistant is a hybrid deterministic/model pipeline. A pure local retrieval module ranks current inventory using Unicode-normalized primary names, alternative names, categories, locations, units, stock facets, and token overlap. It requires no vector database, embedding download, or network call and bounds model evidence to 12 records and 3,800 UTF-8 prompt bytes.
+
+Known questions are answered directly from inventory. For ambiguous language, SmolLM2 emits only an allowlisted `find`, `inspect`, rename, alias, or category plan. The parser rejects extra fields and invented references, then application code executes reads against the complete current projection. The model cannot author displayed household facts or mutate state; writes remain visible proposals requiring confirmation.
+
+Wllama runs inference in a worker and uses WebGPU when available with a WebAssembly fallback. The revision-pinned 105 MB model is downloaded only after consent, stored in origin-private storage, and reused offline. The client estimates available quota, reserves at least 32 MiB or 25% headroom, requests persistence where supported, and degrades to deterministic queries if storage or inference is unavailable. Prompts, retrieval results, and model output are not persisted as product data.
+
 ## Inventory model
 
 An item uses one of two tracking modes:
