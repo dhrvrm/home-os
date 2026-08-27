@@ -30,4 +30,20 @@ describe("inventory metadata API", () => {
       message: "The Home OS API took too long to respond. Try again.",
     });
   });
+
+  it("keeps timeout protection active while the response body is loading", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (_url: string, init?: RequestInit) => ({
+      ok: true,
+      json: () => new Promise((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")));
+      }),
+    } as Response)));
+
+    const outcome = await Promise.race([
+      listItems({ timeoutMs: 1 }).catch((error: unknown) => error),
+      new Promise((resolve) => window.setTimeout(() => resolve({ code: "body_hung" }), 25)),
+    ]);
+
+    expect(outcome).toMatchObject({ code: "timeout" });
+  });
 });

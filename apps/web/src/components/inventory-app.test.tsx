@@ -75,11 +75,59 @@ describe("InventoryApp", () => {
   it("shows a validated saved copy when the API is offline", async () => {
     saveInventoryCache([soap], localStorage, new Date("2026-08-27T08:00:00Z"));
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("offline")));
+    const user = userEvent.setup();
     render(<InventoryApp />);
 
     expect(await screen.findByText("Showing a saved copy")).toBeInTheDocument();
     expect(screen.getByText("Dish soap")).toBeInTheDocument();
     for (const button of screen.getAllByRole("button", { name: "Add item" })) expect(button).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: "View details for Dish soap" }));
+    const details = screen.getByRole("dialog", { name: "Dish soap" });
+    expect(details).toHaveFocus();
+    expect(within(details).getByRole("button", { name: "Edit item" })).toBeDisabled();
+    expect(within(details).getByRole("button", { name: "Adjust stock" })).toBeDisabled();
+    expect(within(details).getByRole("button", { name: "Archive item" })).toBeDisabled();
+    await user.click(within(details).getByRole("button", { name: "Close details for Dish soap" }));
+    await user.click(screen.getByRole("button", { name: "Reconnect" }));
+    expect(await screen.findByText("Showing a saved copy")).toBeInTheDocument();
+    expect(screen.getByText("Dish soap")).toBeInTheDocument();
+  });
+
+  it("keeps an empty saved inventory read-only", async () => {
+    saveInventoryCache([], localStorage, new Date("2026-08-27T08:00:00Z"));
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("offline")));
+    render(<InventoryApp />);
+
+    expect(await screen.findByText("Showing a saved copy")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Add first item" })).toBeDisabled();
+  });
+
+  it("switches a loaded inventory to read-only when the browser goes offline", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ data: { items: [soap] }, error: null }), { status: 200 })));
+    render(<InventoryApp />);
+    await screen.findByText("Dish soap");
+
+    window.dispatchEvent(new Event("offline"));
+
+    expect(await screen.findByText("Showing a saved copy")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Use Dish soap" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Restock Dish soap" })).toBeDisabled();
+  });
+
+  it("falls back to the saved copy if the API disappears after startup", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ data: { items: [soap] }, error: null }), { status: 200 }))
+      .mockRejectedValueOnce(new Error("API stopped"));
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+    render(<InventoryApp />);
+    await screen.findByText("Dish soap");
+
+    await user.click(screen.getByRole("button", { name: "Restock Dish soap" }));
+
+    expect(await screen.findByText("Showing a saved copy")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Use Dish soap" })).toBeDisabled();
+    expect(screen.getByText("Dish soap")).toBeInTheDocument();
   });
 
   it("filters by search and category", async () => {
@@ -189,6 +237,7 @@ describe("InventoryApp", () => {
 
     await screen.findByText("Rice");
     await user.click(screen.getByRole("button", { name: "View details for Rice" }));
+    expect(screen.getByRole("dialog", { name: "Rice" })).toHaveFocus();
     expect(await screen.findByText("Made dinner")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Edit item" }));
     const dialog = screen.getByRole("dialog", { name: "Edit Rice" });
@@ -223,10 +272,12 @@ describe("InventoryApp", () => {
 
   it("adjusts a simple item to an arbitrary meter level", async () => {
     const updated = { ...soap, levelPercent: 35, stockLevel: "okay" as const };
+    const adjusted = { id: "event-adjust", itemId: "soap", type: "mark_level", quantity: 0, stockLevel: "okay", levelPercent: 35, note: "", occurredAt: "2026-08-27T10:00:00Z" };
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(new Response(JSON.stringify({ data: { items: [soap] }, error: null }), { status: 200 }))
       .mockResolvedValueOnce(new Response(JSON.stringify({ data: { events: [] }, error: null }), { status: 200 }))
-      .mockResolvedValueOnce(new Response(JSON.stringify({ data: { item: updated }, error: null }), { status: 200 }));
+      .mockResolvedValueOnce(new Response(JSON.stringify({ data: { item: updated }, error: null }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ data: { events: [adjusted] }, error: null }), { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
     const user = userEvent.setup();
     render(<InventoryApp />);
@@ -238,8 +289,9 @@ describe("InventoryApp", () => {
     fireEvent.change(within(dialog).getByRole("slider", { name: "Current level" }), { target: { value: "35" } });
     await user.click(within(dialog).getByRole("button", { name: "Adjust stock" }));
 
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(4));
     expect(JSON.parse(String((fetchMock.mock.calls[2][1] as RequestInit).body))).toMatchObject({ type: "mark_level", levelPercent: 35 });
+    expect(await screen.findByText("Adjusted to 35%")).toBeInTheDocument();
   });
 
   it("turns low inventory into a functional shopping list", async () => {

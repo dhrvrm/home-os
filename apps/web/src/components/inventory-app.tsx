@@ -16,6 +16,7 @@ import {
   WifiSlash,
 } from "@phosphor-icons/react";
 import {
+  APIError,
   applyEvent,
   archiveItem,
   createItem,
@@ -76,6 +77,13 @@ export function InventoryApp() {
       setSavedCopyAt(null);
       setLoadState("ready");
     } catch (error) {
+      const cached = loadInventoryCache();
+      if (cached) {
+        setItems(sortItems(cached.items));
+        setSavedCopyAt(cached.savedAt);
+        setLoadState("ready");
+        return;
+      }
       setLoadError(error instanceof Error ? error.message : "The inventory could not be loaded.");
       setLoadState("error");
     }
@@ -111,8 +119,16 @@ export function InventoryApp() {
 
   useEffect(() => {
     const refresh = () => { if (savedCopyAt) void load(); };
+    const markOffline = () => {
+      const cached = loadInventoryCache();
+      if (cached) setSavedCopyAt(cached.savedAt);
+    };
     window.addEventListener("online", refresh);
-    return () => window.removeEventListener("online", refresh);
+    window.addEventListener("offline", markOffline);
+    return () => {
+      window.removeEventListener("online", refresh);
+      window.removeEventListener("offline", markOffline);
+    };
   }, [load, savedCopyAt]);
 
   const categories = useMemo(() => ["All", ...Array.from(new Set(items.flatMap(itemCategories))).sort()], [items]);
@@ -128,6 +144,14 @@ export function InventoryApp() {
   const attentionCount = items.filter((item) => item.stockLevel === "low" || item.stockLevel === "out").length;
   const locations = new Set(items.map((item) => item.location)).size;
 
+  function enterSavedCopyIfUnavailable(error: unknown) {
+    if (!(error instanceof APIError) || (error.code !== "network_error" && error.code !== "offline")) return;
+    const cached = loadInventoryCache();
+    if (!cached) return;
+    setItems(sortItems(cached.items));
+    setSavedCopyAt(cached.savedAt);
+  }
+
   async function addItem(input: CreateItemInput) {
     setSaving(true);
     setMutationError(null);
@@ -136,6 +160,7 @@ export function InventoryApp() {
       setItems((current) => persistAndSort([item, ...current]));
       setShowForm(false);
     } catch (error) {
+      enterSavedCopyIfUnavailable(error);
       setMutationError(error instanceof Error ? error.message : "The item could not be saved.");
     } finally {
       setSaving(false);
@@ -149,8 +174,17 @@ export function InventoryApp() {
       const updated = await applyEvent(item.id, input);
       setItems((current) => persistAndSort(current.map((candidate) => candidate.id === updated.id ? updated : candidate)));
       setSelectedItem((current) => current?.id === updated.id ? updated : current);
+      if (selectedItem?.id === updated.id) {
+        try {
+          setEvents(await listItemEvents(updated.id));
+        } catch (historyError) {
+          enterSavedCopyIfUnavailable(historyError);
+          setEventsError(historyError instanceof Error ? historyError.message : "History could not be refreshed.");
+        }
+      }
       setStockDialog(null);
     } catch (error) {
+      enterSavedCopyIfUnavailable(error);
       setMutationError(error instanceof Error ? error.message : "Stock could not be updated.");
     } finally {
       setPendingItem(null);
@@ -158,8 +192,13 @@ export function InventoryApp() {
   }
 
   async function applyAssistantProposal(proposal: AssistantProposal) {
-    const updated = await updateItemMetadata(proposal.itemID, proposal.changes);
-    setItems((current) => persistAndSort(current.map((candidate) => candidate.id === updated.id ? updated : candidate)));
+    try {
+      const updated = await updateItemMetadata(proposal.itemID, proposal.changes);
+      setItems((current) => persistAndSort(current.map((candidate) => candidate.id === updated.id ? updated : candidate)));
+    } catch (error) {
+      enterSavedCopyIfUnavailable(error);
+      throw error;
+    }
   }
 
   async function saveItemEdit(input: UpdateItemInput) {
@@ -172,6 +211,7 @@ export function InventoryApp() {
       setSelectedItem((current) => current?.id === updated.id ? updated : current);
       setEditingItem(null);
     } catch (error) {
+      enterSavedCopyIfUnavailable(error);
       setMutationError(error instanceof Error ? error.message : "The item could not be updated.");
     } finally {
       setPendingItem(null);
@@ -182,10 +222,16 @@ export function InventoryApp() {
     setSelectedItem(item);
     setEvents([]);
     setEventsError(null);
+    if (savedCopyAt) {
+      setEventsLoading(false);
+      setEventsError("Stock history is unavailable in the saved offline copy.");
+      return;
+    }
     setEventsLoading(true);
     try {
       setEvents(await listItemEvents(item.id));
     } catch (error) {
+      enterSavedCopyIfUnavailable(error);
       setEventsError(error instanceof Error ? error.message : "History could not be loaded.");
     } finally {
       setEventsLoading(false);
@@ -202,6 +248,7 @@ export function InventoryApp() {
       setArchivedItems((current) => sortItems([archived, ...current.filter((item) => item.id !== archived.id)]));
       setSelectedItem(null);
     } catch (error) {
+      enterSavedCopyIfUnavailable(error);
       setMutationError(error instanceof Error ? error.message : "The item could not be archived.");
     } finally {
       setPendingItem(null);
@@ -216,6 +263,7 @@ export function InventoryApp() {
       setArchivedItems((current) => current.filter((candidate) => candidate.id !== restored.id));
       setItems((current) => persistAndSort([restored, ...current]));
     } catch (error) {
+      enterSavedCopyIfUnavailable(error);
       setMutationError(error instanceof Error ? error.message : "The item could not be restored.");
     } finally {
       setPendingItem(null);
@@ -230,6 +278,7 @@ export function InventoryApp() {
     try {
       setArchivedItems(sortItems(await listItems({ archived: "only" })));
     } catch (error) {
+      enterSavedCopyIfUnavailable(error);
       setMutationError(error instanceof Error ? error.message : "Archived inventory could not be loaded.");
     }
   }
@@ -245,6 +294,7 @@ export function InventoryApp() {
       anchor.click();
       URL.revokeObjectURL(url);
     } catch (error) {
+      enterSavedCopyIfUnavailable(error);
       setMutationError(error instanceof Error ? error.message : "The backup could not be created.");
     }
   }
@@ -327,7 +377,7 @@ export function InventoryApp() {
 
           {!showArchived && loadState === "loading" && <LoadingState />}
           {!showArchived && loadState === "error" && <ErrorState message={loadError} onRetry={load} />}
-          {!showArchived && loadState === "ready" && items.length === 0 && <EmptyState onAdd={() => setShowForm(true)} />}
+          {!showArchived && loadState === "ready" && items.length === 0 && <EmptyState onAdd={() => setShowForm(true)} disabled={Boolean(savedCopyAt)} />}
           {!showArchived && loadState === "ready" && items.length > 0 && visibleItems.length === 0 && (
             <div className="no-results"><MagnifyingGlass size={24} aria-hidden="true" /><h3>No matching items</h3><p>Try another search or category.</p></div>
           )}
@@ -350,7 +400,7 @@ export function InventoryApp() {
 
       {showForm && <ItemForm pending={saving} error={mutationError} onClose={() => { setShowForm(false); setMutationError(null); }} onSubmit={addItem} />}
       {showAssistant && <InventoryAssistant assistant={assistant} items={items} onApply={applyAssistantProposal} onClose={() => setShowAssistant(false)} />}
-      {selectedItem && !editingItem && !stockDialog && <ItemDetailDialog item={selectedItem} events={events} loading={eventsLoading} error={eventsError} onClose={() => setSelectedItem(null)} onEdit={() => setEditingItem(selectedItem)} onAdjust={() => setStockDialog({ item: selectedItem, action: selectedItem.trackingMode === "simple" ? "mark_level" : "restock" })} onArchive={() => void archiveSelected()} />}
+      {selectedItem && !editingItem && !stockDialog && <ItemDetailDialog item={selectedItem} events={events} loading={eventsLoading} error={eventsError} readOnly={Boolean(savedCopyAt)} onClose={() => setSelectedItem(null)} onEdit={() => setEditingItem(selectedItem)} onAdjust={() => setStockDialog({ item: selectedItem, action: selectedItem.trackingMode === "simple" ? "mark_level" : "restock" })} onArchive={() => void archiveSelected()} />}
       {editingItem && <ItemEditDialog item={editingItem} pending={pendingItem === editingItem.id} error={mutationError} onClose={() => { setEditingItem(null); setMutationError(null); }} onSubmit={saveItemEdit} />}
       {stockDialog && <StockDialog item={stockDialog.item} action={stockDialog.action} pending={pendingItem === stockDialog.item.id} error={mutationError} onClose={() => { setStockDialog(null); setMutationError(null); }} onSubmit={(input) => runAction(stockDialog.item, input)} />}
     </div>

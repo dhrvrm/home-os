@@ -591,6 +591,20 @@ func TestServiceExactOverConsumptionRecordsActualAvailableQuantity(t *testing.T)
 	}
 }
 
+func TestServiceSimpleDefaultConsumptionRecordsAppliedPoints(t *testing.T) {
+	repo := newMemoryRepository()
+	repo.items["soap"] = Item{ID: "soap", Name: "Soap", TrackingMode: TrackingSimple, LevelPercent: 50, StockLevel: StockOkay}
+	service := NewService(repo, WithIDGenerator(func() string { return "event-1" }))
+
+	item, err := service.ApplyEvent(context.Background(), "soap", ApplyEventInput{Type: EventConsume})
+	if err != nil {
+		t.Fatalf("ApplyEvent() error = %v", err)
+	}
+	if item.LevelPercent != 25 || len(repo.events["soap"]) != 1 || repo.events["soap"][0].Quantity != 25 {
+		t.Fatalf("item = %#v, events = %#v; want a recorded 25-point use", item, repo.events["soap"])
+	}
+}
+
 func TestServiceValidatesEventNoteLength(t *testing.T) {
 	repo := newMemoryRepository()
 	repo.items["soap"] = Item{ID: "soap", Name: "Soap", TrackingMode: TrackingSimple, LevelPercent: 50, StockLevel: StockOkay}

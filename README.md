@@ -75,6 +75,8 @@ apps/web   Next.js SPA, PWA shell, and Worker assets config
 docs       Architecture and deployment decisions
 ```
 
+The product and license research behind the inventory decisions is recorded in [docs/research.md](docs/research.md). Home OS uses those projects as behavioral references only; no third-party application source was copied into this MIT repository.
+
 ## License
 
 MIT

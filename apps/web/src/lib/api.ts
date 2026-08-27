@@ -43,7 +43,6 @@ const API_URL = (process.env.NEXT_PUBLIC_API_URL ?? "").replace(/\/$/, "");
 const DEFAULT_TIMEOUT_MS = 10_000;
 
 async function request<T>(path: string, init?: RequestInit, options: APIRequestOptions = {}): Promise<T> {
-  let response: Response;
   const controller = new AbortController();
   let timedOut = false;
   const timeout = window.setTimeout(() => {
@@ -53,45 +52,51 @@ async function request<T>(path: string, init?: RequestInit, options: APIRequestO
   const cancel = () => controller.abort(options.signal?.reason);
   options.signal?.addEventListener("abort", cancel, { once: true });
   try {
-    response = await fetch(`${API_URL}${path}`, {
-      ...init,
-      signal: controller.signal,
-      headers: { "Content-Type": "application/json", ...init?.headers },
-    });
-  } catch {
-    if (timedOut) {
-      throw new APIError("The Home OS API took too long to respond. Try again.", "timeout");
+    let response: Response;
+    try {
+      response = await fetch(`${API_URL}${path}`, {
+        ...init,
+        signal: controller.signal,
+        headers: { "Content-Type": "application/json", ...init?.headers },
+      });
+    } catch {
+      throw requestTransportError(timedOut, options.signal);
     }
-    if (options.signal?.aborted) {
-      throw new APIError("The request was cancelled.", "cancelled");
+
+    let envelope: Envelope<T>;
+    try {
+      envelope = (await response.json()) as Envelope<T>;
+    } catch {
+      if (timedOut || options.signal?.aborted) {
+        throw requestTransportError(timedOut, options.signal);
+      }
+      throw new APIError("The server returned an unreadable response.", "invalid_response");
     }
-    if (typeof navigator !== "undefined" && navigator.onLine === false) {
-      throw new APIError("You are offline. Home OS will show the latest saved copy when available.", "offline");
+
+    if (!response.ok || envelope.error) {
+      throw new APIError(
+        envelope.error?.message ?? "The request could not be completed.",
+        envelope.error?.code,
+        envelope.error?.field,
+      );
     }
-    throw new APIError("The Home OS API is unavailable. Check your connection and try again.", "network_error");
+    if (envelope.data === null) {
+      throw new APIError("The server returned an empty response.", "invalid_response");
+    }
+    return envelope.data;
   } finally {
     window.clearTimeout(timeout);
     options.signal?.removeEventListener("abort", cancel);
   }
+}
 
-  let envelope: Envelope<T>;
-  try {
-    envelope = (await response.json()) as Envelope<T>;
-  } catch {
-    throw new APIError("The server returned an unreadable response.", "invalid_response");
+function requestTransportError(timedOut: boolean, callerSignal?: AbortSignal): APIError {
+  if (timedOut) return new APIError("The Home OS API took too long to respond. Try again.", "timeout");
+  if (callerSignal?.aborted) return new APIError("The request was cancelled.", "cancelled");
+  if (typeof navigator !== "undefined" && navigator.onLine === false) {
+    return new APIError("You are offline. Home OS will show the latest saved copy when available.", "offline");
   }
-
-  if (!response.ok || envelope.error) {
-    throw new APIError(
-      envelope.error?.message ?? "The request could not be completed.",
-      envelope.error?.code,
-      envelope.error?.field,
-    );
-  }
-  if (envelope.data === null) {
-    throw new APIError("The server returned an empty response.", "invalid_response");
-  }
-  return envelope.data;
+  return new APIError("The Home OS API is unavailable. Check your connection and try again.", "network_error");
 }
 
 export async function listItems(options: ListItemsOptions = {}): Promise<InventoryItem[]> {

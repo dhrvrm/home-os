@@ -344,6 +344,7 @@ func (s *Service) ApplyEvent(ctx context.Context, itemID string, input ApplyEven
 			if points < 0 {
 				return Item{}, ValidationError{Field: "quantity", Message: "must be zero or greater"}
 			}
+			eventQuantity = points
 			next.LevelPercent = math.Max(0, item.LevelPercent-points)
 			next.StockLevel = simpleLevel(next.LevelPercent)
 		}

@@ -10,18 +10,20 @@ interface ItemDetailDialogProps {
   events: StockEvent[];
   loading: boolean;
   error: string | null;
+  readOnly?: boolean;
   onClose: () => void;
   onEdit: () => void;
   onAdjust: () => void;
   onArchive: () => void;
 }
 
-export function ItemDetailDialog({ item, events, loading, error, onClose, onEdit, onAdjust, onArchive }: ItemDetailDialogProps) {
+export function ItemDetailDialog({ item, events, loading, error, readOnly = false, onClose, onEdit, onAdjust, onArchive }: ItemDetailDialogProps) {
   const dialogRef = useRef<HTMLElement>(null);
   const returnFocusRef = useRef<HTMLElement | null>(document.activeElement instanceof HTMLElement ? document.activeElement : null);
 
   useEffect(() => {
     const returnFocus = returnFocusRef.current;
+    dialogRef.current?.focus();
     return () => returnFocus?.focus();
   }, []);
 
@@ -46,7 +48,7 @@ export function ItemDetailDialog({ item, events, loading, error, onClose, onEdit
 
   return (
     <div className="dialog-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
-      <section ref={dialogRef} className="dialog item-detail" role="dialog" aria-modal="true" aria-labelledby="item-detail-title" onKeyDown={handleDialogKeys}>
+      <section ref={dialogRef} className="dialog item-detail" role="dialog" aria-modal="true" aria-labelledby="item-detail-title" onKeyDown={handleDialogKeys} tabIndex={-1}>
         <header className="dialog__header">
           <div><p className="dialog__context">{item.location}</p><h2 id="item-detail-title">{item.name}</h2></div>
           <button className="icon-button" type="button" onClick={onClose} aria-label={`Close details for ${item.name}`}><X size={20} aria-hidden="true" /></button>
@@ -59,9 +61,9 @@ export function ItemDetailDialog({ item, events, loading, error, onClose, onEdit
             {item.trackingMode === "exact" && <div><dt>Low threshold</dt><dd>{item.minQuantity} {item.unit}</dd></div>}
           </dl>
           <div className="item-detail__actions">
-            <button className="button button--quiet" type="button" onClick={onEdit}><PencilSimple size={16} aria-hidden="true" /> Edit item</button>
-            <button className="button button--quiet" type="button" onClick={onAdjust}><SlidersHorizontal size={16} aria-hidden="true" /> Adjust stock</button>
-            <button className="button button--danger" type="button" onClick={onArchive}><Archive size={16} aria-hidden="true" /> Archive item</button>
+            <button className="button button--quiet" type="button" onClick={onEdit} disabled={readOnly}><PencilSimple size={16} aria-hidden="true" /> Edit item</button>
+            <button className="button button--quiet" type="button" onClick={onAdjust} disabled={readOnly}><SlidersHorizontal size={16} aria-hidden="true" /> Adjust stock</button>
+            <button className="button button--danger" type="button" onClick={onArchive} disabled={readOnly}><Archive size={16} aria-hidden="true" /> Archive item</button>
           </div>
           <section className="history-panel" aria-labelledby="history-title">
             <header><ClockCounterClockwise size={20} aria-hidden="true" /><div><h3 id="history-title">Stock history</h3><p>Recorded changes are kept when an item is archived.</p></div></header>
