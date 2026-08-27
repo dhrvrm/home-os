@@ -107,7 +107,7 @@ export class InventoryService {
     assertLength("unit", unit, 30);
     const timestamp = this.now().toISOString();
     const item: InventoryItem = {
-      id: this.newId(),
+      id: input.id ?? this.newId(),
       householdId: context.householdId,
       name,
       alternativeNames,
@@ -247,7 +247,7 @@ export class InventoryService {
     next.updatedAt = timestamp;
     next.version = current.version + 1;
     const event: StockEvent = {
-      id: this.newId(),
+      id: input.id ?? this.newId(),
       householdId: context.householdId,
       itemId: current.id,
       type: input.type,

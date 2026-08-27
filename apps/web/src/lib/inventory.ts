@@ -17,6 +17,7 @@ export interface Cadence {
 
 export interface InventoryItem {
   id: string;
+  householdId?: string;
   name: string;
   alternativeNames: string[];
   category: string;
@@ -28,6 +29,7 @@ export interface InventoryItem {
   stockLevel: StockLevel;
   levelPercent: number;
   minQuantity: number;
+  version?: number;
   forecast?: Forecast;
   cadence?: Cadence;
   archivedAt?: string | null;
@@ -37,29 +39,34 @@ export interface InventoryItem {
 
 export interface StockEvent {
   id: string;
+  householdId?: string;
   itemId: string;
   type: EventType;
   quantity: number;
   stockLevel?: StockLevel;
   levelPercent: number;
   note?: string;
+  actorId?: string;
   occurredAt: string;
+  createdAt?: string;
 }
 
 export interface CreateItemInput {
+  id?: string;
   name: string;
   alternativeNames?: string[];
   category?: string;
   categories?: string[];
-  location: string;
-  unit: string;
-  trackingMode: TrackingMode;
-  quantity: number;
+  location?: string;
+  unit?: string;
+  trackingMode?: TrackingMode;
+  quantity?: number;
   levelPercent?: number;
-  minQuantity: number;
+  minQuantity?: number;
 }
 
 export interface ApplyEventInput {
+  id?: string;
   type: EventType;
   quantity?: number;
   stockLevel?: StockLevel;

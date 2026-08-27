@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   ArrowClockwise,
   Archive,
@@ -16,21 +16,14 @@ import {
   WifiSlash,
 } from "@phosphor-icons/react";
 import {
-  APIError,
-  applyEvent,
-  archiveItem,
-  createItem,
   exportInventory,
   listItemEvents,
-  listItems,
-  restoreItem,
-  updateItem,
-  updateItemMetadata,
 } from "@/lib/api";
 import { BrowserAssistant } from "@/lib/browser-assistant";
-import { loadInventoryCache, saveInventoryCache } from "@/lib/inventory-cache";
 import type { AssistantProposal } from "@/lib/inventory-assistant";
 import type { ApplyEventInput, CreateItemInput, InventoryItem, StockEvent, UpdateItemInput } from "@/lib/inventory";
+import { homeOSDatabase } from "@/offline/db";
+import { useInventory } from "@/offline/use-inventory";
 import { EmptyState } from "./empty-state";
 import { InventoryAssistant } from "./inventory-assistant";
 import { ItemDetailDialog } from "./item-detail-dialog";
@@ -40,15 +33,13 @@ import { ItemRow } from "./item-row";
 import { ShoppingView } from "./shopping-view";
 import { StockDialog } from "./stock-dialog";
 
-type LoadState = "loading" | "ready" | "error";
 type PrimaryView = "inventory" | "shopping";
 type StockDialogState = { item: InventoryItem; action: "consume" | "restock" | "mark_level" };
 
 export function InventoryApp() {
-  const [items, setItems] = useState<InventoryItem[]>([]);
-  const [archivedItems, setArchivedItems] = useState<InventoryItem[]>([]);
-  const [loadState, setLoadState] = useState<LoadState>("loading");
-  const [loadError, setLoadError] = useState<string | null>(null);
+  const inventory = useInventory();
+  const items = useMemo(() => sortItems(inventory.items), [inventory.items]);
+  const archivedItems = useMemo(() => sortItems(inventory.archivedItems), [inventory.archivedItems]);
   const [mutationError, setMutationError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [category, setCategory] = useState("All");
@@ -56,7 +47,6 @@ export function InventoryApp() {
   const [showAssistant, setShowAssistant] = useState(false);
   const [view, setView] = useState<PrimaryView>("inventory");
   const [showArchived, setShowArchived] = useState(false);
-  const [savedCopyAt, setSavedCopyAt] = useState<string | null>(null);
   const [selectedItem, setSelectedItem] = useState<InventoryItem | null>(null);
   const [editingItem, setEditingItem] = useState<InventoryItem | null>(null);
   const [stockDialog, setStockDialog] = useState<StockDialogState | null>(null);
@@ -67,79 +57,9 @@ export function InventoryApp() {
   const [pendingItem, setPendingItem] = useState<string | null>(null);
   const [assistant] = useState(() => new BrowserAssistant());
 
-  const closeWriteDialogs = useCallback(() => {
-    setShowForm(false);
-    setShowAssistant(false);
-    setEditingItem(null);
-    setStockDialog(null);
-  }, []);
-
-  const load = useCallback(async () => {
-    setLoadState("loading");
-    setLoadError(null);
-    try {
-      const loaded = sortItems(await listItems());
-      setItems(loaded);
-      saveInventoryCache(loaded);
-      setSavedCopyAt(null);
-      setLoadState("ready");
-    } catch (error) {
-      const cached = loadInventoryCache();
-      if (cached) {
-        setItems(sortItems(cached.items));
-        setSavedCopyAt(cached.savedAt);
-        setLoadState("ready");
-        return;
-      }
-      setLoadError(error instanceof Error ? error.message : "The inventory could not be loaded.");
-      setLoadState("error");
-    }
-  }, []);
-
-  useEffect(() => {
-    let active = true;
-    void listItems().then((loadedItems) => {
-      if (!active) return;
-      const sorted = sortItems(loadedItems);
-      setItems(sorted);
-      saveInventoryCache(sorted);
-      setSavedCopyAt(null);
-      setLoadState("ready");
-    }).catch((error: unknown) => {
-      if (!active) return;
-      const cached = loadInventoryCache();
-      if (cached) {
-        setItems(sortItems(cached.items));
-        setSavedCopyAt(cached.savedAt);
-        setLoadState("ready");
-        return;
-      }
-      setLoadError(error instanceof Error ? error.message : "The inventory could not be loaded.");
-      setLoadState("error");
-    });
-    return () => { active = false; };
-  }, []);
-
   useEffect(() => {
     return () => { void assistant.dispose(); };
   }, [assistant]);
-
-  useEffect(() => {
-    const refresh = () => { if (savedCopyAt) void load(); };
-    const markOffline = () => {
-      const cached = loadInventoryCache();
-      if (cached) {
-        setSavedCopyAt(cached.savedAt);
-        closeWriteDialogs();
-      }
-    };
-    window.addEventListener("online", refresh);
-    window.addEventListener("offline", markOffline);
-    return () => {
-      window.removeEventListener("online", refresh);
-      window.removeEventListener("offline", markOffline);
-    };
-  }, [closeWriteDialogs, load, savedCopyAt]);
 
   const categories = useMemo(() => ["All", ...Array.from(new Set(items.flatMap(itemCategories))).sort()], [items]);
   const visibleItems = useMemo(() => {
@@ -154,24 +74,13 @@ export function InventoryApp() {
   const attentionCount = items.filter((item) => item.stockLevel === "low" || item.stockLevel === "out").length;
   const locations = new Set(items.map((item) => item.location)).size;
 
-  function enterSavedCopyIfUnavailable(error: unknown) {
-    if (!(error instanceof APIError) || !["network_error", "offline", "timeout"].includes(error.code)) return;
-    const cached = loadInventoryCache();
-    if (!cached) return;
-    setItems(sortItems(cached.items));
-    setSavedCopyAt(cached.savedAt);
-    closeWriteDialogs();
-  }
-
   async function addItem(input: CreateItemInput) {
     setSaving(true);
     setMutationError(null);
     try {
-      const item = await createItem(input);
-      setItems((current) => persistAndSort([item, ...current]));
+      await inventory.add(input);
       setShowForm(false);
     } catch (error) {
-      enterSavedCopyIfUnavailable(error);
       setMutationError(error instanceof Error ? error.message : "The item could not be saved.");
     } finally {
       setSaving(false);
@@ -182,20 +91,17 @@ export function InventoryApp() {
     setPendingItem(item.id);
     setMutationError(null);
     try {
-      const updated = await applyEvent(item.id, input);
-      setItems((current) => persistAndSort(current.map((candidate) => candidate.id === updated.id ? updated : candidate)));
+      const updated = await inventory.applyStock(item.id, input);
       setSelectedItem((current) => current?.id === updated.id ? updated : current);
       if (selectedItem?.id === updated.id) {
         try {
-          setEvents(await listItemEvents(updated.id));
+          setEvents(await localEvents(updated.id));
         } catch (historyError) {
-          enterSavedCopyIfUnavailable(historyError);
           setEventsError(historyError instanceof Error ? historyError.message : "History could not be refreshed.");
         }
       }
       setStockDialog(null);
     } catch (error) {
-      enterSavedCopyIfUnavailable(error);
       setMutationError(error instanceof Error ? error.message : "Stock could not be updated.");
     } finally {
       setPendingItem(null);
@@ -204,10 +110,8 @@ export function InventoryApp() {
 
   async function applyAssistantProposal(proposal: AssistantProposal) {
     try {
-      const updated = await updateItemMetadata(proposal.itemID, proposal.changes);
-      setItems((current) => persistAndSort(current.map((candidate) => candidate.id === updated.id ? updated : candidate)));
+      await inventory.update(proposal.itemID, proposal.changes);
     } catch (error) {
-      enterSavedCopyIfUnavailable(error);
       throw error;
     }
   }
@@ -217,12 +121,10 @@ export function InventoryApp() {
     setPendingItem(editingItem.id);
     setMutationError(null);
     try {
-      const updated = await updateItem(editingItem.id, input);
-      setItems((current) => persistAndSort(current.map((candidate) => candidate.id === updated.id ? updated : candidate)));
+      const updated = await inventory.update(editingItem.id, input);
       setSelectedItem((current) => current?.id === updated.id ? updated : current);
       setEditingItem(null);
     } catch (error) {
-      enterSavedCopyIfUnavailable(error);
       setMutationError(error instanceof Error ? error.message : "The item could not be updated.");
     } finally {
       setPendingItem(null);
@@ -233,16 +135,19 @@ export function InventoryApp() {
     setSelectedItem(item);
     setEvents([]);
     setEventsError(null);
-    if (savedCopyAt) {
-      setEventsLoading(false);
-      setEventsError("Stock history is unavailable in the saved offline copy.");
-      return;
-    }
     setEventsLoading(true);
     try {
-      setEvents(await listItemEvents(item.id));
+      const local = await localEvents(item.id);
+      setEvents(local);
+      if (inventory.syncStatus !== "offline") {
+        try {
+          const remote = await listItemEvents(item.id);
+          if (remote.length) setEvents(remote);
+        } catch {
+          // The local immutable history remains usable when connectivity changes.
+        }
+      }
     } catch (error) {
-      enterSavedCopyIfUnavailable(error);
       setEventsError(error instanceof Error ? error.message : "History could not be loaded.");
     } finally {
       setEventsLoading(false);
@@ -254,12 +159,9 @@ export function InventoryApp() {
     setPendingItem(selectedItem.id);
     setMutationError(null);
     try {
-      const archived = await archiveItem(selectedItem.id);
-      setItems((current) => persistAndSort(current.filter((item) => item.id !== archived.id)));
-      setArchivedItems((current) => sortItems([archived, ...current.filter((item) => item.id !== archived.id)]));
+      await inventory.archive(selectedItem.id);
       setSelectedItem(null);
     } catch (error) {
-      enterSavedCopyIfUnavailable(error);
       setMutationError(error instanceof Error ? error.message : "The item could not be archived.");
     } finally {
       setPendingItem(null);
@@ -270,11 +172,8 @@ export function InventoryApp() {
     setPendingItem(item.id);
     setMutationError(null);
     try {
-      const restored = await restoreItem(item.id);
-      setArchivedItems((current) => current.filter((candidate) => candidate.id !== restored.id));
-      setItems((current) => persistAndSort([restored, ...current]));
+      await inventory.restore(item.id);
     } catch (error) {
-      enterSavedCopyIfUnavailable(error);
       setMutationError(error instanceof Error ? error.message : "The item could not be restored.");
     } finally {
       setPendingItem(null);
@@ -282,22 +181,23 @@ export function InventoryApp() {
   }
 
   async function toggleArchived() {
-    const next = !showArchived;
-    setShowArchived(next);
-    if (!next || archivedItems.length > 0 || savedCopyAt) return;
-    setMutationError(null);
-    try {
-      setArchivedItems(sortItems(await listItems({ archived: "only" })));
-    } catch (error) {
-      enterSavedCopyIfUnavailable(error);
-      setMutationError(error instanceof Error ? error.message : "Archived inventory could not be loaded.");
-    }
+    setShowArchived((current) => !current);
   }
 
   async function downloadBackup() {
     setMutationError(null);
     try {
-      const backup = await exportInventory();
+      let backup;
+      try {
+        backup = await exportInventory();
+      } catch {
+        const allItems = [...items, ...archivedItems];
+        backup = {
+          version: 1 as const,
+          exportedAt: new Date().toISOString(),
+          items: await Promise.all(allItems.map(async (item) => ({ item, events: await localEvents(item.id) }))),
+        };
+      }
       const url = URL.createObjectURL(new Blob([JSON.stringify(backup, null, 2)], { type: "application/json" }));
       const anchor = document.createElement("a");
       anchor.href = url;
@@ -305,7 +205,6 @@ export function InventoryApp() {
       anchor.click();
       URL.revokeObjectURL(url);
     } catch (error) {
-      enterSavedCopyIfUnavailable(error);
       setMutationError(error instanceof Error ? error.message : "The backup could not be created.");
     }
   }
@@ -334,16 +233,16 @@ export function InventoryApp() {
             <h1>{view === "inventory" ? "Inventory" : "Shopping"}</h1>
           </div>
           <div className="topbar__actions">
-            {view === "inventory" && <button className="button button--quiet topbar__assistant" type="button" onClick={() => setShowAssistant(true)} disabled={Boolean(savedCopyAt)}>
+            {view === "inventory" && <button className="button button--quiet topbar__assistant" type="button" onClick={() => setShowAssistant(true)}>
               <Sparkle size={17} weight="fill" aria-hidden="true" /> Ask Home
             </button>}
-            {view === "inventory" && <button className="button button--primary topbar__add" type="button" onClick={() => setShowForm(true)} disabled={Boolean(savedCopyAt)}>
+            {view === "inventory" && <button className="button button--primary topbar__add" type="button" onClick={() => setShowForm(true)}>
               <Plus size={18} weight="bold" aria-hidden="true" /> Add item
             </button>}
           </div>
         </header>
 
-        {savedCopyAt && <div className="offline-banner" role="status"><WifiSlash size={19} weight="fill" aria-hidden="true" /><span><strong>Showing a saved copy</strong> from {formatSavedAt(savedCopyAt)}. Changes are disabled.</span><button className="button button--small button--quiet" type="button" onClick={() => void load()}>Reconnect</button></div>}
+        {inventory.syncStatus !== "synced" && inventory.syncStatus !== "starting" && <div className="offline-banner" role="status"><WifiSlash size={19} weight="fill" aria-hidden="true" /><span>{syncMessage(inventory.syncStatus)}</span><button className="button button--small button--quiet" type="button" onClick={() => void inventory.refresh()}>Sync now</button></div>}
 
         {view === "inventory" && <section className="overview" aria-label="Inventory summary">
           <div className="overview__intro">
@@ -361,11 +260,11 @@ export function InventoryApp() {
           <header className="inventory-panel__header">
             <div><h2>{showArchived ? "Archived items" : "Everything at home"}</h2><p>{showArchived ? `${archivedItems.length} archived` : `${visibleItems.length} of ${items.length} items`}</p></div>
             <div className="inventory-panel__tools">
-              <button className="button button--quiet inventory-panel__assistant" type="button" onClick={() => setShowAssistant(true)} disabled={Boolean(savedCopyAt) || showArchived}>
+              <button className="button button--quiet inventory-panel__assistant" type="button" onClick={() => setShowAssistant(true)} disabled={showArchived}>
                 <Sparkle size={16} weight="fill" aria-hidden="true" /> Ask Home
               </button>
               <button className="button button--small button--quiet" type="button" onClick={() => void toggleArchived()}><Archive size={16} aria-hidden="true" /> {showArchived ? "Active" : "Archived"}</button>
-              <button className="icon-button" type="button" onClick={() => void downloadBackup()} disabled={Boolean(savedCopyAt)} aria-label="Download inventory backup"><DownloadSimple size={18} aria-hidden="true" /></button>
+              <button className="icon-button" type="button" onClick={() => void downloadBackup()} aria-label="Download inventory backup"><DownloadSimple size={18} aria-hidden="true" /></button>
               {!showArchived && <label className="search-field">
                 <MagnifyingGlass size={18} aria-hidden="true" />
                 <span className="sr-only">Search inventory</span>
@@ -386,32 +285,32 @@ export function InventoryApp() {
             <div className="inline-error" role="alert"><WarningCircle size={19} weight="fill" aria-hidden="true" /><span>{mutationError}</span><button type="button" onClick={() => setMutationError(null)}>Dismiss</button></div>
           )}
 
-          {!showArchived && loadState === "loading" && <LoadingState />}
-          {!showArchived && loadState === "error" && <ErrorState message={loadError} onRetry={load} />}
-          {!showArchived && loadState === "ready" && items.length === 0 && <EmptyState onAdd={() => setShowForm(true)} disabled={Boolean(savedCopyAt)} />}
-          {!showArchived && loadState === "ready" && items.length > 0 && visibleItems.length === 0 && (
+          {!showArchived && inventory.loadState === "loading" && <LoadingState />}
+          {!showArchived && inventory.loadState === "error" && <ErrorState message={inventory.loadError} onRetry={inventory.refresh} />}
+          {!showArchived && inventory.loadState === "ready" && items.length === 0 && <EmptyState onAdd={() => setShowForm(true)} disabled={false} />}
+          {!showArchived && inventory.loadState === "ready" && items.length > 0 && visibleItems.length === 0 && (
             <div className="no-results"><MagnifyingGlass size={24} aria-hidden="true" /><h3>No matching items</h3><p>Try another search or category.</p></div>
           )}
-          {!showArchived && loadState === "ready" && visibleItems.length > 0 && (
+          {!showArchived && inventory.loadState === "ready" && visibleItems.length > 0 && (
             <div className="item-list">
               <div className="item-list__labels" aria-hidden="true"><span>Item</span><span>Stock</span><span>Consumption</span><span>Actions</span></div>
-              {visibleItems.map((item) => <ItemRow key={item.id} item={item} pending={pendingItem === item.id} disabled={Boolean(savedCopyAt)} onAction={runAction} onOpenStock={(target, action) => setStockDialog({ item: target, action })} onDetails={(target) => void openDetails(target)} />)}
+              {visibleItems.map((item) => <ItemRow key={item.id} item={item} pending={pendingItem === item.id} disabled={false} onAction={runAction} onOpenStock={(target, action) => setStockDialog({ item: target, action })} onDetails={(target) => void openDetails(target)} />)}
             </div>
           )}
           {showArchived && archivedItems.length === 0 && <div className="no-results"><Archive size={26} aria-hidden="true" /><h3>No archived items</h3><p>Items you archive will stay recoverable here.</p></div>}
-          {showArchived && archivedItems.length > 0 && <div className="archived-list">{archivedItems.map((item) => <article key={item.id}><div><h3>{item.name}</h3><p>{item.location} · archived {item.archivedAt ? formatSavedAt(item.archivedAt) : "recently"}</p></div><button className="button button--small button--quiet" type="button" disabled={Boolean(savedCopyAt) || pendingItem === item.id} onClick={() => void restoreArchived(item)}>Restore</button></article>)}</div>}
-        </section> : <ShoppingView items={items} pendingItem={pendingItem} disabled={Boolean(savedCopyAt)} onRestock={(item) => item.trackingMode === "exact" ? setStockDialog({ item, action: "restock" }) : void runAction(item, { type: "restock" })} />}
+          {showArchived && archivedItems.length > 0 && <div className="archived-list">{archivedItems.map((item) => <article key={item.id}><div><h3>{item.name}</h3><p>{item.location} · archived {item.archivedAt ? formatSavedAt(item.archivedAt) : "recently"}</p></div><button className="button button--small button--quiet" type="button" disabled={pendingItem === item.id} onClick={() => void restoreArchived(item)}>Restore</button></article>)}</div>}
+        </section> : <ShoppingView items={items} pendingItem={pendingItem} disabled={false} onRestock={(item) => item.trackingMode === "exact" ? setStockDialog({ item, action: "restock" }) : void runAction(item, { type: "restock" })} />}
       </main>
 
       <nav className="mobile-nav" aria-label="Mobile navigation">
         <button className={view === "inventory" ? "is-active mobile-nav__section" : "mobile-nav__section"} type="button" onClick={() => setView("inventory")}><Package size={20} weight="fill" aria-hidden="true" /><span>Inventory</span></button>
-        <button type="button" onClick={() => setShowForm(true)} aria-label="Add item" disabled={Boolean(savedCopyAt)}><Plus size={22} weight="bold" aria-hidden="true" /></button>
+        <button type="button" onClick={() => setShowForm(true)} aria-label="Add item"><Plus size={22} weight="bold" aria-hidden="true" /></button>
         <button className={view === "shopping" ? "is-active mobile-nav__section" : "mobile-nav__section"} type="button" onClick={() => setView("shopping")}><ShoppingCartSimple size={20} aria-hidden="true" /><span>Shopping</span></button>
       </nav>
 
       {showForm && <ItemForm pending={saving} error={mutationError} onClose={() => { setShowForm(false); setMutationError(null); }} onSubmit={addItem} />}
       {showAssistant && <InventoryAssistant assistant={assistant} items={items} onApply={applyAssistantProposal} onClose={() => setShowAssistant(false)} />}
-      {selectedItem && !editingItem && !stockDialog && <ItemDetailDialog item={selectedItem} events={events} loading={eventsLoading} error={eventsError} readOnly={Boolean(savedCopyAt)} onClose={() => setSelectedItem(null)} onEdit={() => setEditingItem(selectedItem)} onAdjust={() => setStockDialog({ item: selectedItem, action: selectedItem.trackingMode === "simple" ? "mark_level" : "restock" })} onArchive={() => void archiveSelected()} />}
+      {selectedItem && !editingItem && !stockDialog && <ItemDetailDialog item={selectedItem} events={events} loading={eventsLoading} error={eventsError} readOnly={false} onClose={() => setSelectedItem(null)} onEdit={() => setEditingItem(selectedItem)} onAdjust={() => setStockDialog({ item: selectedItem, action: selectedItem.trackingMode === "simple" ? "mark_level" : "restock" })} onArchive={() => void archiveSelected()} />}
       {editingItem && <ItemEditDialog item={editingItem} pending={pendingItem === editingItem.id} error={mutationError} onClose={() => { setEditingItem(null); setMutationError(null); }} onSubmit={saveItemEdit} />}
       {stockDialog && <StockDialog item={stockDialog.item} action={stockDialog.action} pending={pendingItem === stockDialog.item.id} error={mutationError} onClose={() => { setStockDialog(null); setMutationError(null); }} onSubmit={(input) => runAction(stockDialog.item, input)} />}
     </div>
@@ -427,14 +326,18 @@ function sortItems(items: InventoryItem[]): InventoryItem[] {
   return [...items].sort((left, right) => order[left.stockLevel] - order[right.stockLevel] || left.name.localeCompare(right.name));
 }
 
-function persistAndSort(items: InventoryItem[]): InventoryItem[] {
-  const sorted = sortItems(items);
-  saveInventoryCache(sorted);
-  return sorted;
-}
-
 function formatSavedAt(value: string): string {
   return new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(value));
+}
+
+async function localEvents(itemId: string): Promise<StockEvent[]> {
+  return homeOSDatabase.stockEvents.where("itemId").equals(itemId).reverse().sortBy("occurredAt");
+}
+
+function syncMessage(status: ReturnType<typeof useInventory>["syncStatus"]): ReactNode {
+  if (status === "offline") return <><strong>Saved on this device.</strong> Changes will sync when Home OS reconnects.</>;
+  if (status === "attention") return <><strong>Some changes need review.</strong> Your local copy is safe.</>;
+  return <><strong>Synchronizing.</strong> You can keep working while changes are sent.</>;
 }
 
 function LoadingState() {

@@ -4,6 +4,7 @@ import { createActivityRoutes } from "./http/activity-routes";
 import { failure, success } from "./http/envelope";
 import { createInventoryRoutes } from "./http/inventory-routes";
 import { HomeOSError, ValidationError } from "./platform/errors";
+import { createSyncRoutes } from "./sync/routes";
 
 const app = new Hono<{ Bindings: Env }>();
 
@@ -26,6 +27,7 @@ app.get("/readyz", async (context) => {
 });
 
 app.route("/api/v1", createActivityRoutes());
+app.route("/api/v1", createSyncRoutes());
 app.route("/api/v1", createInventoryRoutes());
 
 app.onError((error, context) => {

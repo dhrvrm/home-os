@@ -1,8 +1,9 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { saveInventoryCache } from "@/lib/inventory-cache";
 import type { InventoryItem } from "@/lib/inventory";
+import { homeOSDatabase } from "@/offline/db";
 import { InventoryApp } from "./inventory-app";
 
 const soap: InventoryItem = {
@@ -45,8 +46,14 @@ const rice: InventoryItem = {
   updatedAt: "2026-08-24T10:00:00Z",
 };
 
-afterEach(() => {
+beforeEach(async () => {
+  await homeOSDatabase.delete();
+  await homeOSDatabase.open();
+});
+
+afterEach(async () => {
   cleanup();
+  await homeOSDatabase.delete();
   localStorage.clear();
   vi.unstubAllGlobals();
 });
@@ -57,6 +64,7 @@ describe("InventoryApp", () => {
     vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>((resolve) => { resolveFetch = resolve; })));
     render(<InventoryApp />);
     expect(screen.getByText("Loading your home inventory")).toBeInTheDocument();
+    await waitFor(() => expect(resolveFetch).toBeTypeOf("function"));
     resolveFetch(new Response(JSON.stringify({ data: { items: [soap, rice] }, error: null }), { status: 200 }));
     expect(await screen.findByText("Dish soap")).toBeInTheDocument();
     expect(screen.getByText("Rice")).toBeInTheDocument();
@@ -72,49 +80,49 @@ describe("InventoryApp", () => {
     expect(screen.getByRole("button", { name: "Try again" })).toBeInTheDocument();
   });
 
-  it("shows a validated saved copy when the API is offline", async () => {
+  it("migrates a validated saved copy and keeps it editable offline", async () => {
     saveInventoryCache([soap], localStorage, new Date("2026-08-27T08:00:00Z"));
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("offline")));
     const user = userEvent.setup();
     render(<InventoryApp />);
 
-    expect(await screen.findByText("Showing a saved copy")).toBeInTheDocument();
+    expect(await screen.findByText("Saved on this device.")).toBeInTheDocument();
     expect(screen.getByText("Dish soap")).toBeInTheDocument();
-    for (const button of screen.getAllByRole("button", { name: "Add item" })) expect(button).toBeDisabled();
+    for (const button of screen.getAllByRole("button", { name: "Add item" })) expect(button).toBeEnabled();
     await user.click(screen.getByRole("button", { name: "View details for Dish soap" }));
     const details = screen.getByRole("dialog", { name: "Dish soap" });
     expect(details).toHaveFocus();
-    expect(within(details).getByRole("button", { name: "Edit item" })).toBeDisabled();
-    expect(within(details).getByRole("button", { name: "Adjust stock" })).toBeDisabled();
-    expect(within(details).getByRole("button", { name: "Archive item" })).toBeDisabled();
+    expect(within(details).getByRole("button", { name: "Edit item" })).toBeEnabled();
+    expect(within(details).getByRole("button", { name: "Adjust stock" })).toBeEnabled();
+    expect(within(details).getByRole("button", { name: "Archive item" })).toBeEnabled();
     await user.click(within(details).getByRole("button", { name: "Close details for Dish soap" }));
-    await user.click(screen.getByRole("button", { name: "Reconnect" }));
-    expect(await screen.findByText("Showing a saved copy")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Sync now" }));
+    expect(await screen.findByText("Saved on this device.")).toBeInTheDocument();
     expect(screen.getByText("Dish soap")).toBeInTheDocument();
   });
 
-  it("keeps an empty saved inventory read-only", async () => {
+  it("keeps an empty saved inventory editable", async () => {
     saveInventoryCache([], localStorage, new Date("2026-08-27T08:00:00Z"));
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("offline")));
     render(<InventoryApp />);
 
-    expect(await screen.findByText("Showing a saved copy")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Add first item" })).toBeDisabled();
+    expect(await screen.findByText("Saved on this device.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Add first item" })).toBeEnabled();
   });
 
-  it("switches a loaded inventory to read-only when the browser goes offline", async () => {
+  it("keeps a loaded inventory writable when the browser goes offline", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ data: { items: [soap] }, error: null }), { status: 200 })));
     render(<InventoryApp />);
     await screen.findByText("Dish soap");
 
     window.dispatchEvent(new Event("offline"));
 
-    expect(await screen.findByText("Showing a saved copy")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Use Dish soap" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Restock Dish soap" })).toBeDisabled();
+    expect(await screen.findByText("Saved on this device.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Use Dish soap" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Restock Dish soap" })).toBeEnabled();
   });
 
-  it("closes an open write dialog when connectivity is lost", async () => {
+  it("keeps an open write dialog usable when connectivity is lost", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ data: { items: [] }, error: null }), { status: 200 })));
     const user = userEvent.setup();
     render(<InventoryApp />);
@@ -123,12 +131,12 @@ describe("InventoryApp", () => {
 
     window.dispatchEvent(new Event("offline"));
 
-    expect(await screen.findByText("Showing a saved copy")).toBeInTheDocument();
-    expect(screen.queryByRole("dialog", { name: "Add an item" })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Add first item" })).toBeDisabled();
+    expect(await screen.findByText("Saved on this device.")).toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "Add an item" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Add first item" })).toBeEnabled();
   });
 
-  it("falls back to the saved copy if the API disappears after startup", async () => {
+  it("queues a local change if the API disappears after startup", async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(new Response(JSON.stringify({ data: { items: [soap] }, error: null }), { status: 200 }))
       .mockRejectedValueOnce(new Error("API stopped"));
@@ -139,8 +147,9 @@ describe("InventoryApp", () => {
 
     await user.click(screen.getByRole("button", { name: "Restock Dish soap" }));
 
-    expect(await screen.findByText("Showing a saved copy")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Use Dish soap" })).toBeDisabled();
+    expect(await screen.findByText("Saved on this device.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Use Dish soap" })).toBeEnabled();
+    expect(screen.getByText("Full")).toBeInTheDocument();
     expect(screen.getByText("Dish soap")).toBeInTheDocument();
   });
 
@@ -234,7 +243,7 @@ describe("InventoryApp", () => {
     await user.click(screen.getByRole("button", { name: "Use Dish soap" }));
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
     const eventRequest = fetchMock.mock.calls[1][1] as RequestInit;
-    expect(JSON.parse(String(eventRequest.body))).toEqual({ type: "consume", quantity: 25 });
+    expect(JSON.parse(String(eventRequest.body))).toMatchObject({ type: "consume", quantity: 25 });
     expect(screen.getByText("0%")).toBeInTheDocument();
   });
 
@@ -306,7 +315,7 @@ describe("InventoryApp", () => {
     fireEvent.change(within(dialog).getByRole("slider", { name: "Current level" }), { target: { value: "35" } });
     await user.click(within(dialog).getByRole("button", { name: "Adjust stock" }));
 
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(4));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
     expect(JSON.parse(String((fetchMock.mock.calls[2][1] as RequestInit).body))).toMatchObject({ type: "mark_level", levelPercent: 35 });
     expect(await screen.findByText("Adjusted to 35%")).toBeInTheDocument();
   });

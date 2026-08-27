@@ -39,6 +39,13 @@ export interface ListItemsOptions extends APIRequestOptions {
   archived?: "only" | "include";
 }
 
+export interface MutationRequestOptions extends APIRequestOptions {
+  operationId?: string;
+  expectedVersion?: number;
+  deviceId?: string;
+  clientTime?: string;
+}
+
 const API_URL = (process.env.NEXT_PUBLIC_API_URL ?? "").replace(/\/$/, "");
 const DEFAULT_TIMEOUT_MS = 10_000;
 
@@ -110,31 +117,34 @@ export async function getItem(itemID: string, options?: APIRequestOptions): Prom
   return data.item;
 }
 
-export async function createItem(input: CreateItemInput): Promise<InventoryItem> {
+export async function createItem(input: CreateItemInput, options: MutationRequestOptions = {}): Promise<InventoryItem> {
   const data = await request<{ item: InventoryItem }>("/api/v1/items", {
     method: "POST",
+    headers: mutationHeaders(options),
     body: JSON.stringify(input),
-  });
+  }, options);
   return data.item;
 }
 
-export async function applyEvent(itemID: string, input: ApplyEventInput): Promise<InventoryItem> {
+export async function applyEvent(itemID: string, input: ApplyEventInput, options: MutationRequestOptions = {}): Promise<InventoryItem> {
   const data = await request<{ item: InventoryItem }>(`/api/v1/items/${encodeURIComponent(itemID)}/events`, {
     method: "POST",
+    headers: mutationHeaders(options),
     body: JSON.stringify(input),
-  });
+  }, options);
   return data.item;
 }
 
-export async function updateItemMetadata(itemID: string, input: UpdateItemMetadataInput): Promise<InventoryItem> {
-  return updateItem(itemID, input);
+export async function updateItemMetadata(itemID: string, input: UpdateItemMetadataInput, options: MutationRequestOptions = {}): Promise<InventoryItem> {
+  return updateItem(itemID, input, options);
 }
 
-export async function updateItem(itemID: string, input: UpdateItemInput): Promise<InventoryItem> {
+export async function updateItem(itemID: string, input: UpdateItemInput, options: MutationRequestOptions = {}): Promise<InventoryItem> {
   const data = await request<{ item: InventoryItem }>(`/api/v1/items/${encodeURIComponent(itemID)}`, {
     method: "PATCH",
+    headers: mutationHeaders(options),
     body: JSON.stringify(input),
-  });
+  }, options);
   return data.item;
 }
 
@@ -143,16 +153,31 @@ export async function listItemEvents(itemID: string, options?: APIRequestOptions
   return data.events;
 }
 
-export async function archiveItem(itemID: string): Promise<InventoryItem> {
-  const data = await request<{ item: InventoryItem }>(`/api/v1/items/${encodeURIComponent(itemID)}`, { method: "DELETE" });
+export async function archiveItem(itemID: string, options: MutationRequestOptions = {}): Promise<InventoryItem> {
+  const data = await request<{ item: InventoryItem }>(`/api/v1/items/${encodeURIComponent(itemID)}`, {
+    method: "DELETE",
+    headers: mutationHeaders(options),
+  }, options);
   return data.item;
 }
 
-export async function restoreItem(itemID: string): Promise<InventoryItem> {
-  const data = await request<{ item: InventoryItem }>(`/api/v1/items/${encodeURIComponent(itemID)}/restore`, { method: "POST" });
+export async function restoreItem(itemID: string, options: MutationRequestOptions = {}): Promise<InventoryItem> {
+  const data = await request<{ item: InventoryItem }>(`/api/v1/items/${encodeURIComponent(itemID)}/restore`, {
+    method: "POST",
+    headers: mutationHeaders(options),
+  }, options);
   return data.item;
 }
 
 export async function exportInventory(): Promise<InventoryExport> {
   return request<InventoryExport>("/api/v1/export");
+}
+
+function mutationHeaders(options: MutationRequestOptions): HeadersInit {
+  return {
+    ...(options.operationId ? { "X-Operation-ID": options.operationId } : {}),
+    ...(options.expectedVersion !== undefined ? { "If-Match": String(options.expectedVersion) } : {}),
+    ...(options.deviceId ? { "X-Device-ID": options.deviceId } : {}),
+    ...(options.clientTime ? { "X-Client-Time": options.clientTime } : {}),
+  };
 }

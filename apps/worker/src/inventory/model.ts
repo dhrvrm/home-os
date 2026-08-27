@@ -61,6 +61,7 @@ export interface InventoryFilter {
 }
 
 export interface CreateItemInput {
+  id?: string;
   name: string;
   alternativeNames?: string[];
   category?: string;
@@ -84,6 +85,7 @@ export interface UpdateItemInput {
 }
 
 export interface ApplyStockEventInput {
+  id?: string;
   type: StockEventType;
   quantity?: number;
   stockLevel?: StockLevel;

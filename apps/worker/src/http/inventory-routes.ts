@@ -10,6 +10,7 @@ import { success } from "./envelope";
 const trackingMode = z.enum(["simple", "exact"]);
 const stockLevel = z.enum(["full", "okay", "low", "out"]);
 const createItemInput = z.object({
+  id: z.string().min(1).optional(),
   name: z.string(),
   alternativeNames: z.array(z.string()).optional(),
   category: z.string().optional(),
@@ -31,6 +32,7 @@ const updateItemInput = z.object({
   minQuantity: z.number().optional(),
 });
 const stockEventInput = z.object({
+  id: z.string().min(1).optional(),
   type: z.enum(["consume", "restock", "mark_level"]),
   quantity: z.number().optional(),
   stockLevel: stockLevel.optional(),
