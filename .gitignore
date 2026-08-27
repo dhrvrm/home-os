@@ -5,6 +5,7 @@ node_modules/
 .next/
 out/
 dist/
+bin/
 coverage/
 *.tsbuildinfo
 apps/web/public/vendor/wllama.wasm
