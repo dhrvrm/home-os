@@ -1,23 +1,30 @@
-import { exports } from "cloudflare:workers";
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
+import { apiWithAuth, createAuthenticatedHome, type AuthenticatedHome } from "./auth-helpers";
 
+let authenticatedHome: AuthenticatedHome;
 async function sync(body: unknown): Promise<Response> {
-  return exports.default.fetch(
-    new Request("https://home-os.test/api/v1/sync", {
+  return apiWithAuth(
+    "/api/v1/sync",
+    authenticatedHome.cookie,
+    {
       method: "POST",
       headers: { "Content-Type": "application/json", "X-Device-ID": "offline-test" },
       body: JSON.stringify(body),
-    }),
+    },
   );
 }
 
 describe("offline synchronization", () => {
+  beforeAll(async () => {
+    authenticatedHome = await createAuthenticatedHome("sync-api");
+  });
+
   it("applies ordered operations, replays safely, and returns authoritative projections", async () => {
     const itemId = "offline-rice";
     const operations = [
       {
         operationId: "sync-create-rice",
-        householdId: "home",
+        householdId: authenticatedHome.householdId,
         deviceId: "offline-test",
         kind: "inventory.create",
         entityId: itemId,
@@ -35,7 +42,7 @@ describe("offline synchronization", () => {
       },
       {
         operationId: "sync-consume-rice",
-        householdId: "home",
+        householdId: authenticatedHome.householdId,
         deviceId: "offline-test",
         kind: "inventory.stock",
         entityId: itemId,
@@ -83,7 +90,7 @@ describe("offline synchronization", () => {
       operations: [
         {
           operationId: "sync-create-soap",
-          householdId: "home",
+          householdId: authenticatedHome.householdId,
           deviceId: "offline-test",
           kind: "inventory.create",
           entityId: itemId,
@@ -99,7 +106,7 @@ describe("offline synchronization", () => {
       operations: [
         {
           operationId: "sync-stale-soap",
-          householdId: "home",
+          householdId: authenticatedHome.householdId,
           deviceId: "offline-test",
           kind: "inventory.update",
           entityId: itemId,
@@ -126,7 +133,7 @@ describe("offline synchronization", () => {
       cursor: 0,
       operations: Array.from({ length: 51 }, (_, index) => ({
         operationId: `too-many-${index}`,
-        householdId: "home",
+        householdId: authenticatedHome.householdId,
         deviceId: "offline-test",
         kind: "inventory.create",
         entityId: `item-${index}`,

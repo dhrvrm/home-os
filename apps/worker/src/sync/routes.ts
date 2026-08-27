@@ -1,6 +1,6 @@
 import { Hono, type Context } from "hono";
 import { z } from "zod";
-import type { Env } from "../env";
+import type { AppContext, RequestAuth } from "../auth/context";
 import { D1InventoryRepository } from "../inventory/d1-repository";
 import { InventoryService } from "../inventory/service";
 import { listAuditEvents } from "../platform/audit";
@@ -59,8 +59,8 @@ const stockPayload = z.object({
   note: z.string().optional(),
 });
 
-export function createSyncRoutes(): Hono<{ Bindings: Env }> {
-  const routes = new Hono<{ Bindings: Env }>();
+export function createSyncRoutes(): Hono<AppContext> {
+  const routes = new Hono<AppContext>();
 
   routes.post("/sync", async (context) => {
     const parsed = syncRequestSchema.safeParse(await readJSON(context));
@@ -68,7 +68,8 @@ export function createSyncRoutes(): Hono<{ Bindings: Env }> {
       const issue = parsed.error.issues[0];
       throw new ValidationError(issue?.path.join(".") || "body", issue?.message ?? "is invalid");
     }
-    const householdId = context.env.HOMEOS_DEFAULT_HOUSEHOLD_ID;
+    const auth = context.get("auth");
+    const householdId = auth.household!.id;
     const service = new InventoryService(new D1InventoryRepository(context.env.DB));
     const results: SyncResponse["results"] = [];
 
@@ -82,7 +83,7 @@ export function createSyncRoutes(): Hono<{ Bindings: Env }> {
         continue;
       }
       try {
-        await applyOperation(service, operation);
+        await applyOperation(service, operation, auth);
         results.push({ operationId: operation.operationId, status: "accepted" });
       } catch (error) {
         results.push(await operationError(service, operation, error));
@@ -105,10 +106,14 @@ export function createSyncRoutes(): Hono<{ Bindings: Env }> {
   return routes;
 }
 
-async function applyOperation(service: InventoryService, operation: SyncOperation): Promise<void> {
+async function applyOperation(
+  service: InventoryService,
+  operation: SyncOperation,
+  auth: RequestAuth,
+): Promise<void> {
   const context: CommandContext = {
     householdId: operation.householdId,
-    actorId: "local-owner",
+    actorId: auth.membershipId!,
     actorType: "member",
     source: "pwa",
     operationId: operation.operationId,
@@ -165,7 +170,7 @@ function parsePayload<T extends z.ZodType>(schema: T, payload: unknown): z.infer
   return parsed.data;
 }
 
-async function readJSON(context: Context<{ Bindings: Env }>): Promise<unknown> {
+async function readJSON(context: Context<AppContext>): Promise<unknown> {
   try {
     return await context.req.json();
   } catch {

@@ -26,6 +26,11 @@ export interface RequestAuth {
   household: DomainHousehold | null;
 }
 
+export type AppContext = {
+  Bindings: Env;
+  Variables: { auth: RequestAuth };
+};
+
 interface OrganizationRow {
   id: string;
   name: string;

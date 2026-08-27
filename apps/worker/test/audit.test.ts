@@ -1,11 +1,16 @@
-import { exports } from "cloudflare:workers";
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
+import { apiWithAuth, createAuthenticatedHome, type AuthenticatedHome } from "./auth-helpers";
 
+let authenticatedHome: AuthenticatedHome;
 async function api(path: string, init?: RequestInit): Promise<Response> {
-  return exports.default.fetch(new Request(`https://home-os.test${path}`, init));
+  return apiWithAuth(path, authenticatedHome.cookie, init);
 }
 
 describe("household audit trail", () => {
+  beforeAll(async () => {
+    authenticatedHome = await createAuthenticatedHome("audit-api");
+  });
+
   it("records append-only safe deltas with authoritative cursors", async () => {
     const created = await api("/api/v1/items", {
       method: "POST",
@@ -50,7 +55,7 @@ describe("household audit trail", () => {
     expect(envelope.data.events).toHaveLength(1);
     expect(envelope.data.events[0]).toMatchObject({
       action: "inventory.item.created",
-      actorId: "local-owner",
+      actorId: authenticatedHome.membershipId,
       source: "pwa",
       deviceId: "phone-1",
       operationId: "audit-create-soap",

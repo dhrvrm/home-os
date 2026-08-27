@@ -17,6 +17,7 @@ export default defineConfig(async () => {
             GOOGLE_CLIENT_ID: "test-google-client-id",
             GOOGLE_CLIENT_SECRET: "test-google-client-secret",
             HOMEOS_TEST_AUTH: "true",
+            HOMEOS_MCP_TOKEN: "test-mcp-token",
           },
         },
       }),

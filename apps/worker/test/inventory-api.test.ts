@@ -1,11 +1,23 @@
 import { exports } from "cloudflare:workers";
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
+import { apiWithAuth, createAuthenticatedHome } from "./auth-helpers";
 
+let authCookie = "";
 async function api(path: string, init?: RequestInit): Promise<Response> {
-  return exports.default.fetch(new Request(`https://home-os.test${path}`, init));
+  return apiWithAuth(path, authCookie, init);
 }
 
 describe("inventory HTTP API", () => {
+  beforeAll(async () => {
+    authCookie = (await createAuthenticatedHome("inventory-api")).cookie;
+  });
+
+  it("requires authentication", async () => {
+    const response = await exports.default.fetch(new Request("https://home-os.test/api/v1/items"));
+    expect(response.status).toBe(401);
+    await expect(response.json()).resolves.toMatchObject({ error: { code: "unauthorized" } });
+  });
+
   it("preserves inventory behavior, idempotency, conflicts, lifecycle, and export", async () => {
     const createBody = {
       name: "Rice",
@@ -141,5 +153,20 @@ describe("inventory HTTP API", () => {
     const missing = await api("/api/v1/items/missing");
     expect(missing.status).toBe(404);
     await expect(missing.json()).resolves.toMatchObject({ data: null, error: { code: "not_found" } });
+  });
+
+  it("isolates inventory between organizations", async () => {
+    const firstItem = await api("/api/v1/items", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Operation-ID": `isolation-${crypto.randomUUID()}` },
+      body: JSON.stringify({ name: "First home only" }),
+    });
+    expect(firstItem.status).toBe(201);
+
+    const otherHome = await createAuthenticatedHome("other-inventory-api");
+    const otherItems = await apiWithAuth("/api/v1/items", otherHome.cookie);
+    expect(otherItems.status).toBe(200);
+    const envelope = await otherItems.json<{ data: { items: Array<{ name: string }> } }>();
+    expect(envelope.data.items.map(({ name }) => name)).not.toContain("First home only");
   });
 });

@@ -1,23 +1,23 @@
 import { Hono } from "hono";
-import type { Env } from "../env";
+import type { AppContext } from "../auth/context";
 import { listAuditEvents } from "../platform/audit";
 import { ValidationError } from "../platform/errors";
 import { success } from "./envelope";
 
-export function createActivityRoutes(): Hono<{ Bindings: Env }> {
-  const routes = new Hono<{ Bindings: Env }>();
+export function createActivityRoutes(): Hono<AppContext> {
+  const routes = new Hono<AppContext>();
 
   routes.get("/activity", async (context) => {
     const result = await listAuditEvents(
       context.env.DB,
-      context.env.HOMEOS_DEFAULT_HOUSEHOLD_ID,
+      context.get("auth").household!.id,
       activityFilter(context.req.query()),
     );
     return success(context, result);
   });
 
   routes.get("/items/:id/activity", async (context) => {
-    const result = await listAuditEvents(context.env.DB, context.env.HOMEOS_DEFAULT_HOUSEHOLD_ID, {
+    const result = await listAuditEvents(context.env.DB, context.get("auth").household!.id, {
       ...activityFilter(context.req.query()),
       entityType: "inventory_item",
       entityId: context.req.param("id"),

@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { z } from "zod";
-import type { Env } from "../env";
+import type { AppContext } from "../auth/context";
 import { D1InventoryRepository } from "../inventory/d1-repository";
 import { InventoryService } from "../inventory/service";
 import { ValidationError } from "../platform/errors";
@@ -40,8 +40,8 @@ const stockEventInput = z.object({
   note: z.string().optional(),
 });
 
-export function createInventoryRoutes(): Hono<{ Bindings: Env }> {
-  const routes = new Hono<{ Bindings: Env }>();
+export function createInventoryRoutes(): Hono<AppContext> {
+  const routes = new Hono<AppContext>();
 
   routes.get("/items", async (context) => {
     const archived = context.req.query("archived") || "exclude";
@@ -53,7 +53,7 @@ export function createInventoryRoutes(): Hono<{ Bindings: Env }> {
       throw new ValidationError("stockLevel", "must be full, okay, low, or out");
     }
     const service = inventoryService(context.env.DB);
-    const items = await service.listItems(context.env.HOMEOS_DEFAULT_HOUSEHOLD_ID, {
+    const items = await service.listItems(context.get("auth").household!.id, {
       query: context.req.query("q"),
       category: context.req.query("category"),
       stockLevel: requestedStock as z.infer<typeof stockLevel> | undefined,
@@ -70,7 +70,7 @@ export function createInventoryRoutes(): Hono<{ Bindings: Env }> {
 
   routes.get("/items/:id", async (context) => {
     const item = await inventoryService(context.env.DB).getItem(
-      context.env.HOMEOS_DEFAULT_HOUSEHOLD_ID,
+      context.get("auth").household!.id,
       context.req.param("id"),
     );
     return success(context, { item });
@@ -98,7 +98,7 @@ export function createInventoryRoutes(): Hono<{ Bindings: Env }> {
 
   routes.get("/items/:id/events", async (context) => {
     const events = await inventoryService(context.env.DB).listEvents(
-      context.env.HOMEOS_DEFAULT_HOUSEHOLD_ID,
+      context.get("auth").household!.id,
       context.req.param("id"),
       context.req.query("since"),
     );
@@ -117,11 +117,12 @@ export function createInventoryRoutes(): Hono<{ Bindings: Env }> {
 
   routes.get("/export", async (context) => {
     const service = inventoryService(context.env.DB);
-    const items = await service.listItems(context.env.HOMEOS_DEFAULT_HOUSEHOLD_ID, { archived: "include" });
+    const householdId = context.get("auth").household!.id;
+    const items = await service.listItems(householdId, { archived: "include" });
     const exported = await Promise.all(
       items.map(async (item) => ({
         item,
-        events: await service.listEvents(context.env.HOMEOS_DEFAULT_HOUSEHOLD_ID, item.id),
+        events: await service.listEvents(householdId, item.id),
       })),
     );
     return success(context, { version: 1 as const, exportedAt: new Date().toISOString(), items: exported });

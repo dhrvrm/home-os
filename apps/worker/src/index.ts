@@ -1,5 +1,6 @@
 import { Hono } from "hono";
-import type { Env } from "./env";
+import { createAuth } from "./auth/auth";
+import { resolveRequestAuth, type AppContext } from "./auth/context";
 import { createActivityRoutes } from "./http/activity-routes";
 import { failure, success } from "./http/envelope";
 import { createInventoryRoutes } from "./http/inventory-routes";
@@ -7,7 +8,7 @@ import { HomeOSError, ValidationError } from "./platform/errors";
 import { createSyncRoutes } from "./sync/routes";
 import { createMcpRoutes } from "./mcp/routes";
 
-const app = new Hono<{ Bindings: Env }>();
+const app = new Hono<AppContext>();
 
 app.use("*", async (context, next) => {
   await next();
@@ -25,6 +26,37 @@ app.get("/readyz", async (context) => {
   } catch {
     return failure(context, { code: "not_ready", message: "Home OS storage is unavailable." }, 503);
   }
+});
+
+app.all("/api/auth/*", (context) => createAuth(context.env).handler(context.req.raw));
+
+app.get("/api/v1/session", async (context) => {
+  const auth = await resolveRequestAuth(context.req.raw, context.env);
+  if (!auth) return success(context, { authenticated: false as const });
+  return success(context, {
+    authenticated: true as const,
+    user: auth.user,
+    organizations: auth.organizations,
+    activeOrganization: auth.organization,
+    membership: auth.membershipId && auth.role ? { id: auth.membershipId, role: auth.role } : null,
+    household: auth.household,
+  });
+});
+
+app.use("/api/v1/*", async (context, next) => {
+  const auth = await resolveRequestAuth(context.req.raw, context.env);
+  if (!auth) {
+    return failure(context, { code: "unauthorized", message: "Sign in to use Home OS." }, 401);
+  }
+  if (!auth.household || !auth.organization || !auth.membershipId) {
+    return failure(
+      context,
+      { code: "organization_required", message: "Create or select a home before continuing." },
+      409,
+    );
+  }
+  context.set("auth", auth);
+  await next();
 });
 
 app.route("/api/v1", createActivityRoutes());

@@ -1,11 +1,13 @@
 import { exports } from "cloudflare:workers";
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
+import { apiWithAuth, createAuthenticatedHome, type AuthenticatedHome } from "./auth-helpers";
 
 const mcpHeaders = {
   Accept: "application/json, text/event-stream",
   Authorization: "Bearer test-mcp-token",
   "Content-Type": "application/json",
 };
+let authenticatedHome: AuthenticatedHome;
 
 async function callMcp(method: string, params?: unknown, id = 1): Promise<Response> {
   return exports.default.fetch(new Request("https://home-os.test/mcp", {
@@ -24,6 +26,10 @@ async function jsonRpc<T>(response: Response): Promise<T> {
 }
 
 describe("read-only MCP server", () => {
+  beforeAll(async () => {
+    authenticatedHome = await createAuthenticatedHome("mcp-api");
+  });
+
   it("requires the configured bearer token", async () => {
     const response = await exports.default.fetch(new Request("https://home-os.test/mcp", {
       method: "POST",
@@ -57,11 +63,11 @@ describe("read-only MCP server", () => {
   });
 
   it("queries D1 inventory through MCP", async () => {
-    const create = await exports.default.fetch(new Request("https://home-os.test/api/v1/items", {
+    const create = await apiWithAuth("/api/v1/items", authenticatedHome.cookie, {
       method: "POST",
       headers: { "Content-Type": "application/json", "X-Operation-ID": "mcp-seed-item" },
       body: JSON.stringify({ name: "Masoor dal", alternativeNames: ["मसूर दाल"], categories: ["Food", "Staples"], levelPercent: 20 }),
-    }));
+    });
     expect(create.status).toBe(201);
 
     const response = await callMcp("tools/call", {
