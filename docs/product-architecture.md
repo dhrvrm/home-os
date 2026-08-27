@@ -114,3 +114,7 @@ Household timeline, subscriptions, renewals, utility dates, rule conditions, pro
 Versioned import/export and separately authorized integrations for calendars, messaging, shopping, and financial sources. External MCP servers remain isolated connectors; they do not receive household data without explicit member authorization.
 
 Each iteration ships working software and receives its own implementation plan. Cloudflare products are added only when their behavior is required: D1 for relational shared data, R2 for documents, Queues and Cron for notification delivery, and Durable Objects only if measured coordination requirements cannot be satisfied by optimistic D1 commands.
+
+## Requirements and traceability
+
+The canonical [product requirements](requirements.md) assign stable functional and non-functional IDs, measurable acceptance conditions, and an honest release state. An item moves from planned or current iteration to shipped only when its implementation, automated acceptance evidence, and operational documentation land together.

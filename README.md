@@ -2,6 +2,8 @@
 
 Home OS is an offline-first shared operating system for roommates. Inventory is the first complete module; the same household, sync, audit, and MCP foundations are designed to grow into shopping and notifications, important contacts and documents, Splitwise-style expenses, chores, maintenance, and controlled automations.
 
+The canonical [functional and non-functional requirements](docs/requirements.md) distinguish shipped behavior from the planned household modules.
+
 Inventory currently supports:
 
 - simple 0–100 stock levels and exact quantity tracking;
