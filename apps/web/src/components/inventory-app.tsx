@@ -36,9 +36,10 @@ import { StockDialog } from "./stock-dialog";
 type PrimaryView = "inventory" | "shopping";
 type StockDialogState = { item: InventoryItem; action: "consume" | "restock" | "mark_level" };
 
-export function InventoryApp({ householdId = "home", actorId = "local-owner" }: {
+export function InventoryApp({ householdId = "home", actorId = "local-owner", homeName = "Our home" }: {
   householdId?: string;
   actorId?: string;
+  homeName?: string;
 }) {
   const inventory = useInventory(householdId, actorId);
   const items = useMemo(() => sortItems(inventory.items), [inventory.items]);
@@ -225,14 +226,14 @@ export function InventoryApp({ householdId = "home", actorId = "local-owner" }: 
         </nav>
         <div className="sidebar__home">
           <span className="home-avatar">H</span>
-          <div><strong>Our home</strong><small>{items.length} tracked items</small></div>
+          <div><strong>{homeName}</strong><small>{items.length} tracked items</small></div>
         </div>
       </aside>
 
       <main id="main" className="main-content">
         <header className="topbar">
           <div>
-            <p className="topbar__context">Our home</p>
+            <p className="topbar__context">{homeName}</p>
             <h1>{view === "inventory" ? "Inventory" : "Shopping"}</h1>
           </div>
           <div className="topbar__actions">
