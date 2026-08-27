@@ -12,6 +12,27 @@ const built = spawnSync("npm", ["run", "build", "--workspace", "@home-os/web"], 
 });
 if (built.status !== 0) process.exit(built.status ?? 1);
 
+const migrated = spawnSync(
+  "npm",
+  [
+    "exec",
+    "--workspace",
+    "@home-os/worker",
+    "--",
+    "wrangler",
+    "d1",
+    "migrations",
+    "apply",
+    "home-os",
+    "--local",
+  ],
+  {
+    stdio: ["ignore", "inherit", "inherit"],
+    shell: process.platform === "win32",
+  },
+);
+if (migrated.status !== 0) process.exit(migrated.status ?? 1);
+
 const worker = spawn("npm", ["run", "dev", "--workspace", "@home-os/worker", "--", "--port", port], {
   stdio: "inherit",
   shell: process.platform === "win32",

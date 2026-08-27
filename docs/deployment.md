@@ -81,11 +81,7 @@ cp apps/worker/.dev.vars.example apps/worker/.dev.vars
 npm run dev
 ```
 
-The local URL is `http://localhost:8787`. Wrangler keeps local D1 state in its ignored `.wrangler` directory. Local migrations are explicit:
-
-```bash
-npm exec --workspace @home-os/worker -- wrangler d1 migrations apply home-os --local
-```
+The local URL is `http://localhost:8787`. Wrangler keeps local D1 state in its ignored `.wrangler` directory. The launcher applies pending local migrations before it starts the Worker.
 
 ## CI and release order
 

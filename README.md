@@ -42,11 +42,7 @@ cp apps/worker/.dev.vars.example apps/worker/.dev.vars
 npm run dev
 ```
 
-Open `http://localhost:8787`. The launcher builds the static PWA, then Wrangler serves the app, API, MCP endpoint, and local D1 from one origin. Apply local migrations after adding a migration:
-
-```bash
-npm exec --workspace @home-os/worker -- wrangler d1 migrations apply home-os --local
-```
+Open `http://localhost:8787`. The launcher builds the static PWA, applies pending local D1 migrations, then Wrangler serves the app, API, MCP endpoint, and database from one origin.
 
 ## Verify
 
