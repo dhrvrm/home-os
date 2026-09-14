@@ -1,4 +1,4 @@
-import type { Cadence, Forecast, InventoryItem, StockLevel } from "./inventory";
+import type { Cadence, Forecast, InventoryItem, RestockDue, StockLevel } from "./inventory";
 
 export function stockLabel(level: StockLevel): string {
   return { full: "Full", okay: "Okay", low: "Low", out: "Out" }[level];
@@ -21,6 +21,25 @@ export function cadenceLabel(cadence?: Cadence): string {
   if (!cadence) return "Learning usage";
   const days = Math.max(1, Math.round(cadence.averageIntervalDays));
   return `Used about every ${days} day${days === 1 ? "" : "s"}`;
+}
+
+export function restockDueLabel(due: RestockDue): string {
+  if (due.status === "overdue") {
+    const days = Math.max(1, Math.round(-due.dueInDays));
+    return `Restock overdue by ${days} day${days === 1 ? "" : "s"}`;
+  }
+  if (due.status === "due_soon") {
+    const days = Math.max(0, Math.round(due.dueInDays));
+    return days === 0 ? "Restock due today" : `Restock due in ${days} day${days === 1 ? "" : "s"}`;
+  }
+  const days = Math.round(due.dueInDays);
+  return `Restock in ${days} day${days === 1 ? "" : "s"}`;
+}
+
+export function restockIntervalLabel(intervalDays: number): string {
+  if (intervalDays === 7) return "Restock weekly";
+  if (intervalDays === 1) return "Restock daily";
+  return `Restock every ${intervalDays} days`;
 }
 
 export function relativeUpdate(value: string): string {
