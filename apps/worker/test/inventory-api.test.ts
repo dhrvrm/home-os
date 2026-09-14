@@ -142,4 +142,65 @@ describe("inventory HTTP API", () => {
     expect(missing.status).toBe(404);
     await expect(missing.json()).resolves.toMatchObject({ data: null, error: { code: "not_found" } });
   });
+
+  it("carries the declared restock interval through create, update, and read", async () => {
+    const createdResponse = await api("/api/v1/items", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Operation-ID": "api-create-milk" },
+      body: JSON.stringify({ name: "Milk", restockIntervalDays: 7 }),
+    });
+    expect(createdResponse.status).toBe(201);
+    const created = await createdResponse.json<{
+      data: { item: { id: string; restockIntervalDays: number | null } };
+    }>();
+    expect(created.data.item.restockIntervalDays).toBe(7);
+    const itemId = created.data.item.id;
+
+    const patchedResponse = await api(`/api/v1/items/${itemId}`, {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Operation-ID": "api-update-milk",
+        "If-Match": "1",
+      },
+      body: JSON.stringify({ restockIntervalDays: 14 }),
+    });
+    expect(patchedResponse.status).toBe(200);
+    const patched = await patchedResponse.json<{
+      data: {
+        item: {
+          restockIntervalDays: number | null;
+          restockDue?: { status: string; lastRestockedAt: string | null };
+        };
+      };
+    }>();
+    expect(patched.data.item.restockIntervalDays).toBe(14);
+    expect(patched.data.item.restockDue?.status).toBe("ok");
+    expect(patched.data.item.restockDue?.lastRestockedAt).toBeNull();
+
+    const clearedResponse = await api(`/api/v1/items/${itemId}`, {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Operation-ID": "api-clear-milk",
+        "If-Match": "2",
+      },
+      body: JSON.stringify({ restockIntervalDays: null }),
+    });
+    expect(clearedResponse.status).toBe(200);
+    const cleared = await clearedResponse.json<{
+      data: { item: { restockIntervalDays: number | null; restockDue?: unknown } };
+    }>();
+    expect(cleared.data.item.restockIntervalDays).toBeNull();
+    expect(cleared.data.item.restockDue).toBeUndefined();
+  });
+
+  it("rejects an invalid restock interval", async () => {
+    const response = await api("/api/v1/items", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Operation-ID": "api-invalid-interval" },
+      body: JSON.stringify({ name: "Milk", restockIntervalDays: -2 }),
+    });
+    expect(response.status).toBe(400);
+  });
 });

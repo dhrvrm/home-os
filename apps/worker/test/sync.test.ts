@@ -138,4 +138,34 @@ describe("offline synchronization", () => {
     expect(response.status).toBe(400);
     await expect(response.json()).resolves.toMatchObject({ data: null, error: { code: "invalid_request" } });
   });
+
+  it("accepts a create operation carrying restockIntervalDays and returns the enriched item", async () => {
+    const itemId = "item-restock-1";
+    const response = await sync({
+      cursor: 0,
+      operations: [
+        {
+          operationId: "sync-create-paneer",
+          householdId: "home",
+          deviceId: "offline-test",
+          kind: "inventory.create",
+          entityId: itemId,
+          expectedVersion: 0,
+          clientTime: "2026-08-27T08:00:00.000Z",
+          payload: { name: "Paneer", restockIntervalDays: 5 },
+        },
+      ],
+    });
+    expect(response.status).toBe(200);
+    const body = await response.json<{
+      data: {
+        results: Array<{ status: string }>;
+        items: Array<{ id: string; restockIntervalDays: number | null; restockDue?: { status: string } }>;
+      };
+    }>();
+    expect(body.data.results[0]?.status).toBe("accepted");
+    const item = body.data.items.find((candidate) => candidate.id === itemId);
+    expect(item?.restockIntervalDays).toBe(5);
+    expect(item?.restockDue?.status).toBe("ok");
+  });
 });

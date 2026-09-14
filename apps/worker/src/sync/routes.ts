@@ -41,6 +41,7 @@ const createPayload = z.object({
   stockLevel: z.enum(["full", "okay", "low", "out"]).optional(),
   levelPercent: z.number().optional(),
   minQuantity: z.number().optional(),
+  restockIntervalDays: z.number().nullable().optional(),
 });
 const updatePayload = z.object({
   name: z.string().optional(),
@@ -49,6 +50,7 @@ const updatePayload = z.object({
   location: z.string().optional(),
   unit: z.string().optional(),
   minQuantity: z.number().optional(),
+  restockIntervalDays: z.number().nullable().optional(),
 });
 const stockPayload = z.object({
   id: z.string().optional(),

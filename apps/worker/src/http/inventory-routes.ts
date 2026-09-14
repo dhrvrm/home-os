@@ -22,6 +22,7 @@ const createItemInput = z.object({
   stockLevel: stockLevel.optional(),
   levelPercent: z.number().optional(),
   minQuantity: z.number().optional(),
+  restockIntervalDays: z.number().nullable().optional(),
 });
 const updateItemInput = z.object({
   name: z.string().optional(),
@@ -30,6 +31,7 @@ const updateItemInput = z.object({
   location: z.string().optional(),
   unit: z.string().optional(),
   minQuantity: z.number().optional(),
+  restockIntervalDays: z.number().nullable().optional(),
 });
 const stockEventInput = z.object({
   id: z.string().min(1).optional(),
