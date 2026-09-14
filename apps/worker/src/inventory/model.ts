@@ -17,6 +17,18 @@ export interface Cadence {
   confidence: Confidence;
 }
 
+export type RestockDueStatus = "ok" | "due_soon" | "overdue";
+
+export interface RestockDue {
+  intervalDays: number;
+  lastRestockedAt: string | null;
+  daysSinceRestock: number;
+  dueInDays: number;
+  status: RestockDueStatus;
+}
+
+export type AttentionReason = "low_stock" | "out_of_stock" | "due_soon" | "overdue";
+
 export interface InventoryItem {
   id: string;
   householdId: string;
@@ -31,9 +43,12 @@ export interface InventoryItem {
   stockLevel: StockLevel;
   levelPercent: number;
   minQuantity: number;
+  restockIntervalDays: number | null;
   version: number;
   forecast?: Forecast;
   cadence?: Cadence;
+  restockDue?: RestockDue;
+  attentionReasons?: AttentionReason[];
   archivedAt: string | null;
   createdAt: string;
   updatedAt: string;
@@ -73,6 +88,7 @@ export interface CreateItemInput {
   stockLevel?: StockLevel;
   levelPercent?: number;
   minQuantity?: number;
+  restockIntervalDays?: number | null;
 }
 
 export interface UpdateItemInput {
@@ -82,6 +98,7 @@ export interface UpdateItemInput {
   location?: string;
   unit?: string;
   minQuantity?: number;
+  restockIntervalDays?: number | null;
 }
 
 export interface ApplyStockEventInput {

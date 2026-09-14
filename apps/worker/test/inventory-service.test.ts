@@ -9,9 +9,10 @@ import type {
 import type {
   InventoryFilter,
   InventoryItem,
+  RestockDue,
   StockEvent,
 } from "../src/inventory/model";
-import { calculateCadence, calculateForecast } from "../src/inventory/forecast";
+import { attentionReasonsFor, calculateCadence, calculateForecast, calculateRestockDue } from "../src/inventory/forecast";
 import { InventoryService } from "../src/inventory/service";
 
 class MemoryInventoryRepository implements InventoryRepository {
@@ -316,5 +317,56 @@ describe("inventory forecasting", () => {
       lastConsumedAt: "2026-08-25T12:00:00.000Z",
       confidence: "low",
     });
+  });
+});
+
+describe("calculateRestockDue", () => {
+  const baseItem = {
+    createdAt: "2026-09-01T00:00:00.000Z",
+    restockIntervalDays: 10,
+  } as InventoryItem;
+
+  it("returns undefined without a declared interval", () => {
+    const item = { ...baseItem, restockIntervalDays: null } as InventoryItem;
+    expect(calculateRestockDue(item, "2026-09-05T00:00:00.000Z", new Date("2026-09-10T00:00:00.000Z"))).toBeUndefined();
+  });
+
+  it("is ok early in the interval", () => {
+    const due = calculateRestockDue(baseItem, "2026-09-05T00:00:00.000Z", new Date("2026-09-08T00:00:00.000Z"));
+    expect(due).toEqual({
+      intervalDays: 10,
+      lastRestockedAt: "2026-09-05T00:00:00.000Z",
+      daysSinceRestock: 3,
+      dueInDays: 7,
+      status: "ok",
+    });
+  });
+
+  it("is due soon inside the last 20 percent of the interval", () => {
+    const due = calculateRestockDue(baseItem, "2026-09-05T00:00:00.000Z", new Date("2026-09-13T12:00:00.000Z"));
+    expect(due?.status).toBe("due_soon");
+    expect(due?.dueInDays).toBe(1.5);
+  });
+
+  it("is overdue once elapsed time reaches the interval", () => {
+    const due = calculateRestockDue(baseItem, "2026-09-05T00:00:00.000Z", new Date("2026-09-16T00:00:00.000Z"));
+    expect(due?.status).toBe("overdue");
+    expect(due?.dueInDays).toBe(-1);
+  });
+
+  it("anchors on createdAt when no restock event exists", () => {
+    const due = calculateRestockDue(baseItem, null, new Date("2026-09-12T00:00:00.000Z"));
+    expect(due?.lastRestockedAt).toBeNull();
+    expect(due?.daysSinceRestock).toBe(11);
+    expect(due?.status).toBe("overdue");
+  });
+});
+
+describe("attentionReasonsFor", () => {
+  it("combines observed and declared origins", () => {
+    expect(attentionReasonsFor("out", { status: "due_soon" } as RestockDue)).toEqual(["out_of_stock", "due_soon"]);
+    expect(attentionReasonsFor("low", undefined)).toEqual(["low_stock"]);
+    expect(attentionReasonsFor("okay", { status: "overdue" } as RestockDue)).toEqual(["overdue"]);
+    expect(attentionReasonsFor("full", { status: "ok" } as RestockDue)).toEqual([]);
   });
 });
