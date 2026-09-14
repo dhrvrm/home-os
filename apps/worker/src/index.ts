@@ -4,6 +4,7 @@ import { createActivityRoutes } from "./http/activity-routes";
 import { failure, success } from "./http/envelope";
 import { createExpenseRoutes } from "./http/expense-routes";
 import { createInventoryRoutes } from "./http/inventory-routes";
+import { createMemberRoutes } from "./http/member-routes";
 import { ConflictError, HomeOSError, ValidationError } from "./platform/errors";
 import { createSyncRoutes } from "./sync/routes";
 import { createMcpRoutes } from "./mcp/routes";
@@ -32,6 +33,7 @@ app.route("/api/v1", createActivityRoutes());
 app.route("/api/v1", createSyncRoutes());
 app.route("/api/v1", createInventoryRoutes());
 app.route("/api/v1", createExpenseRoutes());
+app.route("/api/v1", createMemberRoutes());
 app.route("/", createMcpRoutes());
 
 app.onError((error, context) => {
