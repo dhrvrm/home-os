@@ -7,6 +7,7 @@ import type {
   UpdateItemInput,
   UpdateItemMetadataInput,
 } from "./inventory";
+import type { CreateExpenseInput, ExpenseRule, Member, UpdateExpenseInput } from "./expenses";
 
 interface APIErrorBody {
   code: string;
@@ -167,6 +168,60 @@ export async function restoreItem(itemID: string, options: MutationRequestOption
     headers: mutationHeaders(options),
   }, options);
   return data.item;
+}
+
+export interface ListExpensesOptions extends APIRequestOptions {
+  archived?: "only" | "include";
+}
+
+export async function listExpenses(options: ListExpensesOptions = {}): Promise<ExpenseRule[]> {
+  const path = options.archived ? `/api/v1/expenses?archived=${options.archived}` : "/api/v1/expenses";
+  const data = await request<{ rules: ExpenseRule[] }>(path, undefined, options);
+  return data.rules;
+}
+
+export async function getExpense(ruleID: string, options?: APIRequestOptions): Promise<ExpenseRule> {
+  const data = await request<{ rule: ExpenseRule }>(`/api/v1/expenses/${encodeURIComponent(ruleID)}`, undefined, options);
+  return data.rule;
+}
+
+export async function createExpense(input: CreateExpenseInput, options: MutationRequestOptions = {}): Promise<ExpenseRule> {
+  const data = await request<{ rule: ExpenseRule }>("/api/v1/expenses", {
+    method: "POST",
+    headers: mutationHeaders(options),
+    body: JSON.stringify(input),
+  }, options);
+  return data.rule;
+}
+
+export async function updateExpense(ruleID: string, input: UpdateExpenseInput, options: MutationRequestOptions = {}): Promise<ExpenseRule> {
+  const data = await request<{ rule: ExpenseRule }>(`/api/v1/expenses/${encodeURIComponent(ruleID)}`, {
+    method: "PATCH",
+    headers: mutationHeaders(options),
+    body: JSON.stringify(input),
+  }, options);
+  return data.rule;
+}
+
+export async function archiveExpense(ruleID: string, options: MutationRequestOptions = {}): Promise<ExpenseRule> {
+  const data = await request<{ rule: ExpenseRule }>(`/api/v1/expenses/${encodeURIComponent(ruleID)}`, {
+    method: "DELETE",
+    headers: mutationHeaders(options),
+  }, options);
+  return data.rule;
+}
+
+export async function restoreExpense(ruleID: string, options: MutationRequestOptions = {}): Promise<ExpenseRule> {
+  const data = await request<{ rule: ExpenseRule }>(`/api/v1/expenses/${encodeURIComponent(ruleID)}/restore`, {
+    method: "POST",
+    headers: mutationHeaders(options),
+  }, options);
+  return data.rule;
+}
+
+export async function listMembers(options?: APIRequestOptions): Promise<Member[]> {
+  const data = await request<{ members: Member[] }>("/api/v1/members", undefined, options);
+  return data.members;
 }
 
 export async function exportInventory(): Promise<InventoryExport> {

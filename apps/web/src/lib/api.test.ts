@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { listItems, updateItemMetadata } from "./api";
+import { listExpenses, listItems, updateExpense, updateItemMetadata } from "./api";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -45,5 +45,42 @@ describe("inventory metadata API", () => {
     ]);
 
     expect(outcome).toMatchObject({ code: "timeout" });
+  });
+});
+
+describe("recurring expenses API", () => {
+  it("sends a guarded PATCH and returns the revised rule", async () => {
+    const rule = { id: "electricity", version: 2, amountMinor: 6000 };
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ data: { rule }, error: null }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      updateExpense("electricity", { amountMinor: 6000 }, { expectedVersion: 1, operationId: "op-1" }),
+    ).resolves.toEqual(rule);
+    expect(fetchMock).toHaveBeenCalledWith("/api/v1/expenses/electricity", expect.objectContaining({
+      method: "PATCH",
+      headers: expect.objectContaining({ "If-Match": "1", "X-Operation-ID": "op-1" }),
+      body: JSON.stringify({ amountMinor: 6000 }),
+    }));
+  });
+
+  it("surfaces a stale-version conflict as a conflict-coded error", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(
+      JSON.stringify({ data: null, error: { code: "conflict", message: "This rule changed elsewhere." } }),
+      { status: 409 },
+    )));
+
+    await expect(updateExpense("electricity", { amountMinor: 7000 }, { expectedVersion: 1 })).rejects.toMatchObject({
+      code: "conflict",
+      message: "This rule changed elsewhere.",
+    });
+  });
+
+  it("requests archived rules when asked", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ data: { rules: [] }, error: null }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(listExpenses({ archived: "only" })).resolves.toEqual([]);
+    expect(fetchMock).toHaveBeenCalledWith("/api/v1/expenses?archived=only", expect.anything());
   });
 });
