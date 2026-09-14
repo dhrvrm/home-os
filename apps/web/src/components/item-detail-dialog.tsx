@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { Archive, ClockCounterClockwise, PencilSimple, SlidersHorizontal, X } from "@phosphor-icons/react";
-import { quantityLabel, stockLabel } from "@/lib/format";
+import { cadenceLabel, forecastLabel, quantityLabel, restockDueLabel, restockIntervalLabel, stockLabel } from "@/lib/format";
 import type { InventoryItem, StockEvent } from "@/lib/inventory";
 
 interface ItemDetailDialogProps {
@@ -56,9 +56,24 @@ export function ItemDetailDialog({ item, events, loading, error, readOnly = fals
         <div className="item-detail__body">
           <dl className="item-detail__facts">
             <div><dt>Stock</dt><dd>{item.trackingMode === "simple" ? `${Math.round(item.levelPercent)}% · ${stockLabel(item.stockLevel)}` : quantityLabel(item)}</dd></div>
+            <div><dt>Location</dt><dd>{item.location}</dd></div>
             <div><dt>Categories</dt><dd>{(item.categories?.length ? item.categories : [item.category]).join(", ")}</dd></div>
             <div><dt>Other names</dt><dd>{item.alternativeNames.length ? item.alternativeNames.join(", ") : "None"}</dd></div>
             {item.trackingMode === "exact" && <div><dt>Low threshold</dt><dd>{item.minQuantity} {item.unit}</dd></div>}
+            {item.cadence && <div><dt>Usage</dt><dd>{cadenceLabel(item.cadence)}</dd></div>}
+            {item.trackingMode === "exact" && item.forecast && <div><dt>Forecast</dt><dd>{forecastLabel(item.forecast)}</dd></div>}
+            {item.restockIntervalDays != null && <div><dt>Restock schedule</dt><dd>{restockIntervalLabel(item.restockIntervalDays)}</dd></div>}
+            {item.restockDue && (
+              <div>
+                <dt>Next restock</dt>
+                <dd>
+                  {restockDueLabel(item.restockDue)}
+                  {item.restockDue.lastRestockedAt
+                    ? ` · last restocked ${formatDate(item.restockDue.lastRestockedAt)}`
+                    : " · never restocked yet"}
+                </dd>
+              </div>
+            )}
           </dl>
           <div className="item-detail__actions">
             <button className="button button--quiet" type="button" onClick={onEdit} disabled={readOnly}><PencilSimple size={16} aria-hidden="true" /> Edit item</button>

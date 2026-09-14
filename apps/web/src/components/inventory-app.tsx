@@ -22,6 +22,7 @@ import {
 import { BrowserAssistant } from "@/lib/browser-assistant";
 import type { AssistantProposal } from "@/lib/inventory-assistant";
 import type { ApplyEventInput, CreateItemInput, InventoryItem, StockEvent, UpdateItemInput } from "@/lib/inventory";
+import { needsAttention } from "@/lib/restock";
 import { homeOSDatabase } from "@/offline/db";
 import { useInventory } from "@/offline/use-inventory";
 import { EmptyState } from "./empty-state";
@@ -71,7 +72,7 @@ export function InventoryApp() {
       return matchesCategory && matchesQuery;
     });
   }, [category, items, query]);
-  const attentionCount = items.filter((item) => item.stockLevel === "low" || item.stockLevel === "out").length;
+  const attentionCount = items.filter(needsAttention).length;
   const locations = new Set(items.map((item) => item.location)).size;
 
   async function addItem(input: CreateItemInput) {

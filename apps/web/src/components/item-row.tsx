@@ -1,7 +1,7 @@
 "use client";
 
 import { ArrowCounterClockwise, Minus, Package, SlidersHorizontal, Warning } from "@phosphor-icons/react";
-import { cadenceLabel, forecastLabel, quantityLabel, relativeUpdate, stockLabel } from "@/lib/format";
+import { cadenceLabel, forecastLabel, quantityLabel, relativeUpdate, restockDueLabel, stockLabel } from "@/lib/format";
 import type { ApplyEventInput, InventoryItem } from "@/lib/inventory";
 
 interface ItemRowProps {
@@ -19,7 +19,7 @@ export function ItemRow({ item, pending, disabled = false, onAction, onOpenStock
   return (
     <article className="item-row">
       <div className={`item-symbol item-symbol--${item.stockLevel}`} aria-hidden="true">
-        {item.stockLevel === "low" || item.stockLevel === "out" ? <Warning size={20} weight="fill" /> : <Package size={20} weight="duotone" />}
+        {item.stockLevel === "low" || item.stockLevel === "out" || (item.restockDue && item.restockDue.status !== "ok") ? <Warning size={20} weight="fill" /> : <Package size={20} weight="duotone" />}
       </div>
       <div className="item-identity">
         <h3>{item.name}</h3>
@@ -28,6 +28,11 @@ export function ItemRow({ item, pending, disabled = false, onAction, onOpenStock
       </div>
       <div className="item-stock">
         <span className={`status status--${item.stockLevel}`}>{stockLabel(item.stockLevel)}</span>
+        {item.restockDue && item.restockDue.status !== "ok" && (
+          <span className={`status status--${item.restockDue.status === "overdue" ? "out" : "low"}`}>
+            {item.restockDue.status === "overdue" ? "Overdue" : "Due soon"}
+          </span>
+        )}
         {item.trackingMode === "simple" ? (
           <div className="stock-meter">
             <meter className={`stock-meter__bar stock-meter__bar--${item.stockLevel}`} min="0" max="100" value={item.levelPercent} aria-label={`${item.name} level`} />
@@ -37,7 +42,13 @@ export function ItemRow({ item, pending, disabled = false, onAction, onOpenStock
       </div>
       <div className="item-pace">
         <strong>{cadenceLabel(item.cadence)}</strong>
-        <span>{item.trackingMode === "exact" && item.forecast ? forecastLabel(item.forecast) : relativeUpdate(item.updatedAt)}</span>
+        <span>
+          {item.restockDue
+            ? restockDueLabel(item.restockDue)
+            : item.trackingMode === "exact" && item.forecast
+              ? forecastLabel(item.forecast)
+              : relativeUpdate(item.updatedAt)}
+        </span>
       </div>
       <div className="item-actions">
         <button className="button button--small button--quiet" type="button" disabled={disabled || pending || item.stockLevel === "out"} onClick={() => item.trackingMode === "exact" ? onOpenStock(item, "consume") : onAction(item, { type: "consume", quantity: consumeQuantity })} aria-label={`Use ${item.name}`}>

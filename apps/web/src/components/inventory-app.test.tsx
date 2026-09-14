@@ -46,6 +46,32 @@ const rice: InventoryItem = {
   updatedAt: "2026-08-24T10:00:00Z",
 };
 
+const milk: InventoryItem = {
+  id: "milk",
+  name: "Milk",
+  alternativeNames: [],
+  category: "Food",
+  categories: ["Food"],
+  location: "Fridge",
+  unit: "litre",
+  trackingMode: "exact",
+  quantity: 2,
+  stockLevel: "okay",
+  levelPercent: 0,
+  minQuantity: 1,
+  restockIntervalDays: 7,
+  restockDue: {
+    intervalDays: 7,
+    lastRestockedAt: "2026-08-15T10:00:00Z",
+    daysSinceRestock: 9,
+    dueInDays: -2,
+    status: "overdue",
+  },
+  attentionReasons: ["overdue"],
+  createdAt: "2026-08-01T10:00:00Z",
+  updatedAt: "2026-08-24T10:00:00Z",
+};
+
 beforeEach(async () => {
   await homeOSDatabase.delete();
   await homeOSDatabase.open();
@@ -356,5 +382,32 @@ describe("InventoryApp", () => {
     await user.click(await screen.findByRole("button", { name: "Restore" }));
     await user.click(screen.getByRole("button", { name: "Active" }));
     expect(await screen.findByText("Dish soap")).toBeInTheDocument();
+  });
+
+  it("shows an overdue badge on the item row and counts it as needing attention", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ data: { items: [milk] }, error: null }), { status: 200 }),
+    ));
+    render(<InventoryApp />);
+    expect(await screen.findByText("Milk")).toBeInTheDocument();
+    expect(screen.getByText("Overdue")).toBeInTheDocument();
+    expect(screen.getByText("Restock overdue by 2 days")).toBeInTheDocument();
+    const stats = screen.getByLabelText("Inventory summary");
+    const attention = within(stats).getByText("Need attention").closest("div")!;
+    expect(within(attention).getByText("1")).toBeInTheDocument();
+  });
+
+  it("includes interval-due items on the shopping list with the reason", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ data: { items: [milk, rice] }, error: null }), { status: 200 }),
+    ));
+    const user = userEvent.setup();
+    render(<InventoryApp />);
+    await screen.findByText("Milk");
+    await user.click(screen.getAllByRole("button", { name: "Shopping" })[0]);
+    expect(await screen.findByText("Buy next")).toBeInTheDocument();
+    const list = screen.getByRole("heading", { name: "Milk" }).closest("article")!;
+    expect(within(list).getByText("Overdue")).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Rice" })).not.toBeInTheDocument();
   });
 });
