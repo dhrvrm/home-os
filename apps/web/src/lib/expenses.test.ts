@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   describeCadence,
+  formatBasisPoints,
   formatMinorAmount,
+  minorAmountInputValue,
+  parseBasisPoints,
   parseMinorAmount,
   resolveShares,
   type SplitParticipant,
@@ -181,6 +184,20 @@ describe("expense formatting", () => {
     expect(parseMinorAmount("", "INR")).toBeNull();
     expect(parseMinorAmount("-5", "INR")).toBeNull();
     expect(parseMinorAmount("abc", "INR")).toBeNull();
+  });
+
+  it("converts percentage entries to integer basis points and back", () => {
+    expect(parseBasisPoints("25.5")).toBe(2550);
+    expect(parseBasisPoints("100")).toBe(10000);
+    expect(parseBasisPoints("25.555")).toBeNull();
+    expect(formatBasisPoints(2550)).toBe("25.5");
+    expect(formatBasisPoints(10000)).toBe("100");
+  });
+
+  it("renders minor units as an editable major-unit entry", () => {
+    expect(minorAmountInputValue(500000, "INR")).toBe("5000.00");
+    expect(minorAmountInputValue(5, "INR")).toBe("0.05");
+    expect(minorAmountInputValue(1235, "JPY")).toBe("1235");
   });
 
   it("describes a cadence in plain language", () => {

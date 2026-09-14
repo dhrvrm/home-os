@@ -219,6 +219,29 @@ export function parseMinorAmount(value: string, currency: string): number | null
   return Number(`${whole}${fraction.padEnd(minorUnit, "0")}`);
 }
 
+const PERCENT_DECIMALS = 2;
+
+/** Parses a percentage entry (up to two decimals) into integer basis points, or null. */
+export function parseBasisPoints(value: string): number | null {
+  const trimmed = value.trim();
+  if (!/^\d+(\.\d*)?$/.test(trimmed)) return null;
+  const [whole, fraction = ""] = trimmed.split(".");
+  if (fraction.length > PERCENT_DECIMALS) return null;
+  return Number(`${whole}${fraction.padEnd(PERCENT_DECIMALS, "0")}`);
+}
+
+export function formatBasisPoints(basisPoints: number): string {
+  return (basisPoints / 100).toFixed(PERCENT_DECIMALS).replace(/\.?0+$/, "");
+}
+
+/** Renders integer minor units as a plain major-unit entry the amount inputs can hold. */
+export function minorAmountInputValue(amountMinor: number, currency: string): string {
+  const minorUnit = minorUnitOf(currency);
+  if (minorUnit === 0) return String(amountMinor);
+  const digits = String(amountMinor).padStart(minorUnit + 1, "0");
+  return `${digits.slice(0, -minorUnit)}.${digits.slice(-minorUnit)}`;
+}
+
 const CADENCE_NOUNS: Record<CadenceUnit, string> = {
   day: "day",
   week: "week",

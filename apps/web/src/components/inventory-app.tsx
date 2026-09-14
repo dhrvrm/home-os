@@ -10,6 +10,7 @@ import {
   MagnifyingGlass,
   Package,
   Plus,
+  Receipt,
   ShoppingCartSimple,
   Sparkle,
   WarningCircle,
@@ -31,10 +32,11 @@ import { ItemDetailDialog } from "./item-detail-dialog";
 import { ItemEditDialog } from "./item-edit-dialog";
 import { ItemForm } from "./item-form";
 import { ItemRow } from "./item-row";
+import { ExpensesView } from "./expenses-view";
 import { ShoppingView } from "./shopping-view";
 import { StockDialog } from "./stock-dialog";
 
-type PrimaryView = "inventory" | "shopping";
+type PrimaryView = "inventory" | "shopping" | "expenses";
 type StockDialogState = { item: InventoryItem; action: "consume" | "restock" | "mark_level" };
 
 export function InventoryApp() {
@@ -220,6 +222,7 @@ export function InventoryApp() {
         <nav className="primary-nav" aria-label="Primary navigation">
           <button className={view === "inventory" ? "nav-link is-active" : "nav-link"} type="button" onClick={() => setView("inventory")}><Package size={19} weight="duotone" aria-hidden="true" />Inventory</button>
           <button className={view === "shopping" ? "nav-link is-active" : "nav-link"} type="button" onClick={() => setView("shopping")}><ShoppingCartSimple size={19} aria-hidden="true" />Shopping</button>
+          <button className={view === "expenses" ? "nav-link is-active" : "nav-link"} type="button" onClick={() => setView("expenses")}><Receipt size={19} weight="duotone" aria-hidden="true" />Expenses</button>
         </nav>
         <div className="sidebar__home">
           <span className="home-avatar">H</span>
@@ -231,7 +234,7 @@ export function InventoryApp() {
         <header className="topbar">
           <div>
             <p className="topbar__context">Our home</p>
-            <h1>{view === "inventory" ? "Inventory" : "Shopping"}</h1>
+            <h1>{viewTitle(view)}</h1>
           </div>
           <div className="topbar__actions">
             {view === "inventory" && <button className="button button--quiet topbar__assistant" type="button" onClick={() => setShowAssistant(true)}>
@@ -300,13 +303,14 @@ export function InventoryApp() {
           )}
           {showArchived && archivedItems.length === 0 && <div className="no-results"><Archive size={26} aria-hidden="true" /><h3>No archived items</h3><p>Items you archive will stay recoverable here.</p></div>}
           {showArchived && archivedItems.length > 0 && <div className="archived-list">{archivedItems.map((item) => <article key={item.id}><div><h3>{item.name}</h3><p>{item.location} · archived {item.archivedAt ? formatSavedAt(item.archivedAt) : "recently"}</p></div><button className="button button--small button--quiet" type="button" disabled={pendingItem === item.id} onClick={() => void restoreArchived(item)}>Restore</button></article>)}</div>}
-        </section> : <ShoppingView items={items} pendingItem={pendingItem} disabled={false} onRestock={(item) => item.trackingMode === "exact" ? setStockDialog({ item, action: "restock" }) : void runAction(item, { type: "restock" })} />}
+        </section> : view === "shopping" ? <ShoppingView items={items} pendingItem={pendingItem} disabled={false} onRestock={(item) => item.trackingMode === "exact" ? setStockDialog({ item, action: "restock" }) : void runAction(item, { type: "restock" })} /> : <ExpensesView />}
       </main>
 
       <nav className="mobile-nav" aria-label="Mobile navigation">
         <button className={view === "inventory" ? "is-active mobile-nav__section" : "mobile-nav__section"} type="button" onClick={() => setView("inventory")}><Package size={20} weight="fill" aria-hidden="true" /><span>Inventory</span></button>
         <button type="button" onClick={() => setShowForm(true)} aria-label="Add item"><Plus size={22} weight="bold" aria-hidden="true" /></button>
         <button className={view === "shopping" ? "is-active mobile-nav__section" : "mobile-nav__section"} type="button" onClick={() => setView("shopping")}><ShoppingCartSimple size={20} aria-hidden="true" /><span>Shopping</span></button>
+        <button className={view === "expenses" ? "is-active mobile-nav__section" : "mobile-nav__section"} type="button" onClick={() => setView("expenses")}><Receipt size={20} aria-hidden="true" /><span>Expenses</span></button>
       </nav>
 
       {showForm && <ItemForm pending={saving} error={mutationError} onClose={() => { setShowForm(false); setMutationError(null); }} onSubmit={addItem} />}
@@ -316,6 +320,10 @@ export function InventoryApp() {
       {stockDialog && <StockDialog item={stockDialog.item} action={stockDialog.action} pending={pendingItem === stockDialog.item.id} error={mutationError} onClose={() => { setStockDialog(null); setMutationError(null); }} onSubmit={(input) => runAction(stockDialog.item, input)} />}
     </div>
   );
+}
+
+function viewTitle(view: PrimaryView): string {
+  return { inventory: "Inventory", shopping: "Shopping", expenses: "Expenses" }[view];
 }
 
 function itemCategories(item: InventoryItem): string[] {
