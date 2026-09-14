@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import type { Env } from "./env";
 import { createActivityRoutes } from "./http/activity-routes";
 import { failure, success } from "./http/envelope";
+import { createExpenseRoutes } from "./http/expense-routes";
 import { createInventoryRoutes } from "./http/inventory-routes";
 import { ConflictError, HomeOSError, ValidationError } from "./platform/errors";
 import { createSyncRoutes } from "./sync/routes";
@@ -30,6 +31,7 @@ app.get("/readyz", async (context) => {
 app.route("/api/v1", createActivityRoutes());
 app.route("/api/v1", createSyncRoutes());
 app.route("/api/v1", createInventoryRoutes());
+app.route("/api/v1", createExpenseRoutes());
 app.route("/", createMcpRoutes());
 
 app.onError((error, context) => {

@@ -40,6 +40,16 @@ Every stock change is an event. After two consumption events, Home OS derives a 
 
 An item has one primary `name`, zero or more language-agnostic `alternativeNames`, and one or more `categories`. Alternative names make household terms such as Hindi names searchable without changing the primary display identity. Categories are ordered; the first value is also exposed as singular `category` for compatibility with v1 clients. The service trims and case-insensitively deduplicates both collections, defaults an empty category list to `Other`, and allows up to eight alternative names and nine categories.
 
+## Recurring expenses
+
+A recurring expense is a rule, not an event. It names a total, a cadence, and a split, and every member's share follows from the rule alone. Home OS does not yet record what a given period actually cost, who paid, or who owes whom: there is no ledger and no settlement, and period materialization is a later module that will build on this rule store.
+
+Money is stored and computed exclusively in integer minor units, so a 4,500.00 rupee rent is `450000`. Each currency declares its minor unit (`INR`, `USD`, `EUR`, and `GBP` use 2; `JPY` uses 0). Share overrides are either a fixed amount in minor units or a percentage in integer basis points, where 10000 basis points is the whole total.
+
+Shares resolve in a fixed order: fixed amounts come out of the total first, percentages are taken from the total next, and whatever remains is divided equally among the participants with no override. Rounding never loses or invents a minor unit — the shares always sum exactly to the total, and any remainder is handed to the earliest participants in the rule's own participant order, so every device resolving the same rule reaches the same answer. A rule whose overrides exceed the total, or that leaves nobody to absorb the remainder, is rejected rather than silently adjusted.
+
+Resolved shares are derived on every read rather than stored, so storage cannot drift from the rule. A rule naming a member who has since left the household keeps resolving and is flagged as needing attention; such a member cannot be added to a rule, but a rule that already names one stays readable and revisable.
+
 ## API contract
 
 The current version is namespaced under `/api/v1`:
@@ -54,6 +64,12 @@ The current version is namespaced under `/api/v1`:
 - `POST /api/v1/items/{id}/restore`
 - `GET /api/v1/items/{id}/events`
 - `POST /api/v1/items/{id}/events`
+- `GET /api/v1/expenses?archived=`
+- `POST /api/v1/expenses`
+- `GET /api/v1/expenses/{id}`
+- `PATCH /api/v1/expenses/{id}`
+- `DELETE /api/v1/expenses/{id}`
+- `POST /api/v1/expenses/{id}/restore`
 - `GET /api/v1/export`
 - `POST /api/v1/sync`
 - `GET /api/v1/activity`
@@ -65,7 +81,7 @@ Responses use one envelope:
 {"data": {}, "error": null}
 ```
 
-Errors replace `data` with `null` and include a stable code plus a readable message. Request bodies are size-limited, writes are validated in the domain service, and an inventory event plus its resulting item state, idempotency result, and audit event are committed as one D1 batch.
+Errors replace `data` with `null` and include a stable code plus a readable message. A conflict may also carry the entity as it now stands, so a caller holding a stale version can rebase without a second request. Request bodies are size-limited, writes are validated in the domain service, and an inventory event plus its resulting item state, idempotency result, and audit event are committed as one D1 batch.
 
 Item responses include both `categories` and the compatibility `category` projection. New clients should send `categories` and `alternativeNames`; older requests that send only `category` remain valid.
 
