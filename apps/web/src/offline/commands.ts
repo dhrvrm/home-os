@@ -1,4 +1,5 @@
 import type { ApplyEventInput, CreateItemInput, InventoryItem, UpdateItemInput } from "@/lib/inventory";
+import { computeRestockDue } from "@/lib/restock";
 import type { HomeOSDatabase } from "./db";
 import type { OutboxOperation, OutboxOperationKind, StoredInventoryItem, StoredStockEvent } from "./schema";
 
@@ -37,12 +38,15 @@ export async function createLocalItem(
     stockLevel: trackingMode === "exact" ? exactLevel(quantity, minQuantity) : simpleLevel(levelPercent),
     levelPercent,
     minQuantity,
+    restockIntervalDays: input.restockIntervalDays ?? null,
     version: 1,
     archivedAt: null,
     createdAt: now,
     updatedAt: now,
     syncState: "pending",
   };
+  const restockDue = computeRestockDue(item, null, new Date(now));
+  if (restockDue) item.restockDue = restockDue;
 
   await database.transaction("rw", [database.items, database.outbox], async () => {
     await database.items.add(item);
@@ -57,6 +61,7 @@ export async function createLocalItem(
         quantity: item.quantity,
         levelPercent: item.levelPercent,
         minQuantity: item.minQuantity,
+        restockIntervalDays: item.restockIntervalDays,
       }),
     );
   });
@@ -77,6 +82,7 @@ export async function updateLocalItem(
       ...(input.location !== undefined ? { location: input.location.trim() || "Unassigned" } : {}),
       ...(input.unit !== undefined ? { unit: input.unit.trim() || "item" } : {}),
       ...(input.minQuantity !== undefined ? { minQuantity: Math.max(0, input.minQuantity) } : {}),
+      ...(input.restockIntervalDays !== undefined ? { restockIntervalDays: input.restockIntervalDays } : {}),
       updatedAt: commandNow(options),
       version: current.version + 1,
       syncState: "pending",
@@ -89,6 +95,11 @@ export async function updateLocalItem(
     if (input.categories !== undefined) {
       next.categories = normalizeList(input.categories);
       next.category = next.categories[0] ?? "Other";
+    }
+    if (input.restockIntervalDays !== undefined) {
+      const due = computeRestockDue(next, next.restockDue?.lastRestockedAt ?? null, new Date(next.updatedAt));
+      if (due) next.restockDue = due;
+      else delete next.restockDue;
     }
     await database.items.put(next);
     await database.outbox.add(
@@ -149,6 +160,10 @@ export async function applyLocalStockEvent(
       occurredAt,
       createdAt: occurredAt,
     };
+    if (input.type === "restock") {
+      const due = computeRestockDue(next, occurredAt, new Date(occurredAt));
+      if (due) next.restockDue = due;
+    }
     await database.items.put(next);
     await database.stockEvents.add(event);
     await database.outbox.add(
