@@ -64,6 +64,7 @@ export function ItemForm({ pending, error, onClose, onSubmit }: ItemFormProps) {
       quantity: mode === "exact" ? Number(data.get("quantity") ?? 0) : 0,
       levelPercent: mode === "simple" ? levelPercent : undefined,
       minQuantity: mode === "exact" ? Number(data.get("minQuantity") ?? 0) : 0,
+      restockIntervalDays: parseInterval(data.get("restockIntervalDays")),
     });
   }
 
@@ -135,6 +136,12 @@ export function ItemForm({ pending, error, onClose, onSubmit }: ItemFormProps) {
             <input name="location" defaultValue="Pantry" maxLength={80} />
           </label>
 
+          <label className="field field--wide">
+            <span>Restock every (days)</span>
+            <input name="restockIntervalDays" type="number" min="1" max="3650" step="1" placeholder="7" />
+            <small className="field__help">Optional. For things you buy on a schedule — 7 means weekly, like fresh produce. Leave empty to rely on stock level alone.</small>
+          </label>
+
           {mode === "exact" && (
             <>
               <label className="field">
@@ -162,4 +169,10 @@ export function ItemForm({ pending, error, onClose, onSubmit }: ItemFormProps) {
       </section>
     </div>
   );
+}
+
+function parseInterval(raw: FormDataEntryValue | null): number | null {
+  const value = String(raw ?? "").trim();
+  if (!value) return null;
+  return Number(value);
 }

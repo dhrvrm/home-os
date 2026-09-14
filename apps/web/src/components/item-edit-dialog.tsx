@@ -57,6 +57,7 @@ export function ItemEditDialog({ item, pending, error, onClose, onSubmit }: Item
       location: String(data.get("location") ?? ""),
       unit: String(data.get("unit") ?? ""),
       minQuantity: item.trackingMode === "exact" ? Number(data.get("minQuantity") ?? 0) : undefined,
+      restockIntervalDays: parseInterval(data.get("restockIntervalDays")),
     });
   }
 
@@ -92,6 +93,11 @@ export function ItemEditDialog({ item, pending, error, onClose, onSubmit }: Item
           <label className="field field--wide"><span>Custom categories</span><input name="customCategories" defaultValue={customCategories} placeholder="Staples, Festival supplies" /><small className="field__help">Separate custom categories with commas.</small></label>
           <label className="field"><span>Location</span><input name="location" defaultValue={item.location} required maxLength={80} /></label>
           <label className="field"><span>Unit</span><input name="unit" defaultValue={item.unit} required maxLength={30} /></label>
+          <label className="field field--wide">
+            <span>Restock every (days)</span>
+            <input name="restockIntervalDays" type="number" min="1" max="3650" step="1" defaultValue={item.restockIntervalDays ?? ""} placeholder="7" />
+            <small className="field__help">Optional. 7 means weekly. Clear the field to stop time-based reminders.</small>
+          </label>
           {item.trackingMode === "exact" && <label className="field field--wide"><span>Low-stock threshold</span><input name="minQuantity" type="number" min="0" step="0.1" defaultValue={item.minQuantity} required /></label>}
           {error && <p className="form-error" role="alert">{error}</p>}
           <footer className="dialog__actions field--wide">
@@ -102,6 +108,12 @@ export function ItemEditDialog({ item, pending, error, onClose, onSubmit }: Item
       </section>
     </div>
   );
+}
+
+function parseInterval(raw: FormDataEntryValue | null): number | null {
+  const value = String(raw ?? "").trim();
+  if (!value) return null;
+  return Number(value);
 }
 
 function splitValues(value: string): string[] {
