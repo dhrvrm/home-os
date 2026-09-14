@@ -14,6 +14,7 @@ interface ItemRow {
   stock_level: InventoryItem["stockLevel"];
   level_percent: number;
   min_quantity: number;
+  restock_interval_days: number | null;
   version: number;
   created_at: string;
   updated_at: string;
@@ -53,7 +54,7 @@ export class D1InventoryRepository implements InventoryRepository {
     const result = await this.database
       .prepare(
         `SELECT id, household_id, name, location, unit, tracking_mode, quantity,
-                stock_level, level_percent, min_quantity, version,
+                stock_level, level_percent, min_quantity, restock_interval_days, version,
                 created_at, updated_at, archived_at
            FROM inventory_items
           WHERE household_id = ?
@@ -83,7 +84,7 @@ export class D1InventoryRepository implements InventoryRepository {
     const row = await this.database
       .prepare(
         `SELECT id, household_id, name, location, unit, tracking_mode, quantity,
-                stock_level, level_percent, min_quantity, version,
+                stock_level, level_percent, min_quantity, restock_interval_days, version,
                 created_at, updated_at, archived_at
            FROM inventory_items
           WHERE household_id = ? AND id = ?`,
@@ -103,9 +104,9 @@ export class D1InventoryRepository implements InventoryRepository {
         .prepare(
           `INSERT INTO inventory_items (
              id, household_id, name, normalized_name, location, unit, tracking_mode,
-             quantity, stock_level, level_percent, min_quantity, version,
+             quantity, stock_level, level_percent, min_quantity, restock_interval_days, version,
              created_at, updated_at, archived_at
-           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .bind(
           item.id,
@@ -119,6 +120,7 @@ export class D1InventoryRepository implements InventoryRepository {
           item.stockLevel,
           item.levelPercent,
           item.minQuantity,
+          item.restockIntervalDays,
           item.version,
           item.createdAt,
           item.updatedAt,
@@ -140,7 +142,7 @@ export class D1InventoryRepository implements InventoryRepository {
         .prepare(
           `UPDATE inventory_items
               SET name = ?, normalized_name = ?, location = ?, unit = ?,
-                  min_quantity = ?, version = ?, updated_at = ?
+                  min_quantity = ?, restock_interval_days = ?, version = ?, updated_at = ?
             WHERE household_id = ? AND id = ? AND version = ?`,
         )
         .bind(
@@ -149,6 +151,7 @@ export class D1InventoryRepository implements InventoryRepository {
           item.location,
           item.unit,
           item.minQuantity,
+          item.restockIntervalDays,
           item.version,
           item.updatedAt,
           item.householdId,
@@ -273,6 +276,20 @@ export class D1InventoryRepository implements InventoryRepository {
     }));
   }
 
+  async latestRestockAt(householdId: string, itemId: string): Promise<string | null> {
+    const row = await this.database
+      .prepare(
+        `SELECT occurred_at
+           FROM inventory_stock_events
+          WHERE household_id = ? AND item_id = ? AND event_type = 'restock'
+          ORDER BY occurred_at DESC, id DESC
+          LIMIT 1`,
+      )
+      .bind(householdId, itemId)
+      .first<{ occurred_at: string }>();
+    return row?.occurred_at ?? null;
+  }
+
   private async hydrateItem(row: ItemRow): Promise<InventoryItem> {
     const [names, categories] = await this.database.batch([
       this.database
@@ -305,6 +322,7 @@ export class D1InventoryRepository implements InventoryRepository {
       stockLevel: row.stock_level,
       levelPercent: row.level_percent,
       minQuantity: row.min_quantity,
+      restockIntervalDays: row.restock_interval_days,
       version: row.version,
       archivedAt: row.archived_at,
       createdAt: row.created_at,
@@ -467,5 +485,7 @@ function durableItem(item: InventoryItem): InventoryItem {
   const clone = structuredClone(item);
   delete clone.forecast;
   delete clone.cadence;
+  delete clone.restockDue;
+  delete clone.attentionReasons;
   return clone;
 }

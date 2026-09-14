@@ -1,7 +1,7 @@
 import type { CommandContext } from "../platform/context";
 import { ValidationError } from "../platform/errors";
 import { createId } from "../platform/ids";
-import { calculateCadence, calculateForecast } from "./forecast";
+import { attentionReasonsFor, calculateCadence, calculateForecast, calculateRestockDue } from "./forecast";
 import type {
   ApplyStockEventInput,
   CreateItemInput,
@@ -16,6 +16,7 @@ import {
   assertNonNegative,
   assertPercentage,
   assertPositive,
+  assertRestockInterval,
   exactStockLevel,
   isStockLevel,
   normalizeValues,
@@ -105,6 +106,7 @@ export class InventoryService {
     const unit = withDefault(input.unit, "item");
     assertLength("location", location, 80);
     assertLength("unit", unit, 30);
+    assertRestockInterval(input.restockIntervalDays);
     const timestamp = this.now().toISOString();
     const item: InventoryItem = {
       id: input.id ?? this.newId(),
@@ -120,18 +122,21 @@ export class InventoryService {
       stockLevel,
       levelPercent,
       minQuantity,
+      restockIntervalDays: input.restockIntervalDays ?? null,
       version: 1,
       archivedAt: null,
       createdAt: timestamp,
       updatedAt: timestamp,
     };
 
-    return this.repository.createItem(item, {
-      context,
-      action: "inventory.item.created",
-      expectedVersion: 0,
-      changes: createdFields(item),
-    });
+    return this.enrich(
+      await this.repository.createItem(item, {
+        context,
+        action: "inventory.item.created",
+        expectedVersion: 0,
+        changes: createdFields(item),
+      }),
+    );
   }
 
   async updateItem(context: CommandContext, itemId: string, input: UpdateItemInput): Promise<InventoryItem> {
@@ -178,6 +183,10 @@ export class InventoryService {
       assertNonNegative("minQuantity", input.minQuantity);
       next.minQuantity = input.minQuantity;
     }
+    if (input.restockIntervalDays !== undefined) {
+      assertRestockInterval(input.restockIntervalDays);
+      next.restockIntervalDays = input.restockIntervalDays;
+    }
 
     next.updatedAt = this.now().toISOString();
     next.version = current.version + 1;
@@ -188,6 +197,7 @@ export class InventoryService {
       "location",
       "unit",
       "minQuantity",
+      "restockIntervalDays",
     ]);
     const updated = await this.repository.updateItem(
       next,
@@ -326,6 +336,14 @@ export class InventoryService {
     else delete enriched.forecast;
     if (cadence) enriched.cadence = cadence;
     else delete enriched.cadence;
+    if (item.restockIntervalDays !== null) {
+      const lastRestockedAt = await this.repository.latestRestockAt(item.householdId, item.id);
+      const restockDue = calculateRestockDue(enriched, lastRestockedAt, now);
+      if (restockDue) enriched.restockDue = restockDue;
+    } else {
+      delete enriched.restockDue;
+    }
+    enriched.attentionReasons = attentionReasonsFor(enriched.stockLevel, enriched.restockDue);
     return enriched;
   }
 }
@@ -360,6 +378,7 @@ function createdFields(item: InventoryItem): AuditChange[] {
     "stockLevel",
     "levelPercent",
     "minQuantity",
+    "restockIntervalDays",
   ];
   return fields.map((field) => ({ op: "add", path: `/${field}`, value: item[field] }));
 }

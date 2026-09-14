@@ -51,6 +51,18 @@ export function assertPositive(field: string, value: number): void {
   }
 }
 
+export const MAX_RESTOCK_INTERVAL_DAYS = 3650;
+
+export function assertRestockInterval(value: number | null | undefined): void {
+  if (value === null || value === undefined) return;
+  if (!Number.isInteger(value) || value <= 0 || value > MAX_RESTOCK_INTERVAL_DAYS) {
+    throw new ValidationError(
+      "restockIntervalDays",
+      `must be a whole number of days between 1 and ${MAX_RESTOCK_INTERVAL_DAYS}`,
+    );
+  }
+}
+
 export function assertPercentage(value: number | undefined): asserts value is number {
   if (value === undefined || !Number.isFinite(value) || value < 0 || value > 100) {
     throw new ValidationError("levelPercent", "must be between zero and 100");

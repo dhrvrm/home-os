@@ -23,4 +23,5 @@ export interface InventoryRepository {
   setArchived(item: InventoryItem, mutation: InventoryMutation): Promise<InventoryItem>;
   applyStockEvent(item: InventoryItem, event: StockEvent, mutation: InventoryMutation): Promise<InventoryItem>;
   listEvents(householdId: string, itemId: string, since: string): Promise<StockEvent[]>;
+  latestRestockAt(householdId: string, itemId: string): Promise<string | null>;
 }

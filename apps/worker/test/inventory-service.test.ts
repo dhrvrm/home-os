@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import type { CommandContext } from "../src/platform/context";
-import { ConflictError, NotFoundError } from "../src/platform/errors";
+import { ConflictError, NotFoundError, ValidationError } from "../src/platform/errors";
 import type {
   AuditChange,
   InventoryMutation,
@@ -76,6 +76,12 @@ class MemoryInventoryRepository implements InventoryRepository {
     return (this.events.get(itemId) ?? [])
       .filter((event) => event.occurredAt >= since)
       .map((event) => structuredClone(event));
+  }
+
+  async latestRestockAt(householdId: string, itemId: string): Promise<string | null> {
+    await this.getItem(householdId, itemId);
+    const restocks = (this.events.get(itemId) ?? []).filter((event) => event.type === "restock");
+    return restocks.at(-1)?.occurredAt ?? null;
   }
 
   private assertVersion(itemId: string, expectedVersion: number): void {
@@ -282,7 +288,62 @@ describe("InventoryService", () => {
       service.updateItem({ ...command, operationId: "operation-2", expectedVersion: 0 }, item.id, { name: "Old" }),
     ).rejects.toBeInstanceOf(ConflictError);
   });
+
+  it("persists a declared restock interval on create and update", async () => {
+    const created = await service.createItem(command, { name: "Milk", restockIntervalDays: 7 });
+    expect(created.restockIntervalDays).toBe(7);
+
+    const cleared = await service.updateItem(
+      { ...command, operationId: "operation-2", expectedVersion: 1 },
+      created.id,
+      { restockIntervalDays: null },
+    );
+    expect(cleared.restockIntervalDays).toBeNull();
+  });
+
+  it("rejects a non-positive or fractional interval", async () => {
+    await expect(service.createItem(command, { name: "Milk", restockIntervalDays: 0 })).rejects.toThrow(ValidationError);
+    await expect(service.createItem(command, { name: "Milk", restockIntervalDays: 1.5 })).rejects.toThrow(ValidationError);
+    await expect(service.createItem(command, { name: "Milk", restockIntervalDays: 4000 })).rejects.toThrow(ValidationError);
+  });
+
+  it("enriches items with due status anchored on the latest restock, unbounded by the 90-day window", async () => {
+    const created = await service.createItem(command, { name: "Atta", restockIntervalDays: 200 });
+    repository.events.set(created.id, [
+      {
+        id: "evt-old",
+        householdId: command.householdId,
+        itemId: created.id,
+        type: "restock",
+        quantity: 1,
+        stockLevel: "full",
+        levelPercent: 100,
+        note: "",
+        actorId: command.actorId,
+        occurredAt: isoDaysAgo(120),
+        createdAt: isoDaysAgo(120),
+      },
+    ]);
+    const item = await service.getItem(command.householdId, created.id);
+    expect(item.restockDue?.lastRestockedAt).toBe(isoDaysAgo(120));
+    expect(item.restockDue?.status).toBe("ok");
+    expect(item.attentionReasons).toEqual([]);
+  });
+
+  it("anchors due status on createdAt when never restocked and reports the attention verdict", async () => {
+    const created = await service.createItem(command, { name: "Curd", restockIntervalDays: 3 });
+    const stored = repository.items.get(created.id)!;
+    stored.createdAt = isoDaysAgo(5);
+    const item = await service.getItem(command.householdId, created.id);
+    expect(item.restockDue?.lastRestockedAt).toBeNull();
+    expect(item.restockDue?.status).toBe("overdue");
+    expect(item.attentionReasons).toContain("overdue");
+  });
 });
+
+function isoDaysAgo(days: number): string {
+  return new Date(now.getTime() - days * 24 * 60 * 60 * 1000).toISOString();
+}
 
 describe("inventory forecasting", () => {
   it("uses recent exact consumption and increases confidence with samples", () => {
