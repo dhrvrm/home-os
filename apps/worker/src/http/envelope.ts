@@ -5,6 +5,7 @@ export interface APIErrorBody {
   code: string;
   message: string;
   field?: string;
+  details?: unknown;
 }
 
 export interface Envelope<T> {

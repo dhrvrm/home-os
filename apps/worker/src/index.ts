@@ -3,7 +3,7 @@ import type { Env } from "./env";
 import { createActivityRoutes } from "./http/activity-routes";
 import { failure, success } from "./http/envelope";
 import { createInventoryRoutes } from "./http/inventory-routes";
-import { HomeOSError, ValidationError } from "./platform/errors";
+import { ConflictError, HomeOSError, ValidationError } from "./platform/errors";
 import { createSyncRoutes } from "./sync/routes";
 import { createMcpRoutes } from "./mcp/routes";
 
@@ -35,6 +35,9 @@ app.route("/", createMcpRoutes());
 app.onError((error, context) => {
   if (error instanceof ValidationError) {
     return failure(context, { code: error.code, message: error.message, field: error.field }, 400);
+  }
+  if (error instanceof ConflictError) {
+    return failure(context, { code: error.code, message: error.message, details: error.details }, 409);
   }
   if (error instanceof HomeOSError) {
     return failure(context, { code: error.code, message: error.message }, error.status as 404 | 409);

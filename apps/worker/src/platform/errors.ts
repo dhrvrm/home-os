@@ -33,6 +33,8 @@ export class ConflictError extends HomeOSError {
     readonly entityId: string,
     readonly expectedVersion: number,
     readonly actualVersion: number,
+    /** The entity as it now stands, so a caller holding a stale version can rebase on it. */
+    readonly details?: unknown,
   ) {
     super("This item changed on another device. Review the latest version before retrying.", "conflict", 409);
   }
