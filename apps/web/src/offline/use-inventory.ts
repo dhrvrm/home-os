@@ -23,6 +23,7 @@ import {
   updateLocalItem,
 } from "./commands";
 import { homeOSDatabase } from "./db";
+import { AccessChangedError, runHouseholdWork } from "@/auth/work";
 import type { OutboxOperation, StoredInventoryItem } from "./schema";
 import {
   hydrateAuthoritativeItems,
@@ -43,7 +44,7 @@ export function useInventory() {
   const [syncStatus, setSyncStatus] = useState<InventorySyncStatus>("starting");
   const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null);
 
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async () => runHouseholdWork(async (lease) => {
     setLoadError(null);
     setSyncStatus("syncing");
     try {
@@ -54,16 +55,21 @@ export function useInventory() {
         setSyncStatus(result.conflicts > 0 || unresolved > 0 ? "attention" : "synced");
       } else {
         const active = await listItems();
-        await hydrateAuthoritativeItems(homeOSDatabase, active);
+        lease.check();
+        await hydrateAuthoritativeItems(homeOSDatabase, active, "home", lease);
         const unresolved = await homeOSDatabase.outbox.where("state").equals("conflict").count();
         setSyncStatus(unresolved > 0 ? "attention" : "synced");
       }
+      lease.check();
       const now = new Date().toISOString();
       setLastSyncedAt(now);
       const local = await listLocalItems(homeOSDatabase);
+      lease.check();
       saveInventoryCache(local);
       setLoadState("ready");
     } catch (error) {
+      if (error instanceof AccessChangedError || (error instanceof APIError && ["unauthorized", "session_changed"].includes(error.code))) return;
+      lease.check();
       const count = await homeOSDatabase.items.count();
       const initialized = await homeOSDatabase.syncState.get("home");
       setSyncStatus("offline");
@@ -74,15 +80,17 @@ export function useInventory() {
         setLoadState("error");
       }
     }
-  }, []);
+  }).catch((error) => { if (!(error instanceof AccessChangedError)) throw error; }), []);
 
   useEffect(() => {
     let active = true;
-    void (async () => {
+    void runHouseholdWork(async (lease) => {
       if (await homeOSDatabase.items.count() === 0) {
         const legacy = loadInventoryCache();
         if (legacy) {
-          await hydrateAuthoritativeItems(homeOSDatabase, legacy.items);
+          lease.check();
+          await hydrateAuthoritativeItems(homeOSDatabase, legacy.items, "home", lease);
+          lease.check();
           await homeOSDatabase.syncState.put({
             householdId: "home",
             cursor: 0,
@@ -91,10 +99,16 @@ export function useInventory() {
           });
         }
       }
+      lease.check();
       if (!active) return;
       if (await homeOSDatabase.items.count() > 0) setLoadState("ready");
       await refresh();
-    })();
+    }).catch((error) => {
+      if (active && !(error instanceof AccessChangedError)) {
+        setLoadError(error instanceof Error ? error.message : "Your saved inventory could not be opened.");
+        setLoadState("error");
+      }
+    });
     const reconnect = () => { void refresh(); };
     const disconnect = () => setSyncStatus("offline");
     window.addEventListener("online", reconnect);
@@ -109,8 +123,15 @@ export function useInventory() {
   const commit = useCallback(async <T extends StoredInventoryItem>(
     localMutation: () => Promise<T>,
     remoteMutation: (local: T, operation: OutboxOperation, options: MutationRequestOptions) => Promise<InventoryItem>,
-  ): Promise<InventoryItem> => {
-    const local = await localMutation();
+  ): Promise<InventoryItem> => runHouseholdWork(async (lease) => {
+    lease.check();
+    const local = await homeOSDatabase.transaction("rw", [homeOSDatabase.items, homeOSDatabase.stockEvents, homeOSDatabase.outbox], async () => {
+      lease.check();
+      const result = await localMutation();
+      lease.check();
+      return result;
+    });
+    lease.check();
     const operation = await pendingOperationForItem(homeOSDatabase, local.id);
     if (!operation) throw new Error("The local change could not be queued.");
     setSyncStatus("syncing");
@@ -121,12 +142,20 @@ export function useInventory() {
         deviceId: operation.deviceId,
         clientTime: operation.clientTime,
       };
+      lease.check();
       const authoritative = await remoteMutation(local, operation, options);
-      const reconciled = await reconcileDirectMutation(homeOSDatabase, operation.operationId, authoritative);
+      lease.check();
+      const reconciled = await reconcileDirectMutation(homeOSDatabase, operation.operationId, authoritative, "home", lease);
       setSyncStatus("synced");
       setLastSyncedAt(new Date().toISOString());
       return reconciled;
     } catch (error) {
+      if (error instanceof AccessChangedError) throw error;
+      if (error instanceof APIError && ["unauthorized", "session_changed"].includes(error.code)) {
+        // Authentication expiry must not turn a valid queued edit into a conflict.
+        throw error;
+      }
+      lease.check();
       if (isTransportFailure(error)) {
         setSyncStatus("offline");
         return local;
@@ -138,7 +167,7 @@ export function useInventory() {
       setSyncStatus("attention");
       throw error;
     }
-  }, []);
+  }), []);
 
   const add = useCallback((input: CreateItemInput) => commit(
     () => createLocalItem(homeOSDatabase, input),

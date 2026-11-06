@@ -8,6 +8,7 @@ import type {
   UpdateItemMetadataInput,
 } from "./inventory";
 import type { CreateExpenseInput, ExpenseRule, Member, UpdateExpenseInput } from "./expenses";
+import { captureAccessProof, signalSessionExpired } from "@/auth/work";
 
 interface APIErrorBody {
   code: string;
@@ -50,7 +51,7 @@ export interface MutationRequestOptions extends APIRequestOptions {
 const API_URL = (process.env.NEXT_PUBLIC_API_URL ?? "").replace(/\/$/, "");
 const DEFAULT_TIMEOUT_MS = 10_000;
 
-async function request<T>(path: string, init?: RequestInit, options: APIRequestOptions = {}): Promise<T> {
+export async function request<T>(path: string, init?: RequestInit, options: APIRequestOptions = {}): Promise<T> {
   const controller = new AbortController();
   let timedOut = false;
   const timeout = window.setTimeout(() => {
@@ -60,12 +61,15 @@ async function request<T>(path: string, init?: RequestInit, options: APIRequestO
   const cancel = () => controller.abort(options.signal?.reason);
   options.signal?.addEventListener("abort", cancel, { once: true });
   try {
+    const proof = captureAccessProof();
+    const memberId = proof.memberId;
     let response: Response;
     try {
       response = await fetch(`${API_URL}${path}`, {
         ...init,
+        credentials: "same-origin",
         signal: controller.signal,
-        headers: { "Content-Type": "application/json", ...init?.headers },
+        headers: { "Content-Type": "application/json", ...(memberId ? { "X-HomeOS-Member": memberId } : {}), ...init?.headers },
       });
     } catch {
       throw requestTransportError(timedOut, options.signal);
@@ -82,6 +86,9 @@ async function request<T>(path: string, init?: RequestInit, options: APIRequestO
     }
 
     if (!response.ok || envelope.error) {
+      if ((response.status === 401 && envelope.error?.code === "unauthorized") || envelope.error?.code === "session_changed") {
+        signalSessionExpired(proof);
+      }
       throw new APIError(
         envelope.error?.message ?? "The request could not be completed.",
         envelope.error?.code,

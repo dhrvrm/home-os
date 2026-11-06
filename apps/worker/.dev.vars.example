@@ -1,1 +1,3 @@
 HOMEOS_MCP_TOKEN=replace-with-a-long-random-local-token
+HOMEOS_SETUP_TOKEN=replace-with-an-independent-random-setup-key
+HOMEOS_PASSWORD_PEPPER=replace-with-an-independent-random-secret-at-least-32-characters

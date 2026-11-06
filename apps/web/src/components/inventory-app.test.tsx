@@ -5,6 +5,11 @@ import { saveInventoryCache } from "@/lib/inventory-cache";
 import type { InventoryItem } from "@/lib/inventory";
 import { homeOSDatabase } from "@/offline/db";
 import { InventoryApp } from "./inventory-app";
+import type { AuthSession } from "@/lib/auth";
+import { createLocalItem } from "@/offline/commands";
+import * as pwaState from "./pwa-state";
+
+const memberSession: AuthSession = { user: { id: "alice", householdId: "home", name: "Alice", email: "alice@example.com", role: "member" }, expiresAt: "2099-12-01T00:00:00.000Z" };
 
 const soap: InventoryItem = {
   id: "soap",
@@ -85,6 +90,35 @@ afterEach(async () => {
 });
 
 describe("InventoryApp", () => {
+  it("closes an open write form when the member becomes a viewer without queuing its draft", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ data: { items: [soap] }, error: null }), { status: 200 })));
+    const user = userEvent.setup();
+    const { rerender } = render(<InventoryApp session={memberSession} />);
+    expect(await screen.findByText("Dish soap")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Add item" }));
+    await user.type(screen.getByLabelText("Item name"), "Do not save after demotion");
+    expect(screen.getByRole("dialog", { name: "Add an item" })).toBeInTheDocument();
+    rerender(<InventoryApp session={{ ...memberSession, user: { ...memberSession.user, role: "viewer" } }} />);
+    expect(screen.queryByRole("dialog", { name: "Add an item" })).not.toBeInTheDocument();
+    expect(await homeOSDatabase.outbox.count()).toBe(0);
+    expect(await homeOSDatabase.items.where("name").equals("Do not save after demotion").count()).toBe(0);
+  });
+
+  it("allows a waiting PWA update after a queued change becomes a retained conflict", async () => {
+    await createLocalItem(homeOSDatabase, { name: "Conflict soap" });
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("offline")));
+    const snapshot = { canInstall: false, installed: true, ios: false, offlineReady: true, updateAvailable: true, updating: false, error: null };
+    vi.spyOn(pwaState, "getPWAState").mockReturnValue(snapshot);
+    render(<InventoryApp session={memberSession} onLogout={vi.fn()} onSessionChange={vi.fn()} />);
+    expect(await screen.findByText("Saved on this device.")).toBeInTheDocument();
+    fireEvent.click(within(screen.getByRole("navigation", { name: "Primary navigation" })).getByRole("button", { name: "Account" }));
+    const update = await screen.findByRole("button", { name: "Update and reload" });
+    await waitFor(() => expect(update).toBeDisabled());
+    await homeOSDatabase.outbox.toCollection().modify({ state: "conflict" });
+    await waitFor(() => expect(update).toBeEnabled());
+    expect((await homeOSDatabase.outbox.toArray())[0]?.state).toBe("conflict");
+  });
+
   it("shows loading and then inventory", async () => {
     let resolveFetch!: (value: Response) => void;
     vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>((resolve) => { resolveFetch = resolve; })));
@@ -270,7 +304,7 @@ describe("InventoryApp", () => {
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
     const eventRequest = fetchMock.mock.calls[1][1] as RequestInit;
     expect(JSON.parse(String(eventRequest.body))).toMatchObject({ type: "consume", quantity: 25 });
-    expect(screen.getByText("0%")).toBeInTheDocument();
+    expect(await screen.findByText("0%")).toBeInTheDocument();
   });
 
   it("edits an item directly and displays immutable history", async () => {

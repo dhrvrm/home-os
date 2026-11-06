@@ -8,6 +8,7 @@ import type { CommandContext } from "../platform/context";
 import { ConflictError, HomeOSError, ValidationError } from "../platform/errors";
 import { success } from "../http/envelope";
 import type { SyncConflictResult, SyncOperation, SyncResponse } from "./model";
+import { currentMember } from "../auth/session";
 
 const operationSchema = z.object({
   operationId: z.string().min(1).max(128),
@@ -84,7 +85,7 @@ export function createSyncRoutes(): Hono<{ Bindings: Env }> {
         continue;
       }
       try {
-        await applyOperation(service, operation);
+        await applyOperation(service, operation, currentMember(context).id);
         results.push({ operationId: operation.operationId, status: "accepted" });
       } catch (error) {
         results.push(await operationError(service, operation, error));
@@ -107,10 +108,10 @@ export function createSyncRoutes(): Hono<{ Bindings: Env }> {
   return routes;
 }
 
-async function applyOperation(service: InventoryService, operation: SyncOperation): Promise<void> {
+async function applyOperation(service: InventoryService, operation: SyncOperation, actorId: string): Promise<void> {
   const context: CommandContext = {
     householdId: operation.householdId,
-    actorId: "local-owner",
+    actorId,
     actorType: "member",
     source: "pwa",
     operationId: operation.operationId,

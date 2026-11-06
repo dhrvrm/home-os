@@ -12,8 +12,25 @@ export async function parsedJSON<T extends z.ZodType>(
   if (contentLength > MAX_BODY_BYTES) throw new ValidationError("body", "must be 64 KB or smaller");
   let body: unknown;
   try {
-    body = await context.req.json();
-  } catch {
+    const reader = context.req.raw.body?.getReader();
+    if (!reader) throw new ValidationError("body", "must contain valid JSON");
+    const bytes = new Uint8Array(MAX_BODY_BYTES);
+    let length = 0;
+    try {
+      while (true) {
+        const chunk = await reader.read();
+        if (chunk.done) break;
+        if (length + chunk.value.byteLength > MAX_BODY_BYTES) {
+          await reader.cancel();
+          throw new ValidationError("body", "must be 64 KB or smaller");
+        }
+        bytes.set(chunk.value, length);
+        length += chunk.value.byteLength;
+      }
+    } finally { reader.releaseLock(); }
+    body = JSON.parse(new TextDecoder().decode(bytes.subarray(0, length)));
+  } catch (error) {
+    if (error instanceof ValidationError) throw error;
     throw new ValidationError("body", "must contain valid JSON");
   }
   const parsed = schema.safeParse(body);

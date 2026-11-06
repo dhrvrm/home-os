@@ -19,8 +19,17 @@ This ledger defines the intended Home OS product and the measurable behavior of 
 | FR-PLT-01 | Serve the installable web application and versioned API from one Cloudflare Worker origin. | `/`, `/manifest.webmanifest`, `/api/v1`, `/healthz`, and `/readyz` are served from the deployed Worker; the web build has no Next.js server dependency. | Shipped |
 | FR-PLT-02 | Keep shared household data in D1 and device projections/outbox state in Dexie. | A fresh local or production database migrates successfully; supported inventory commands update Dexie first and later reconcile through `/api/v1/sync`. | Shipped |
 | FR-PLT-03 | Give every accepted mutation an idempotent operation ID, expected version, actor/source context, and audit event. | Replayed operations return the accepted result, stale versions produce explicit conflicts, and accepted changes append immutable field-level audit deltas. | Shipped |
-| FR-PLT-04 | Support household members, invitations, roles, device sessions, and per-module authorization. | An owner can invite/revoke a roommate; every HTTP and MCP read/write is household- and scope-authorized; removed sessions stop working. | Planned — iteration 3 |
+| FR-PLT-04 | Support household members, invitations, roles, device sessions, and per-module authorization. | An owner can invite/revoke a roommate; every HTTP and MCP read/write is household- and scope-authorized; removed sessions stop working. | Email/password accounts, owner-managed membership, roles, session revocation, and protected HTTP APIs in current iteration; invitations and scoped MCP OAuth remain planned |
 | FR-PLT-05 | Support complete export and recoverable archive lifecycles. | A household can export its durable records in a versioned format; archived entities are excluded from active views and can be restored where lifecycle recovery applies. | Inventory shipped; other modules planned with their iterations |
+
+### Member sign-in and installed app
+
+| ID | Requirement | Acceptance | Release state |
+|---|---|---|---|
+| FR-AUTH-01 | Persist email/password sign-in without application password storage. | Setup requires the deployment key; owner-created accounts sign in with a session cookie; password fields support native password managers; remembered grants last up to 30 days, session-only grants expire after 12 hours. | Current iteration |
+| FR-AUTH-02 | Enforce membership and account lifecycle. | Household HTTP requests require active membership; viewer writes fail; owner controls create/edit/reset/deactivate/reactivate; last owner is retained; password changes and resets invalidate old sessions; direct and queued commands carry the authenticated actor. | Current iteration |
+| FR-AUTH-03 | Preserve the member boundary while offline or across tabs. | Unexpired remembered access can reopen the local inventory offline; explicit online denial and expiry lock it; same-member reauthentication keeps queued work; account switching and logout clear previous local state only after draining work and confirming pending-edit discard. | Current iteration |
+| FR-PWA-01 | Provide a complete installable shell with controlled updates. | Manifest and PNG/maskable/Apple icons are served; versioned HTML, JS, CSS, and fonts reopen offline after first use; account/API/MCP responses are excluded from caches; updates require user action and queued edits block activation. | Current iteration |
 
 ### Inventory and shopping
 

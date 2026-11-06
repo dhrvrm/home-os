@@ -1,5 +1,5 @@
-import { InventoryApp } from "@/components/inventory-app";
+import { AuthGate } from "@/auth/auth-gate";
 
 export default function HomePage() {
-  return <InventoryApp />;
+  return <AuthGate />;
 }

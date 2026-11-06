@@ -1,6 +1,10 @@
 "use client";
 
 import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useLiveQuery } from "dexie-react-hooks";
+import type { AuthSession } from "@/lib/auth";
+import { AccountPanel } from "./account-panel";
+import { MembersView } from "./members-view";
 import {
   ArrowClockwise,
   Archive,
@@ -15,6 +19,8 @@ import {
   Sparkle,
   WarningCircle,
   WifiSlash,
+  Users,
+  UserCircle,
 } from "@phosphor-icons/react";
 import {
   exportInventory,
@@ -36,10 +42,16 @@ import { ExpensesView } from "./expenses-view";
 import { ShoppingView } from "./shopping-view";
 import { StockDialog } from "./stock-dialog";
 
-type PrimaryView = "inventory" | "shopping" | "expenses";
+type PrimaryView = "inventory" | "shopping" | "expenses" | "members" | "account";
 type StockDialogState = { item: InventoryItem; action: "consume" | "restock" | "mark_level" };
 
-export function InventoryApp() {
+export function InventoryApp({ session, onLogout, onSessionChange }: {
+  session?: AuthSession;
+  onLogout?: () => Promise<void>;
+  onSessionChange?: (session: AuthSession) => void;
+} = {}) {
+  const readOnly = session?.user.role === "viewer";
+  const pendingCount = useLiveQuery(() => homeOSDatabase.outbox.where("state").anyOf("pending", "sending").count(), [], 0);
   const inventory = useInventory();
   const items = useMemo(() => sortItems(inventory.items), [inventory.items]);
   const archivedItems = useMemo(() => sortItems(inventory.archivedItems), [inventory.archivedItems]);
@@ -61,6 +73,17 @@ export function InventoryApp() {
   const [assistant] = useState(() => new BrowserAssistant());
 
   useEffect(() => {
+    let active = true;
+    if (readOnly) queueMicrotask(() => {
+      if (!active) return;
+      setShowForm(false);
+      setEditingItem(null);
+      setStockDialog(null);
+    });
+    return () => { active = false; };
+  }, [readOnly]);
+
+  useEffect(() => {
     return () => { void assistant.dispose(); };
   }, [assistant]);
 
@@ -77,10 +100,15 @@ export function InventoryApp() {
   const attentionCount = items.filter(needsAttention).length;
   const locations = new Set(items.map((item) => item.location)).size;
 
+  function requireWritable() {
+    if (readOnly) throw new Error("Your account has read-only access.");
+  }
+
   async function addItem(input: CreateItemInput) {
     setSaving(true);
     setMutationError(null);
     try {
+      requireWritable();
       await inventory.add(input);
       setShowForm(false);
     } catch (error) {
@@ -94,6 +122,7 @@ export function InventoryApp() {
     setPendingItem(item.id);
     setMutationError(null);
     try {
+      requireWritable();
       const updated = await inventory.applyStock(item.id, input);
       setSelectedItem((current) => current?.id === updated.id ? updated : current);
       if (selectedItem?.id === updated.id) {
@@ -112,6 +141,7 @@ export function InventoryApp() {
   }
 
   async function applyAssistantProposal(proposal: AssistantProposal) {
+    requireWritable();
     try {
       await inventory.update(proposal.itemID, proposal.changes);
     } catch (error) {
@@ -124,6 +154,7 @@ export function InventoryApp() {
     setPendingItem(editingItem.id);
     setMutationError(null);
     try {
+      requireWritable();
       const updated = await inventory.update(editingItem.id, input);
       setSelectedItem((current) => current?.id === updated.id ? updated : current);
       setEditingItem(null);
@@ -158,7 +189,7 @@ export function InventoryApp() {
   }
 
   async function archiveSelected() {
-    if (!selectedItem || !window.confirm(`Archive ${selectedItem.name}? Its history will be kept.`)) return;
+    if (readOnly || !selectedItem || !window.confirm(`Archive ${selectedItem.name}? Its history will be kept.`)) return;
     setPendingItem(selectedItem.id);
     setMutationError(null);
     try {
@@ -175,6 +206,7 @@ export function InventoryApp() {
     setPendingItem(item.id);
     setMutationError(null);
     try {
+      requireWritable();
       await inventory.restore(item.id);
     } catch (error) {
       setMutationError(error instanceof Error ? error.message : "The item could not be restored.");
@@ -212,6 +244,21 @@ export function InventoryApp() {
     }
   }
 
+  function secondaryView(): ReactNode {
+    switch (view) {
+      case "shopping":
+        return <ShoppingView items={items} pendingItem={pendingItem} disabled={readOnly} onRestock={(item) => item.trackingMode === "exact" ? setStockDialog({ item, action: "restock" }) : void runAction(item, { type: "restock" })} />;
+      case "expenses":
+        return <ExpensesView readOnly={readOnly} />;
+      case "members":
+        return session ? <MembersView currentUser={session.user} /> : null;
+      case "account":
+        return session && onLogout && onSessionChange ? <AccountPanel session={session} onLogout={onLogout} onSessionChange={onSessionChange} hasPendingChanges={pendingCount > 0} /> : null;
+      default:
+        return null;
+    }
+  }
+
   return (
     <div className="app-shell">
       <aside className="sidebar">
@@ -223,10 +270,14 @@ export function InventoryApp() {
           <button className={view === "inventory" ? "nav-link is-active" : "nav-link"} type="button" onClick={() => setView("inventory")}><Package size={19} weight="duotone" aria-hidden="true" />Inventory</button>
           <button className={view === "shopping" ? "nav-link is-active" : "nav-link"} type="button" onClick={() => setView("shopping")}><ShoppingCartSimple size={19} aria-hidden="true" />Shopping</button>
           <button className={view === "expenses" ? "nav-link is-active" : "nav-link"} type="button" onClick={() => setView("expenses")}><Receipt size={19} weight="duotone" aria-hidden="true" />Expenses</button>
+          {session && <>
+            <button className={view === "members" ? "nav-link is-active" : "nav-link"} type="button" onClick={() => setView("members")}><Users size={19} aria-hidden="true" />Members</button>
+            <button className={view === "account" ? "nav-link is-active" : "nav-link"} type="button" onClick={() => setView("account")}><UserCircle size={19} aria-hidden="true" />Account</button>
+          </>}
         </nav>
         <div className="sidebar__home">
           <span className="home-avatar">H</span>
-          <div><strong>Our home</strong><small>{items.length} tracked items</small></div>
+          <div><strong>{session?.user.name ?? "Our home"}</strong><small>{readOnly ? "Read-only access" : `${items.length} tracked items`}</small></div>
         </div>
       </aside>
 
@@ -240,7 +291,7 @@ export function InventoryApp() {
             {view === "inventory" && <button className="button button--quiet topbar__assistant" type="button" onClick={() => setShowAssistant(true)}>
               <Sparkle size={17} weight="fill" aria-hidden="true" /> Ask Home
             </button>}
-            {view === "inventory" && <button className="button button--primary topbar__add" type="button" onClick={() => setShowForm(true)}>
+            {view === "inventory" && !readOnly && <button className="button button--primary topbar__add" type="button" onClick={() => setShowForm(true)}>
               <Plus size={18} weight="bold" aria-hidden="true" /> Add item
             </button>}
           </div>
@@ -291,39 +342,43 @@ export function InventoryApp() {
 
           {!showArchived && inventory.loadState === "loading" && <LoadingState />}
           {!showArchived && inventory.loadState === "error" && <ErrorState message={inventory.loadError} onRetry={inventory.refresh} />}
-          {!showArchived && inventory.loadState === "ready" && items.length === 0 && <EmptyState onAdd={() => setShowForm(true)} disabled={false} />}
+          {!showArchived && inventory.loadState === "ready" && items.length === 0 && <EmptyState onAdd={() => setShowForm(true)} disabled={readOnly} />}
           {!showArchived && inventory.loadState === "ready" && items.length > 0 && visibleItems.length === 0 && (
             <div className="no-results"><MagnifyingGlass size={24} aria-hidden="true" /><h3>No matching items</h3><p>Try another search or category.</p></div>
           )}
           {!showArchived && inventory.loadState === "ready" && visibleItems.length > 0 && (
             <div className="item-list">
               <div className="item-list__labels" aria-hidden="true"><span>Item</span><span>Stock</span><span>Consumption</span><span>Actions</span></div>
-              {visibleItems.map((item) => <ItemRow key={item.id} item={item} pending={pendingItem === item.id} disabled={false} onAction={runAction} onOpenStock={(target, action) => setStockDialog({ item: target, action })} onDetails={(target) => void openDetails(target)} />)}
+              {visibleItems.map((item) => <ItemRow key={item.id} item={item} pending={pendingItem === item.id} disabled={readOnly} onAction={runAction} onOpenStock={(target, action) => setStockDialog({ item: target, action })} onDetails={(target) => void openDetails(target)} />)}
             </div>
           )}
           {showArchived && archivedItems.length === 0 && <div className="no-results"><Archive size={26} aria-hidden="true" /><h3>No archived items</h3><p>Items you archive will stay recoverable here.</p></div>}
-          {showArchived && archivedItems.length > 0 && <div className="archived-list">{archivedItems.map((item) => <article key={item.id}><div><h3>{item.name}</h3><p>{item.location} · archived {item.archivedAt ? formatSavedAt(item.archivedAt) : "recently"}</p></div><button className="button button--small button--quiet" type="button" disabled={pendingItem === item.id} onClick={() => void restoreArchived(item)}>Restore</button></article>)}</div>}
-        </section> : view === "shopping" ? <ShoppingView items={items} pendingItem={pendingItem} disabled={false} onRestock={(item) => item.trackingMode === "exact" ? setStockDialog({ item, action: "restock" }) : void runAction(item, { type: "restock" })} /> : <ExpensesView />}
+          {showArchived && archivedItems.length > 0 && <div className="archived-list">{archivedItems.map((item) => <article key={item.id}><div><h3>{item.name}</h3><p>{item.location} · archived {item.archivedAt ? formatSavedAt(item.archivedAt) : "recently"}</p></div><button className="button button--small button--quiet" type="button" disabled={readOnly || pendingItem === item.id} onClick={() => void restoreArchived(item)}>Restore</button></article>)}</div>}
+        </section> : secondaryView()}
       </main>
 
       <nav className="mobile-nav" aria-label="Mobile navigation">
         <button className={view === "inventory" ? "is-active mobile-nav__section" : "mobile-nav__section"} type="button" onClick={() => setView("inventory")}><Package size={20} weight="fill" aria-hidden="true" /><span>Inventory</span></button>
-        <button type="button" onClick={() => setShowForm(true)} aria-label="Add item"><Plus size={22} weight="bold" aria-hidden="true" /></button>
+        {!session && <button type="button" disabled={readOnly} onClick={() => setShowForm(true)} aria-label="Add item"><Plus size={22} weight="bold" aria-hidden="true" /></button>}
         <button className={view === "shopping" ? "is-active mobile-nav__section" : "mobile-nav__section"} type="button" onClick={() => setView("shopping")}><ShoppingCartSimple size={20} aria-hidden="true" /><span>Shopping</span></button>
         <button className={view === "expenses" ? "is-active mobile-nav__section" : "mobile-nav__section"} type="button" onClick={() => setView("expenses")}><Receipt size={20} aria-hidden="true" /><span>Expenses</span></button>
+        {session && <>
+          <button className={view === "members" ? "is-active mobile-nav__section" : "mobile-nav__section"} type="button" onClick={() => setView("members")}><Users size={20} aria-hidden="true" /><span>Members</span></button>
+          <button className={view === "account" ? "is-active mobile-nav__section" : "mobile-nav__section"} type="button" onClick={() => setView("account")}><UserCircle size={20} aria-hidden="true" /><span>Account</span></button>
+        </>}
       </nav>
 
-      {showForm && <ItemForm pending={saving} error={mutationError} onClose={() => { setShowForm(false); setMutationError(null); }} onSubmit={addItem} />}
+      {showForm && !readOnly && <ItemForm pending={saving} error={mutationError} onClose={() => { setShowForm(false); setMutationError(null); }} onSubmit={addItem} />}
       {showAssistant && <InventoryAssistant assistant={assistant} items={items} onApply={applyAssistantProposal} onClose={() => setShowAssistant(false)} />}
-      {selectedItem && !editingItem && !stockDialog && <ItemDetailDialog item={selectedItem} events={events} loading={eventsLoading} error={eventsError} readOnly={false} onClose={() => setSelectedItem(null)} onEdit={() => setEditingItem(selectedItem)} onAdjust={() => setStockDialog({ item: selectedItem, action: selectedItem.trackingMode === "simple" ? "mark_level" : "restock" })} onArchive={() => void archiveSelected()} />}
-      {editingItem && <ItemEditDialog item={editingItem} pending={pendingItem === editingItem.id} error={mutationError} onClose={() => { setEditingItem(null); setMutationError(null); }} onSubmit={saveItemEdit} />}
-      {stockDialog && <StockDialog item={stockDialog.item} action={stockDialog.action} pending={pendingItem === stockDialog.item.id} error={mutationError} onClose={() => { setStockDialog(null); setMutationError(null); }} onSubmit={(input) => runAction(stockDialog.item, input)} />}
+      {selectedItem && !editingItem && !stockDialog && <ItemDetailDialog item={selectedItem} events={events} loading={eventsLoading} error={eventsError} readOnly={readOnly} onClose={() => setSelectedItem(null)} onEdit={() => setEditingItem(selectedItem)} onAdjust={() => setStockDialog({ item: selectedItem, action: selectedItem.trackingMode === "simple" ? "mark_level" : "restock" })} onArchive={() => void archiveSelected()} />}
+      {editingItem && !readOnly && <ItemEditDialog item={editingItem} pending={pendingItem === editingItem.id} error={mutationError} onClose={() => { setEditingItem(null); setMutationError(null); }} onSubmit={saveItemEdit} />}
+      {stockDialog && !readOnly && <StockDialog item={stockDialog.item} action={stockDialog.action} pending={pendingItem === stockDialog.item.id} error={mutationError} onClose={() => { setStockDialog(null); setMutationError(null); }} onSubmit={(input) => runAction(stockDialog.item, input)} />}
     </div>
   );
 }
 
 function viewTitle(view: PrimaryView): string {
-  return { inventory: "Inventory", shopping: "Shopping", expenses: "Expenses" }[view];
+  return { inventory: "Inventory", shopping: "Shopping", expenses: "Expenses", members: "Household members", account: "Your account" }[view];
 }
 
 function itemCategories(item: InventoryItem): string[] {

@@ -7,6 +7,8 @@ import type {
   StoredStockEvent,
 } from "./schema";
 import type { InventoryItem } from "@/lib/inventory";
+import { APIError } from "@/lib/api";
+import { runHouseholdWork, signalSessionExpired, type WorkLease } from "@/auth/work";
 
 interface SyncResultRow {
   operationId: string;
@@ -41,7 +43,7 @@ export function syncInventory(
 ): Promise<{ accepted: number; conflicts: number; cursor: number }> {
   const active = activeSyncs.get(database);
   if (active) return active;
-  const operation = performSync(database, options).finally(() => activeSyncs.delete(database));
+  const operation = runHouseholdWork((lease) => performSync(database, options, lease)).finally(() => activeSyncs.delete(database));
   activeSyncs.set(database, operation);
   return operation;
 }
@@ -50,10 +52,13 @@ export async function hydrateAuthoritativeItems(
   database: HomeOSDatabase,
   items: InventoryItem[],
   householdId = "home",
+  lease?: WorkLease,
 ): Promise<void> {
   await database.transaction("rw", database.items, async () => {
+    lease?.check();
     for (const item of items) {
       const local = await database.items.get(item.id);
+      lease?.check();
       if (local && local.syncState !== "synced") continue;
       await database.items.put({
         ...item,
@@ -71,6 +76,7 @@ export async function reconcileDirectMutation(
   operationId: string,
   item: InventoryItem,
   householdId = "home",
+  lease?: WorkLease,
 ): Promise<StoredInventoryItem> {
   const stored: StoredInventoryItem = {
     ...item,
@@ -80,6 +86,7 @@ export async function reconcileDirectMutation(
     syncState: "synced",
   };
   await database.transaction("rw", [database.items, database.outbox], async () => {
+    lease?.check();
     await database.items.put(stored);
     await database.outbox.delete(operationId);
   });
@@ -108,79 +115,102 @@ export async function markDirectConflict(
 async function performSync(
   database: HomeOSDatabase,
   options: SyncOptions,
+  lease: WorkLease,
 ): Promise<{ accepted: number; conflicts: number; cursor: number }> {
   const householdId = options.householdId ?? "home";
   const fetcher = options.fetcher ?? fetch;
   const syncState = (await database.syncState.get(householdId)) ?? emptySyncState(householdId);
   const operations = await database.outbox.where("state").equals("pending").sortBy("order");
   const operationIds = operations.map((operation) => operation.operationId);
+  lease.check();
   await markOutbox(database, operationIds, "sending");
 
-  let response: Response;
+  let envelope: SyncEnvelope;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 10_000);
   try {
-    response = await fetcher("/api/v1/sync", {
+    const response = await fetcher("/api/v1/sync", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      credentials: "same-origin",
+      signal: controller.signal,
+      headers: { "Content-Type": "application/json", ...(lease.memberId ? { "X-HomeOS-Member": lease.memberId } : {}) },
       body: JSON.stringify({ cursor: syncState.cursor, operations: operations.map(wireOperation) }),
     });
+    if (response.status === 401) {
+      signalSessionExpired(lease.proof);
+      throw new APIError("Your session has ended. Sign in again to synchronize your saved changes.", "unauthorized");
+    }
+    try { envelope = (await response.json()) as SyncEnvelope; }
+    catch { throw new APIError("The server returned an unreadable sync response. Your changes remain queued.", "invalid_response"); }
+    if (response.status === 409 && envelope.error?.code === "session_changed") {
+      signalSessionExpired(lease.proof);
+      throw new APIError("The signed-in member changed in another tab. Sign in again before synchronizing your saved changes.", "session_changed");
+    }
+    if (!response.ok || !envelope.data) {
+      throw new APIError(envelope.error?.message ?? "Home OS could not synchronize.", envelope.error?.code);
+    }
+    lease.check();
   } catch (error) {
     await markOutbox(database, operationIds, "pending");
     throw error;
+  } finally {
+    clearTimeout(timeout);
   }
 
-  const envelope = (await response.json()) as SyncEnvelope;
-  if (!response.ok || !envelope.data) {
-    await markOutbox(database, operationIds, "pending");
-    throw new Error(envelope.error?.message ?? "Home OS could not synchronize.");
-  }
-  const data = envelope.data;
+  const data = envelope.data!;
   const accepted = new Set(data.results.filter((result) => result.status === "accepted").map((result) => result.operationId));
   const conflicts = data.results.filter((result) => result.status !== "accepted");
   const now = new Date().toISOString();
 
-  await database.transaction(
-    "rw",
-    [database.items, database.stockEvents, database.outbox, database.activity, database.syncState],
-    async () => {
-      for (const item of data.items) {
-        const conflict = conflicts.some((result) => result.item?.id === item.id || operations.find(
-          (operation) => operation.operationId === result.operationId,
-        )?.entityId === item.id);
-        await database.items.put({
-          ...item,
-          householdId: item.householdId ?? householdId,
-          version: item.version ?? 1,
-          archivedAt: item.archivedAt ?? null,
-          syncState: conflict ? "conflict" : "synced",
+  try {
+    await database.transaction(
+      "rw",
+      [database.items, database.stockEvents, database.outbox, database.activity, database.syncState],
+      async () => {
+        lease.check();
+        for (const item of data.items) {
+          const conflict = conflicts.some((result) => result.item?.id === item.id || operations.find(
+            (operation) => operation.operationId === result.operationId,
+          )?.entityId === item.id);
+          await database.items.put({
+            ...item,
+            householdId: item.householdId ?? householdId,
+            version: item.version ?? 1,
+            archivedAt: item.archivedAt ?? null,
+            syncState: conflict ? "conflict" : "synced",
+          });
+        }
+        if (data.events.length) {
+          await database.stockEvents.bulkPut(
+            data.events.map((event) => ({
+              ...event,
+              householdId: event.householdId ?? householdId,
+              actorId: event.actorId ?? "local-owner",
+              createdAt: event.createdAt ?? event.occurredAt,
+            })),
+          );
+        }
+        for (const operationId of accepted) await database.outbox.delete(operationId);
+        for (const result of conflicts) {
+          await database.outbox.update(result.operationId, {
+            state: "conflict",
+            error: result.error ?? { code: "conflict", message: "Review this change before retrying." },
+          });
+        }
+        if (data.activity.length) await database.activity.bulkPut(data.activity);
+        await pruneActivity(database, now);
+        await database.syncState.put({
+          householdId,
+          cursor: data.cursor,
+          lastSyncedAt: now,
+          lastError: null,
         });
-      }
-      if (data.events.length) {
-        await database.stockEvents.bulkPut(
-          data.events.map((event) => ({
-            ...event,
-            householdId: event.householdId ?? householdId,
-            actorId: event.actorId ?? "local-owner",
-            createdAt: event.createdAt ?? event.occurredAt,
-          })),
-        );
-      }
-      for (const operationId of accepted) await database.outbox.delete(operationId);
-      for (const result of conflicts) {
-        await database.outbox.update(result.operationId, {
-          state: "conflict",
-          error: result.error ?? { code: "conflict", message: "Review this change before retrying." },
-        });
-      }
-      if (data.activity.length) await database.activity.bulkPut(data.activity);
-      await pruneActivity(database, now);
-      await database.syncState.put({
-        householdId,
-        cursor: data.cursor,
-        lastSyncedAt: now,
-        lastError: null,
-      });
-    },
-  );
+      },
+    );
+  } catch (error) {
+    await markOutbox(database, operationIds, "pending");
+    throw error;
+  }
   return { accepted: accepted.size, conflicts: conflicts.length, cursor: data.cursor };
 }
 

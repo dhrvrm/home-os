@@ -1,8 +1,8 @@
-import { exports } from "cloudflare:workers";
+import { authenticatedFetch } from "./authenticated-worker";
 import { describe, expect, it } from "vitest";
 
 async function sync(body: unknown): Promise<Response> {
-  return exports.default.fetch(
+  return authenticatedFetch(
     new Request("https://home-os.test/api/v1/sync", {
       method: "POST",
       headers: { "Content-Type": "application/json", "X-Device-ID": "offline-test" },

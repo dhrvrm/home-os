@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import type { ContentfulStatusCode } from "hono/utils/http-status";
 import type { Env } from "./env";
 import { createActivityRoutes } from "./http/activity-routes";
 import { failure, success } from "./http/envelope";
@@ -8,6 +9,8 @@ import { createMemberRoutes } from "./http/member-routes";
 import { ConflictError, HomeOSError, ValidationError } from "./platform/errors";
 import { createSyncRoutes } from "./sync/routes";
 import { createMcpRoutes } from "./mcp/routes";
+import { createAuthRoutes } from "./auth/routes";
+import { protectHousehold } from "./auth/session";
 
 const app = new Hono<{ Bindings: Env }>();
 
@@ -29,6 +32,8 @@ app.get("/readyz", async (context) => {
   }
 });
 
+app.use("/api/v1/*", protectHousehold);
+app.route("/api/v1", createAuthRoutes());
 app.route("/api/v1", createActivityRoutes());
 app.route("/api/v1", createSyncRoutes());
 app.route("/api/v1", createInventoryRoutes());
@@ -44,7 +49,7 @@ app.onError((error, context) => {
     return failure(context, { code: error.code, message: error.message, details: error.details }, 409);
   }
   if (error instanceof HomeOSError) {
-    return failure(context, { code: error.code, message: error.message }, error.status as 404 | 409);
+    return failure(context, { code: error.code, message: error.message }, error.status as ContentfulStatusCode);
   }
   console.error("Unhandled Home OS request error", error);
   return failure(context, { code: "internal_error", message: "Home OS could not complete the request." }, 500);

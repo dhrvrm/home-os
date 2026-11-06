@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { spawn } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -13,6 +13,7 @@ const webOrigin = `http://127.0.0.1:${webPort}`;
 const children = [];
 const runAbort = new AbortController();
 let stopping = false;
+let sessionCookie = "";
 
 function readPort(name, fallback) {
   const raw = process.env[name]?.trim() || String(fallback);
@@ -163,9 +164,11 @@ async function request(pathname, { method = "GET", body, expectedStatus = 200 } 
   const response = await fetch(new URL(pathname, webOrigin), {
     method,
     body: body === undefined ? undefined : JSON.stringify(body),
-    headers: body === undefined ? undefined : { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", Origin: webOrigin, ...(sessionCookie ? { Cookie: sessionCookie, "X-HomeOS-Member": "local-owner" } : {}) },
     signal: requestSignal(10_000),
   });
+  const cookie = response.headers.getSetCookie().filter((value) => value.startsWith("homeos_session=")).at(-1);
+  if (cookie) sessionCookie = cookie.split(";")[0];
   const text = await response.text();
   let envelope;
   try {
@@ -187,6 +190,24 @@ function step(message) {
 }
 
 async function runJourney() {
+  step("anonymous household API access is denied");
+  assert.equal((await fetch(`${webOrigin}/api/v1/items`)).status, 401);
+  step("first owner setup creates a persisted sign-in");
+  await request("/api/v1/auth/setup", {
+    method: "POST", expectedStatus: 201,
+    body: { name: "Smoke owner", email: "owner@smoke.test", password: "smoke test owner passphrase", setupToken: "smoke-setup-test-key", remember: true },
+  });
+  const auth = await request("/api/v1/auth/status");
+  assert.equal(auth.session.user.id, "local-owner");
+  assert.equal(auth.setupRequired, false);
+  const manifestResponse = await fetch(`${webOrigin}/manifest.webmanifest`);
+  assert.equal(manifestResponse.status, 200);
+  const manifest = await manifestResponse.json();
+  assert.equal(manifest.display, "standalone");
+  assert.ok(manifest.icons.some((icon) => icon.sizes === "512x512"));
+  assert.equal((await fetch(`${webOrigin}/icons/apple-touch-icon.png`)).status, 200);
+  const serviceWorker = await (await fetch(`${webOrigin}/sw.js`)).text();
+  assert.ok(serviceWorker.includes("/_next/static/"));
   step("1/9 empty inventory loads through the unified Worker");
   const empty = await request("/api/v1/items");
   assert.deepEqual(empty.items, []);
@@ -265,6 +286,10 @@ async function runJourney() {
   assert.equal(reloaded.item.archivedAt, null);
   const activeReload = await request("/api/v1/items");
   assert.deepEqual(activeReload.items.map((entry) => entry.id), [item.id]);
+  step("logout revokes the persisted cookie");
+  const previousCookie = sessionCookie;
+  await request("/api/v1/auth/logout", { method: "POST", body: {} });
+  assert.equal((await fetch(`${webOrigin}/api/v1/items`, { headers: { Cookie: previousCookie } })).status, 401);
 }
 
 async function main() {
@@ -277,8 +302,15 @@ async function main() {
       "wrangler", "d1", "migrations", "apply", "home-os", "--local",
       "--persist-to", tempDir, "--config", "apps/worker/wrangler.jsonc",
     ], { cwd: rootDir });
+    const config = JSON.parse(await readFile(path.join(rootDir, "apps/worker/wrangler.jsonc"), "utf8"));
+    delete config.$schema;
+    config.main = path.join(rootDir, "apps/worker/src/index.ts");
+    config.assets.directory = path.join(rootDir, "apps/web/out");
+    config.vars = { ...config.vars, HOMEOS_SETUP_TOKEN: "smoke-setup-test-key", HOMEOS_PASSWORD_PEPPER: "smoke-pepper-test-key-at-least-thirty-two-characters" };
+    const testConfig = path.join(tempDir, "wrangler.json");
+    await writeFile(testConfig, JSON.stringify(config));
     const web = startChild("unified Worker", executable("npx"), [
-      "wrangler", "dev", "--local", "--config", "apps/worker/wrangler.jsonc",
+      "wrangler", "dev", "--local", "--config", testConfig,
       "--port",
       String(webPort),
       "--persist-to",
@@ -290,7 +322,7 @@ async function main() {
     await waitFor("unified Worker", `${webOrigin}/readyz`, web);
     step("isolated stack is ready");
     await runJourney();
-    step("PASS: Worker, D1, static PWA, and inventory lifecycle completed");
+    step("PASS: authenticated Worker, D1, PWA assets, inventory lifecycle, and logout completed");
   } catch (error) {
     const diagnostics = childDiagnostics();
     throw new Error(`${error.message}${diagnostics}`);

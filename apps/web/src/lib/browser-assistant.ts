@@ -1,3 +1,5 @@
+import { assistantRuntimePaths, prepareAssistantRuntimeCache } from "./assistant-runtime-cache";
+
 export const LOCAL_MODEL = {
   name: "SmolLM2 135M Instruct",
   repo: "bartowski/SmolLM2-135M-Instruct-GGUF",
@@ -171,12 +173,13 @@ export class BrowserAssistant {
 }
 
 async function createWllamaRuntime(): Promise<AssistantRuntime> {
+  await prepareAssistantRuntimeCache();
   const { LoggerWithoutDebug, Wllama } = await import("@wllama/wllama/esm/index.js");
   const runtime = new Wllama(
-    { default: "/vendor/wllama.wasm" },
+    { default: assistantRuntimePaths.wasm },
     { logger: LoggerWithoutDebug, suppressNativeLog: true, allowOffline: true },
   );
-  runtime.setCompat({ worker: "/vendor/wllama-compat.js", wasm: "/vendor/wllama-compat.wasm" }, "firefox_safari");
+  runtime.setCompat({ worker: assistantRuntimePaths.compatWorker, wasm: assistantRuntimePaths.compatWasm }, "firefox_safari");
   return runtime;
 }
 

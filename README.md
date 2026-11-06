@@ -15,6 +15,8 @@ Inventory currently supports:
 - a secured, explicitly read-only MCP inventory and audit interface;
 - one installable PWA and API deployed as a Cloudflare Worker with D1.
 
+Members sign in with email and password. The owner creates member accounts, changes roles, and can reset or deactivate their access. Password managers can save credentials; Home OS itself stores no browser password. “Keep me signed in” creates a 30-day session, while unchecked sign-in uses a browser-session cookie with a 12-hour server expiry. All household APIs require an active session; read-only MCP keeps its separate bearer credential.
+
 The full information architecture and preserved roadmap are in [docs/product-architecture.md](docs/product-architecture.md).
 
 ## Architecture
@@ -47,6 +49,10 @@ npm run dev
 ```
 
 Open `http://localhost:8787`. The launcher builds the static PWA, applies pending local D1 migrations, then Wrangler serves the app, API, MCP endpoint, and database from one origin.
+
+Replace the example secrets before use: `HOMEOS_SETUP_TOKEN` is the private first-owner setup code, and `HOMEOS_PASSWORD_PEPPER` is an independent random secret of at least 32 characters. Open the app and create the owner with the setup code, then add household members from Members. There is no public account registration.
+
+Install from Account or the browser menu (Safari: Share → Add to Home Screen). After the first connected visit, the installed shell and saved inventory reopen offline until the remembered session expires. First sign-in, account/expense/member changes, and sign-out need a connection. Expired sign-in locks saved work until the same member signs in again. Account switching or confirmed sign-out clears the device's household copy; queued edits require an explicit discard decision. PWA updates wait for a deliberate reload and cannot apply while edits remain queued.
 
 ## Verify
 

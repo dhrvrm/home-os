@@ -36,6 +36,28 @@ Save the generated MCP credential in a password manager before piping it if a cl
 
 ## First deployment
 
+The email/password release adds migration `0005_auth.sql`. Apply migrations before deploying it. Previously anonymous household APIs now return 401 until the owner is established and signs in. Existing inventory, expense participants, and audit attribution retain the stable `local-owner` member identity.
+
+Create two independent, high-entropy secrets with a password manager and store them as Worker secrets without putting their values in command arguments or shell history:
+
+```bash
+source scripts/cloudflare-env.zsh
+npx wrangler secret put HOMEOS_SETUP_TOKEN --config apps/worker/wrangler.jsonc
+npx wrangler secret put HOMEOS_PASSWORD_PEPPER --config apps/worker/wrangler.jsonc
+```
+
+`HOMEOS_SETUP_TOKEN` is the first-owner setup code. `HOMEOS_PASSWORD_PEPPER` must contain at least 32 characters and must be backed up separately from D1. Losing or changing it makes stored password verifiers unusable; do not rotate it as if it were a session token. Keep both secrets out of source, logs, and browser storage. Setup is disabled without valid deployment configuration. There is no public signup or email-delivery dependency.
+
+Visit the deployed app, enter the setup code, and choose the owner's email/password. Add other accounts through Members. Owners can edit member details/roles, set a password for existing members, reset other members' passwords, deactivate/reactivate accounts, and change their own password in Account. The final active owner cannot be demoted or deactivated. Deactivation and password reset revoke sessions while preserving member IDs and household history. If the only owner loses their password, recovery needs a deployment operator; no email reset service is configured.
+
+Password verifiers use per-account random salts and an independent HMAC pepper before PBKDF2-SHA256. The 100,000-iteration setting respects Cloudflare's production PBKDF2 ceiling; it is below the general OWASP PBKDF2 recommendation. The pepper is therefore required rather than optional. Login attempts are bounded by email and source address. Verify request CPU against the actual Worker plan before assuming free-tier compatibility.
+
+Sessions use random opaque credentials in HttpOnly, SameSite=Strict cookies (Secure on HTTPS); only token hashes live in D1. Remembered sessions expire after 30 days; nonremembered sessions use a browser-session cookie and expire after 12 hours. Password changes end old sessions and issue a fresh nonremembered session. Same-origin JSON checks protect mutations. Protected writes also require `X-HomeOS-Member` matching the session, so an old tab cannot borrow a different member's new cookie; the PWA sends this automatically. Close/reopen older installed versions after this release. Cookies do not authorize MCP.
+
+The PWA precaches a content-versioned HTML/JS/CSS/font shell and PNG icons. Authentication, API, MCP, health, and external model responses are never service-worker cached. Installation requires HTTPS outside localhost. Test installation and relaunch on the target phones; password-manager save prompts and iOS installation are browser-controlled.
+
+Offline access uses only the last accepted unexpired identity and the device's household copy. Server revocation is enforced when the device reconnects; it cannot be observed while disconnected. An explicit online rejection locks the app without granting an offline fallback. Pending edits survive same-member reauthentication. Sign-out requires server revocation before clearing the local copy; account switching requires clearing the previous member's local work. Device-local storage is not encrypted by this change.
+
 1. Install and verify everything:
 
    ```bash
@@ -71,10 +93,13 @@ Save the generated MCP credential in a password manager before piping it if a cl
    ```bash
    curl -fsS https://home-os.<workers-subdomain>.workers.dev/healthz
    curl -fsS https://home-os.<workers-subdomain>.workers.dev/readyz
-   curl -fsS https://home-os.<workers-subdomain>.workers.dev/api/v1/items
+   # Anonymous household data must return HTTP 401.
+   curl -s -o /dev/null -w '%{http_code}\n' https://home-os.<workers-subdomain>.workers.dev/api/v1/items
    ```
 
 Use an MCP Inspector or client with `Authorization: Bearer <HOMEOS_MCP_TOKEN>` for `/mcp`. Opening `/mcp` in a browser is not a protocol test.
+
+After deployment, check `/api/v1/auth/status` has `setupAvailable: true`, complete owner setup, and verify remembered login survives a browser restart, password-manager fields are recognized, anonymous API access is denied, and logout rejects the old cookie. Verify offline inventory and app-update handling on a phone. Monitor auth errors and Worker CPU without recording request bodies, passwords, cookies, pepper, or setup keys. Unexpected authenticated 401s, login 5xx, CPU-limit errors, or lost local queues require investigation. An anonymous 401 is the intended behavior and is not a rollback trigger.
 
 ## Local stack
 
@@ -102,4 +127,4 @@ The PWA JSON export is useful for household portability but is not a full audit/
 
 ## Security boundary
 
-The personal deployment uses one household and one MCP Bearer secret. This is adequate only for a controlled personal endpoint. Before roommate accounts or third-party clients are invited, add identity, household membership, role checks, OAuth 2.1 for MCP, scoped grants, token revocation, and an authorization audit. MCP remains read-only until write scopes, confirmations, idempotency, and actor attribution are implemented end to end.
+The deployment serves one configured household with email/password member accounts and owner/member/viewer roles. The owner controls account creation; viewer accounts cannot mutate household data. MCP remains a separately authenticated read-only personal endpoint. Third-party MCP clients still require OAuth 2.1, scoped grants, revocation, and an authorization audit before broad sharing or write tools. Contacts and menu/meal-attendance modules remain subsequent work.

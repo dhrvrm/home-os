@@ -5,7 +5,7 @@
   "scripts": {
     "prepare:model-runtime": "node scripts/copy-wllama-assets.mjs",
     "dev": "npm run prepare:model-runtime && next dev",
-    "build": "npm run prepare:model-runtime && next build",
+    "build": "npm run prepare:model-runtime && next build && node scripts/build-service-worker.mjs",
     "lint": "eslint .",
     "test": "vitest run",
     "preview": "npm run build && wrangler dev",
