@@ -1,6 +1,6 @@
 # Architecture
 
-Home OS is an offline-first household system delivered as one Cloudflare modular monolith. Inventory is the first complete product module. Household identity, synchronization, audit history, and authorized MCP access form the platform used by later contacts, expenses, chores, documents, notification, and automation modules.
+Home OS is an offline-first household system delivered as one Cloudflare modular monolith. Inventory, recurring expense rules, recipes, meals, contacts, and reminders share household identity and audit infrastructure. Inventory has offline commands; the other shared modules use online commands with cached reads.
 
 ## Runtime shape
 
@@ -12,7 +12,7 @@ Next.js PWA ── local commands ──> Dexie projections + outbox
                  ├── authenticated /mcp
                  ├── D1 shared state and audit
                  ├── R2 documents in a later module
-                 └── Queue/Cron notifications in a later module
+                 └── Cron meal reminders and encrypted Web Push
 ```
 
 The web application remains a client-side Next.js export with no Next.js server dependency. Cloudflare Workers Static Assets serves the application and model runtime. The service worker caches the application shell; it does not treat Cache Storage as a database.
@@ -50,6 +50,14 @@ Shares resolve in a fixed order: fixed amounts come out of the total first, perc
 
 Resolved shares are derived on every read rather than stored, so storage cannot drift from the rule. A rule naming a member who has since left the household keeps resolving and is flagged as needing attention; such a member cannot be added to a rule, but a rule that already names one stays readable and revisable.
 
+## Cooking and reminders
+
+Recipe availability reads inventory without changing stock. Meals contain immutable recipe snapshots; editing or archiving the source recipe leaves the planned dishes intact. Meal versions protect edits, announcement versions identify the current attendance question, and each member’s response has its own version. Cooking-time or dish changes invalidate old answers. Household timezone governs calendar ranges; stored instants use UTC.
+
+An every-minute Cron Trigger discovers due unanswered questions and creates bounded, deduplicated personal inbox entries. Web Push is optional and encrypted with Web Crypto. Each receiving subscription belongs to an exact active session. Eligibility, preferences, and grant authority are checked again before transport, including retries. Claim tokens fence overlapping scheduled runs; transport is at least once and does not prove a device displayed the notification. The service worker fetches a fresh authorized delivery verdict before displaying details and otherwise uses a generic message.
+
+New-module reads use member-scoped Dexie cache records. Writes stay online, use stable operation IDs for retries, and expose conflicts for review. Access-boundary work leases prevent an old request from writing into another member’s local state.
+
 ## API contract
 
 The current version is namespaced under `/api/v1`:
@@ -70,6 +78,10 @@ The current version is namespaced under `/api/v1`:
 - `PATCH /api/v1/expenses/{id}`
 - `DELETE /api/v1/expenses/{id}`
 - `POST /api/v1/expenses/{id}/restore`
+- `GET/POST /api/v1/recipes`; `GET/PATCH/DELETE /api/v1/recipes/{id}`; `POST /api/v1/recipes/{id}/restore`
+- `GET/POST /api/v1/meals`; `GET/PATCH /api/v1/meals/{id}` (cancellation uses PATCH); `PUT /api/v1/meals/{id}/attendance`
+- `GET/POST /api/v1/contacts`; `GET/PATCH/DELETE /api/v1/contacts/{id}`; `POST /api/v1/contacts/{id}/restore`
+- `GET /api/v1/notifications`; personal read state, preferences, configuration, and current-device subscription routes under `/api/v1/notifications`
 - `GET /api/v1/export`
 - `POST /api/v1/sync`
 - `GET /api/v1/activity`

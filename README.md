@@ -1,6 +1,6 @@
 # Home OS
 
-Home OS is an offline-first shared operating system for roommates. Inventory is the first complete module; the same household, sync, audit, and MCP foundations are designed to grow into shopping and notifications, important contacts and documents, Splitwise-style expenses, chores, maintenance, and controlled automations.
+Home OS is an offline-first shared operating system for roommates. It includes inventory, household accounts, recurring expense rules, recipes, a meal calendar with attendance, shared contacts, and meal reminder notifications. Documents, a payment ledger, chores, and general automations remain on the roadmap.
 
 The canonical [functional and non-functional requirements](docs/requirements.md) distinguish shipped behavior from the planned household modules.
 
@@ -15,7 +15,7 @@ Inventory currently supports:
 - a secured, explicitly read-only MCP inventory and audit interface;
 - one installable PWA and API deployed as a Cloudflare Worker with D1.
 
-Members sign in with email and password. The owner creates member accounts, changes roles, and can reset or deactivate their access. Password managers can save credentials; Home OS itself stores no browser password. “Keep me signed in” creates a 30-day session, while unchecked sign-in uses a browser-session cookie with a 12-hour server expiry. All household APIs require an active session; read-only MCP keeps its separate bearer credential.
+Members sign in with email and password. Owners create member accounts, appoint additional owners, change roles, and reset or deactivate access. The last active owner is protected. Password managers can save credentials; Home OS itself stores no browser password. “Keep me signed in” creates a 30-day session, while unchecked sign-in uses a browser-session cookie with a 12-hour server expiry. All household APIs require an active session; read-only MCP keeps its separate bearer credential.
 
 The full information architecture and preserved roadmap are in [docs/product-architecture.md](docs/product-architecture.md).
 
@@ -32,6 +32,16 @@ The browser applies supported commands locally before the network is used. Start
 
 `/mcp` uses the current stateless MCP SDK v2 path and requires `HOMEOS_MCP_TOKEN`. Its tools can list/search inventory, fetch an item and its history, find low/out stock, and read the audit trail. No MCP write tools are exposed yet.
 
+## Meals, contacts, and reminders
+
+Create reusable recipes with ingredients and instructions, then add one or several dishes to a meal for tomorrow or the coming week. Set its cooking time in the household timezone and a reminder lead time. Owners and members answer for themselves: yes, no, or pending. Changing the dishes or cooking time asks everyone to confirm again; editing notes preserves answers. Planning a meal does not consume inventory. Ingredient availability is guidance: exact quantities with matching units can be checked, while unlinked or approximate stock remains uncertain.
+
+Contacts keep shared names, roles, phone numbers, email, addresses, labels, and notes, with search and archive/restore. Contact records do not grant login access.
+
+Notifications shows unanswered meal reminders and personal preferences. Choose **Enable on this device** to permit Web Push after deployment has sender keys configured. On iPhone/iPad, first install the app through Safari’s Share → Add to Home Screen. Keep the device signed in: logout, password reset, expired sessions, and deactivation stop delivery for that grant. Browser permission alone does not mean the device is registered. Notification delivery depends on the browser/OS and network; opening a reminder always checks current access.
+
+Menu, recipes, contacts, and inbox preserve the last accepted reads offline. Their changes and attendance responses require a connection; only supported inventory changes queue offline.
+
 ## Browser assistant
 
 **Ask Home** answers counts, quantities, status, locations, categories, low/out stock, forecasts, and cadence directly from local inventory without a model. For ambiguous language and rename/alias/category requests, local Unicode-aware retrieval selects at most 12 relevant records and the optional SmolLM2 135M model emits only an allowlisted query/action plan. Application code verifies that plan against current inventory; the model never authors facts or writes directly.
@@ -40,7 +50,7 @@ The model is an explicit, optional download of about 105 MB into origin-private 
 
 ## Local development
 
-Requirements: Node.js 22.18+ and npm 11+.
+Requirements: Node.js 22.18+ and npm 10+.
 
 ```bash
 npm install
@@ -61,9 +71,10 @@ npm test
 npm run lint
 npm run build
 npm run smoke
+npm run smoke:browser
 ```
 
-The smoke test creates isolated local D1 state, starts the real unified Worker, and exercises the inventory lifecycle through HTTP.
+The HTTP smoke test creates isolated D1 state and exercises authentication, inventory, owners, recipe snapshots, meals, attendance, contacts, and reminder deduplication. The browser smoke uses isolated local state and a persistent Chromium profile; it requires Chrome locally, or Playwright Chromium with `HOMEOS_BROWSER_CHANNEL=chromium`.
 
 ## Deploy
 
