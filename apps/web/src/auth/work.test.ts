@@ -1,9 +1,21 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { drainHouseholdWork, lockHouseholdWork, publishAccessBoundary, resumeHouseholdWork, runHouseholdWork, setActiveMemberId } from "./work";
 
 afterEach(() => { resumeHouseholdWork(); setActiveMemberId(null); localStorage.clear(); });
 
 describe("household work admission", () => {
+  it("notifies the service worker of a new access boundary without passing credentials", () => {
+    const previous = Object.getOwnPropertyDescriptor(navigator, "serviceWorker");
+    const postMessage = vi.fn();
+    Object.defineProperty(navigator, "serviceWorker", { configurable: true, value: { controller: { postMessage } } });
+    try {
+      publishAccessBoundary("signed-out");
+      expect(postMessage).toHaveBeenCalledWith({ type: "HOMEOS_ACCESS_BOUNDARY", state: "signed-out" });
+    } finally {
+      if (previous) Object.defineProperty(navigator, "serviceWorker", previous);
+      else Reflect.deleteProperty(navigator, "serviceWorker");
+    }
+  });
   it("drains in-flight work and prevents its late response from writing after lock", async () => {
     let finish!: () => void;
     let wrote = false;

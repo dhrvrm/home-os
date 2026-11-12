@@ -19,6 +19,7 @@ export function readAccessBoundary(): string | null {
 
 export function publishAccessBoundary(state: "locked" | "ready" | "signed-out", member?: AccessIdentity): void {
   try { localStorage.setItem(ACCESS_BOUNDARY_KEY, JSON.stringify({ state, generation: crypto.randomUUID(), ...(member ? { memberId: member.id, householdId: member.householdId } : {}) })); } catch { /* Private browser mode can disable storage. */ }
+  try { navigator.serviceWorker?.controller?.postMessage({ type: "HOMEOS_ACCESS_BOUNDARY", state }); } catch { /* Server admission remains the authority when no controller is available. */ }
 }
 
 export function boundaryMember(value = readAccessBoundary()): AccessIdentity | null {

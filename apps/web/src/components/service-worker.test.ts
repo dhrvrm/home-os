@@ -21,10 +21,11 @@ async function worker() {
   const self = {
     location: { origin: "https://home-os.test" },
     addEventListener: (name: string, handler: (event: Record<string, unknown>) => void) => handlers.set(name, handler),
-    clients: { claim: vi.fn().mockResolvedValue(undefined) },
+    clients: { claim: vi.fn().mockResolvedValue(undefined), matchAll: vi.fn().mockResolvedValue([]), openWindow: vi.fn().mockResolvedValue(undefined) },
+    registration: { showNotification: vi.fn().mockResolvedValue(undefined) },
     skipWaiting: vi.fn().mockResolvedValue(undefined),
   };
-  vm.runInNewContext(source, { self, caches, fetch: fetcher, URL, Response, Set });
+  vm.runInNewContext(source, { self, caches, fetch: fetcher, URL, Response, Set, AbortController, setTimeout, clearTimeout });
   return { cache, caches, fetcher, self, handlers };
 }
 
@@ -138,5 +139,65 @@ describe("PWA service worker", () => {
     handlers.get("fetch")!({ request: { method: "GET", url: "https://home-os.test/vendor/wllama.wasm?v=older-package", mode: "cors" }, respondWith, waitUntil: vi.fn() });
     expect((await respondWith.mock.calls[0][0]).status).toBe(409);
     expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it("shows a detailed meal question only after fresh recipient admission", async () => {
+    const { handlers, fetcher, self } = await worker();
+    fetcher.mockResolvedValue(new Response(JSON.stringify({ data: { notification: { id: "notice-1", title: "Dinner at 7:30 pm", body: "Dal and rice. Are you eating?", mealId: "meal-1", url: "/?view=menu&meal=meal-1" } }, error: null }), { headers: { "Content-Type": "application/json" } }));
+    const waitUntil = vi.fn();
+    handlers.get("push")!({ data: { json: () => ({ notificationId: "notice-1", memberId: "member-1", mealId: "meal-1" }) }, waitUntil });
+    await waitUntil.mock.calls[0][0];
+    expect(fetcher).toHaveBeenCalledWith("https://home-os.test/api/v1/notifications/notice-1/delivery-check", expect.objectContaining({ credentials: "same-origin", cache: "no-store", headers: { "X-HomeOS-Member": "member-1" } }));
+    expect(self.registration.showNotification).toHaveBeenCalledWith("Dinner at 7:30 pm", expect.objectContaining({ body: "Dal and rice. Are you eating?", data: expect.objectContaining({ url: "https://home-os.test/?view=menu&meal=meal-1" }) }));
+  });
+
+  it("keeps an old recipient's push generic after rejection or malformed push data", async () => {
+    const { handlers, fetcher, self } = await worker();
+    fetcher.mockResolvedValue(new Response("{}", { status: 409 }));
+    for (const payload of [{ notificationId: "notice-1", memberId: "old-member", title: "Private old dish" }, null]) {
+      const waitUntil = vi.fn();
+      handlers.get("push")!({ data: { json: () => payload }, waitUntil });
+      await waitUntil.mock.calls[0][0];
+    }
+    expect(self.registration.showNotification).toHaveBeenCalledTimes(2);
+    for (const [title, options] of self.registration.showNotification.mock.calls) {
+      expect(title).toBe("Home OS");
+      expect(JSON.stringify(options)).not.toContain("Private old dish");
+    }
+  });
+
+  it("suppresses a detailed verdict that arrives after a device access change", async () => {
+    const { handlers, fetcher, self } = await worker();
+    let finish!: (value: Response) => void;
+    fetcher.mockImplementation(() => new Promise<Response>((resolve) => { finish = resolve; }));
+    const waitUntil = vi.fn();
+    handlers.get("push")!({ data: { json: () => ({ notificationId: "notice-1", memberId: "alice" }) }, waitUntil });
+    handlers.get("message")!({ data: { type: "HOMEOS_ACCESS_BOUNDARY", state: "signed-out" }, waitUntil: vi.fn() });
+    finish(new Response(JSON.stringify({ data: { notification: { id: "notice-1", title: "Private dish", body: "Old recipient detail", mealId: "meal-1" } } })));
+    await waitUntil.mock.calls[0][0];
+    expect(self.registration.showNotification).toHaveBeenCalledWith("Home OS", expect.objectContaining({ body: "Open Home OS to check your meal reminders." }));
+  });
+
+  it("bounds the recipient check before displaying a generic notification", async () => {
+    vi.useFakeTimers();
+    try {
+      const { handlers, fetcher, self } = await worker();
+      fetcher.mockImplementation((_url, options) => new Promise((_resolve, reject) => options.signal.addEventListener("abort", () => reject(new Error("timeout")))));
+      const waitUntil = vi.fn();
+      handlers.get("push")!({ data: { json: () => ({ notificationId: "notice-1", memberId: "member-1" }) }, waitUntil });
+      await vi.advanceTimersByTimeAsync(3_000);
+      await waitUntil.mock.calls[0][0];
+      expect(self.registration.showNotification).toHaveBeenCalledWith("Home OS", expect.objectContaining({ body: "Open Home OS to check your meal reminders." }));
+    } finally { vi.useRealTimers(); }
+  });
+
+  it("opens only an approved same-origin destination from a notification", async () => {
+    const { handlers, self } = await worker();
+    const close = vi.fn();
+    const waitUntil = vi.fn();
+    handlers.get("notificationclick")!({ notification: { close, data: { url: "https://attacker.example/?view=menu&meal=meal-1" } }, waitUntil });
+    await waitUntil.mock.calls[0][0];
+    expect(close).toHaveBeenCalledOnce();
+    expect(self.clients.openWindow).toHaveBeenCalledWith("https://home-os.test/?view=notifications");
   });
 });
