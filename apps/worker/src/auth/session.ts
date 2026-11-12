@@ -14,10 +14,11 @@ export interface AuthUser {
 }
 
 export interface AuthSession { user: AuthUser; expiresAt: string }
+export interface DeviceGrant { tokenHash: string; expiresAt: string; credentialVersion: number }
 export type AuthContext = Context<{ Bindings: Env }>;
 
 declare module "hono" {
-  interface ContextVariableMap { member: AuthUser }
+  interface ContextVariableMap { member: AuthUser; deviceGrant: DeviceGrant }
 }
 
 const COOKIE = "homeos_session";
@@ -43,19 +44,41 @@ export function requireOwner(context: AuthContext): AuthUser {
   return member;
 }
 
-export async function readSession(context: AuthContext): Promise<AuthSession | null> {
+export function currentDeviceGrant(context: AuthContext): DeviceGrant {
+  const grant = context.get("deviceGrant");
+  if (!grant) throw new HomeOSError("Sign in to enable device reminders.", "unauthorized", 401);
+  return grant;
+}
+
+export async function hasNotificationDeliveryAuthority(database: D1Database, householdId: string, memberId: string, tokenHash: string, now: string): Promise<boolean> {
+  const grant = await database.prepare(`SELECT 1 AS admitted FROM auth_sessions s
+    JOIN members m ON m.id = s.member_id JOIN auth_accounts a ON a.member_id = m.id
+    WHERE s.token_hash = ? AND m.household_id = ? AND m.id = ? AND m.archived_at IS NULL
+      AND s.expires_at > ? AND s.credential_version = a.credential_version`)
+    .bind(tokenHash, householdId, memberId, now).first();
+  return grant !== null;
+}
+
+async function readSessionWithGrant(context: AuthContext): Promise<(AuthSession & { grant: DeviceGrant }) | null> {
   const token = getCookie(context, COOKIE);
   if (!token || !/^[a-f0-9]{64}$/.test(token)) return null;
+  const tokenHash = await digest(token);
   const row = await context.env.DB.prepare(
-    `SELECT m.id, m.household_id, m.display_name, a.email, m.role, s.expires_at
+    `SELECT m.id, m.household_id, m.display_name, a.email, m.role, s.expires_at, s.credential_version
        FROM auth_sessions s JOIN members m ON m.id = s.member_id
        JOIN auth_accounts a ON a.member_id = m.id
       WHERE s.token_hash = ? AND s.expires_at > ? AND m.archived_at IS NULL AND m.household_id = ?
         AND s.credential_version = a.credential_version`,
-  ).bind(await digest(token), new Date().toISOString(), context.env.HOMEOS_DEFAULT_HOUSEHOLD_ID)
-    .first<{ id: string; household_id: string; display_name: string; email: string; role: AuthUser["role"]; expires_at: string }>();
+  ).bind(tokenHash, new Date().toISOString(), context.env.HOMEOS_DEFAULT_HOUSEHOLD_ID)
+    .first<{ id: string; household_id: string; display_name: string; email: string; role: AuthUser["role"]; expires_at: string; credential_version: number }>();
   if (!row) return null;
-  return { user: { id: row.id, householdId: row.household_id, name: row.display_name, email: row.email, role: row.role }, expiresAt: row.expires_at };
+  return { user: { id: row.id, householdId: row.household_id, name: row.display_name, email: row.email, role: row.role }, expiresAt: row.expires_at,
+    grant: { tokenHash, expiresAt: row.expires_at, credentialVersion: row.credential_version } };
+}
+
+export async function readSession(context: AuthContext): Promise<AuthSession | null> {
+  const session = await readSessionWithGrant(context);
+  return session ? { user: session.user, expiresAt: session.expiresAt } : null;
 }
 
 export async function createSession(context: AuthContext, user: AuthUser, remember: boolean, credentialVersion: number): Promise<AuthSession> {
@@ -92,7 +115,7 @@ export const protectHousehold: MiddlewareHandler<{ Bindings: Env }> = async (con
   if (["/api/v1/auth/status", "/api/v1/auth/login", "/api/v1/auth/setup", "/api/v1/auth/logout"].includes(context.req.path)) return next();
   // Unknown auth routes remain 404 rather than revealing household state.
   if (context.req.path.startsWith("/api/v1/auth/") && !["/api/v1/auth/password"].includes(context.req.path)) return next();
-  const session = await readSession(context);
+  const session = await readSessionWithGrant(context);
   if (!session) return failure(context, { code: "unauthorized", message: "Your session has ended. Sign in again to continue." }, 401);
   const expectedMember = context.req.header("X-HomeOS-Member");
   const changesHousehold = !["GET", "HEAD", "OPTIONS"].includes(context.req.method);
@@ -100,8 +123,15 @@ export const protectHousehold: MiddlewareHandler<{ Bindings: Env }> = async (con
     return failure(context, { code: "session_changed", message: "Another account signed in on this device. Reopen Home OS before continuing." }, 409);
   }
   context.set("member", session.user);
-  if (session.user.role === "viewer" && context.req.path !== "/api/v1/auth/password" && !["GET", "HEAD", "OPTIONS"].includes(context.req.method)) {
+  context.set("deviceGrant", session.grant);
+  if (session.user.role === "viewer" && context.req.path !== "/api/v1/auth/password" && !personalNotificationWrite(context.req.method, context.req.path) && !["GET", "HEAD", "OPTIONS"].includes(context.req.method)) {
     return failure(context, { code: "forbidden", message: "Your account has read-only access." }, 403);
   }
   return next();
 };
+
+function personalNotificationWrite(method: string, path: string): boolean {
+  if (method === "PUT" && path === "/api/v1/notifications/preferences") return true;
+  if (["PUT", "DELETE"].includes(method) && path === "/api/v1/notifications/subscriptions/current") return true;
+  return method === "PATCH" && /^\/api\/v1\/notifications\/[A-Za-z0-9_-]{1,128}$/.test(path);
+}
