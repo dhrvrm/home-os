@@ -2,6 +2,8 @@
 
 Home OS deploys as one Cloudflare Worker. Workers Static Assets serves the exported Next.js PWA; Hono serves `/api/v1`, health checks, synchronization, and `/mcp`; D1 stores authoritative household state and audit history. There is no separately hosted backend or database process.
 
+The primary app address is `https://home.dhruvverma.dev`. The Worker custom domain is declared in `apps/worker/wrangler.jsonc`; Cloudflare manages its DNS and HTTPS certificate. Use this address when installing the PWA. The `workers.dev` address remains available for deployment checks.
+
 ## Services and free-tier shape
 
 - **Workers Static Assets:** PWA shell and bundled Wllama runtimes.

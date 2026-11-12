@@ -1,6 +1,10 @@
 {
   "$schema": "../../node_modules/wrangler/config-schema.json",
   "name": "home-os",
+  "workers_dev": true,
+  "routes": [
+    { "pattern": "home.dhruvverma.dev", "custom_domain": true }
+  ],
   "main": "src/index.ts",
   "compatibility_date": "2026-08-27",
   "compatibility_flags": ["nodejs_compat"],

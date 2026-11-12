@@ -8,6 +8,9 @@ definition: >
   household operator's authority; later membership changes require an active
   owner. Member identities survive credential changes and departure because
   household history and shared expenses continue to refer to those people.
+  Device-directed household reminders remain bound to a continuing access
+  grant, so ending or losing that grant also ends permission to deliver
+  household information to that device.
   Without this subsystem household facts are accessible and mutable without
   an accountable person or an enforceable household boundary.
 inputs:
@@ -34,6 +37,12 @@ inputs:
     description: >
       The trusted current moment supplied by the execution environment.
       Required to expire access and bound repeated attempts to establish it.
+  - name: notification-delivery-check
+    description: >
+      The intended recipient, household, and continuing device grant of a
+      proposed reminder delivery. Supplied by household reminders so that
+      delivery depends on current authority even when no person is making
+      an immediate request.
 outputs:
   - name: member-access-outcome
     description: >
@@ -48,7 +57,19 @@ outputs:
       verified active member, household, and role when permitted. The
       household application consumes this decision before its domain
       operations and uses that member for attribution, including delayed
-      operations, rather than accepting a caller's claimed actor.
+      operations, rather than accepting a caller's claimed actor. Personal
+      device permissions also receive the boundary of that continuing grant
+      so they cannot become independent of the access that established them.
+      A member
+      may control their own reminder permission and reading state without
+      obtaining authority to change shared household facts.
+  - name: notification-delivery-authority
+    description: >
+      Whether the intended recipient still belongs to the household and
+      the exact continuing device grant remains valid for that recipient.
+      Supplied to household reminders before dispatch so departure,
+      revocation, expiry, and replacement of identity proof prevent further
+      disclosure through previously registered devices.
   - name: household-membership
     description: >
       The stable identities, display information, roles, and active status
