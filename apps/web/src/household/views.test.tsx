@@ -1,4 +1,5 @@
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -300,6 +301,152 @@ describe("household views", () => {
     expect(phoneHref("javascript:alert(1)")).toBeUndefined();
     expect(emailHref("a@b.com?subject=bad")).toBeUndefined();
   });
+  it("blocks another preference change until the accepted settings are refreshed", async () => {
+    const original = mock.getMockImplementation()!;
+    const writes: unknown[] = [];
+    let reads = 0;
+    let current = { mealReminders: true, pushEnabled: true };
+    let release: ((value: unknown) => void) | undefined;
+    mock.mockImplementation(async (path, init, options) => {
+      if (path === "/api/v1/notifications/preferences") {
+        if (init?.method === "PUT") {
+          current = JSON.parse(String(init.body));
+          writes.push(current);
+          return { preferences: current };
+        }
+        reads++;
+        if (reads === 2)
+          return new Promise((resolve) => {
+            release = resolve;
+          });
+        return { preferences: current };
+      }
+      return original(path, init, options);
+    });
+    render(<NotificationsView currentUser={user} onOpenMeal={vi.fn()} />);
+    const mealSetting = await screen.findByRole("checkbox", {
+      name: "Meal reminders (inbox and push)",
+    });
+    const pushSetting = screen.getByRole("checkbox", {
+      name: "Allow push delivery across my registered devices",
+    });
+    await waitFor(() => expect(mealSetting).not.toBeDisabled());
+    await userEvent.click(mealSetting);
+    await screen.findByText("Reminder preferences saved.");
+    await waitFor(() => expect(release).toBeDefined());
+    expect(pushSetting).toBeDisabled();
+    await act(async () => release!({ preferences: current }));
+    await waitFor(() => expect(pushSetting).not.toBeDisabled());
+    expect(mealSetting).not.toBeChecked();
+    await userEvent.click(pushSetting);
+    await waitFor(() => expect(writes).toHaveLength(2));
+    expect(writes[1]).toEqual({ mealReminders: false, pushEnabled: false });
+  });
+  it("keeps preference-dependent writes disabled after a failed refresh until retry succeeds", async () => {
+    const original = mock.getMockImplementation()!;
+    let reads = 0;
+    let current = { mealReminders: true, pushEnabled: false };
+    vi.stubGlobal("Notification", {
+      permission: "granted",
+      requestPermission: vi.fn(),
+    });
+    vi.stubGlobal("PushManager", function PushManager() {});
+    mock.mockImplementation(async (path, init, options) => {
+      if (path === "/api/v1/notifications/preferences") {
+        if (init?.method === "PUT") {
+          current = JSON.parse(String(init.body));
+          return { preferences: current };
+        }
+        if (++reads === 2)
+          throw new APIError("Refresh disconnected", "network_error");
+        return { preferences: current };
+      }
+      return original(path, init, options);
+    });
+    render(<NotificationsView currentUser={user} onOpenMeal={vi.fn()} />);
+    const setting = await screen.findByRole("checkbox", {
+      name: "Meal reminders (inbox and push)",
+    });
+    await waitFor(() => expect(setting).not.toBeDisabled());
+    await userEvent.click(setting);
+    const retry = await screen.findByRole("button", { name: "Try again" });
+    expect(setting).toBeDisabled();
+    expect(
+      screen.getByRole("checkbox", {
+        name: "Allow push delivery across my registered devices",
+      }),
+    ).toBeDisabled();
+    expect(
+      screen.getByRole("button", { name: "Enable push notifications" }),
+    ).toBeDisabled();
+    await userEvent.click(retry);
+    await waitFor(() => expect(setting).not.toBeDisabled());
+    expect(setting).not.toBeChecked();
+  });
+  it.each([false, true])(
+    "repairs a rotated sender key only after a gesture, and reuses a matching key (%s)",
+    async (sameKey) => {
+      const permission = vi.fn(async () => "granted" as const);
+      vi.stubGlobal("Notification", {
+        permission: "granted",
+        requestPermission: permission,
+      });
+      vi.stubGlobal("PushManager", function PushManager() {});
+      const native = {
+        endpoint: "https://fcm.googleapis.com/fcm/send/fixture",
+        keys: { p256dh: "public", auth: "secret" },
+      };
+      const unsubscribe = vi.fn(async () => true);
+      const existing = {
+        options: {
+          applicationServerKey: new Uint8Array(sameKey ? [1, 0, 1] : [9, 9, 9])
+            .buffer,
+        },
+        unsubscribe,
+        toJSON: () => native,
+      };
+      const subscribe = vi.fn(async () => ({ toJSON: () => native }));
+      const registration = {
+        pushManager: { getSubscription: async () => existing, subscribe },
+      };
+      Object.defineProperty(navigator, "serviceWorker", {
+        configurable: true,
+        value: {
+          ready: Promise.resolve(registration),
+          getRegistration: async () => registration,
+        },
+      });
+      const original = mock.getMockImplementation()!;
+      mock.mockImplementation(async (path, init, options) => {
+        if (path === "/api/v1/notifications/preferences" && !init?.method)
+          return { preferences: { mealReminders: true, pushEnabled: true } };
+        if (
+          path === "/api/v1/notifications/subscriptions/current" &&
+          !init?.method
+        )
+          return { subscription: { enabled: true } };
+        return original(path, init, options);
+      });
+      render(<NotificationsView currentUser={user} onOpenMeal={vi.fn()} />);
+      const button = await screen.findByRole("button", {
+        name: sameKey
+          ? "Refresh push notifications"
+          : "Update push notifications",
+      });
+      await waitFor(() => expect(button).not.toBeDisabled());
+      expect(unsubscribe).not.toHaveBeenCalled();
+      expect(subscribe).not.toHaveBeenCalled();
+      expect(permission).not.toHaveBeenCalled();
+      await userEvent.click(button);
+      await screen.findByText("Push notifications enabled on this device.");
+      expect(unsubscribe).toHaveBeenCalledTimes(sameKey ? 0 : 1);
+      expect(subscribe).toHaveBeenCalledTimes(sameKey ? 0 : 1);
+      expect(mock).toHaveBeenCalledWith(
+        "/api/v1/notifications/subscriptions/current",
+        expect.objectContaining({ method: "PUT" }),
+      );
+    },
+  );
   it("never prompts on load, and permission alone does not claim device registration", async () => {
     const permission = vi.fn(async () => "denied" as const);
     vi.stubGlobal("Notification", {

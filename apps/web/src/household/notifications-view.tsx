@@ -1,5 +1,5 @@
 "use client";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { AuthUser } from "@/lib/auth";
 import type { WorkLease } from "@/auth/work";
 import type {
@@ -31,6 +31,19 @@ const subscriptionData = (
 export function pushKey(key: string): Uint8Array<ArrayBuffer> {
   const decoded = atob(key.replace(/-/g, "+").replace(/_/g, "/"));
   return Uint8Array.from(decoded, (character) => character.charCodeAt(0));
+}
+function subscriptionUsesKey(
+  subscription: PushSubscription,
+  key: string,
+): boolean {
+  const nativeKey = subscription.options?.applicationServerKey;
+  if (!nativeKey) return false;
+  const actual = new Uint8Array(nativeKey);
+  const expected = pushKey(key);
+  return (
+    actual.length === expected.length &&
+    actual.every((byte, index) => byte === expected[index])
+  );
 }
 export function supportsPush(): boolean {
   return (
@@ -111,22 +124,80 @@ function NotificationScreen({
     !!device.copy &&
     !device.copy.cached &&
     device.copy.data.subscription.enabled;
-  const deviceLabel =
-    !connected || device.copy?.cached
-      ? "Device status needs a connection"
-      : permission === "denied"
-        ? "Blocked by browser"
-        : enabled
-          ? prefs && (!prefs.pushEnabled || !prefs.mealReminders)
-            ? "Registered on this device · delivery paused in preferences"
-            : permission === "granted"
-              ? "Enabled on this device"
-              : "Registered on this device · browser permission needs confirmation"
-          : installation
-            ? "Install this app to enable push"
-            : !available || !configuration?.pushAvailable
-              ? "Unavailable"
-              : "Off";
+  const preferencesReady =
+    !!prefs &&
+    !preferences.loading &&
+    !preferences.error &&
+    !preferences.copy?.cached;
+  const configurationReady =
+    !!configuration && !config.loading && !config.error && !config.copy?.cached;
+  const [nativeKey, setNativeKey] = useState<{
+    key: string;
+    matches: boolean | null;
+  } | null>(null);
+  const publicKey = configuration?.publicKey;
+  const keyMatches =
+    nativeKey?.key === publicKey ? nativeKey?.matches : undefined;
+  useEffect(() => {
+    if (!connected || !available || !enabled || !publicKey) return;
+    let active = true;
+    void task(
+      async (lease) => {
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        try {
+          return await Promise.race([
+            (async () => {
+              const registration =
+                await navigator.serviceWorker.getRegistration();
+              requireIdentity(user, lease);
+              const subscription =
+                await registration?.pushManager.getSubscription();
+              requireIdentity(user, lease);
+              return (
+                !!subscription && subscriptionUsesKey(subscription, publicKey)
+              );
+            })(),
+            new Promise<never>((_, reject) => {
+              timer = setTimeout(
+                () => reject(new Error("Device check timed out")),
+                3000,
+              );
+            }),
+          ]);
+        } finally {
+          clearTimeout(timer);
+        }
+      },
+      (matches) => {
+        if (active) setNativeKey({ key: publicKey, matches });
+      },
+      () => {
+        if (active) setNativeKey({ key: publicKey, matches: null });
+      },
+    );
+    return () => {
+      active = false;
+    };
+  }, [connected, available, enabled, publicKey, task, user]);
+  function deviceLabel(): string {
+    if (!connected || device.copy?.cached)
+      return "Device status needs a connection";
+    if (permission === "denied") return "Blocked by browser";
+    if (enabled) {
+      if (keyMatches === false) return "Device registration needs an update.";
+      if (keyMatches === undefined) return "Checking this device…";
+      if (keyMatches === null)
+        return "Device registration could not be checked. Refresh it to try again.";
+      if (prefs && (!prefs.pushEnabled || !prefs.mealReminders))
+        return "Registered on this device · delivery paused in preferences";
+      return permission === "granted"
+        ? "Enabled on this device"
+        : "Registered on this device · browser permission needs confirmation";
+    }
+    if (installation) return "Install this app to enable push";
+    if (!available || !configuration?.pushAvailable) return "Unavailable";
+    return "Off";
+  }
   async function perform(
     key: string,
     action: (lease: WorkLease) => Promise<unknown>,
@@ -161,7 +232,7 @@ function NotificationScreen({
     );
   }
   async function updatePreferences(change: Partial<NotificationPreferences>) {
-    if (!prefs) return;
+    if (!preferencesReady || !prefs) return;
     await perform(
       "preferences",
       () =>
@@ -180,7 +251,9 @@ function NotificationScreen({
       !available ||
       !configuration?.pushAvailable ||
       !configuration.publicKey ||
-      !prefs
+      !prefs ||
+      !preferencesReady ||
+      !configurationReady
     )
       return;
     // Permission begins synchronously in the explicit button gesture, before any network await.
@@ -204,6 +277,11 @@ function NotificationScreen({
         requireIdentity(user, lease);
         let subscription = await registration.pushManager.getSubscription();
         requireIdentity(user, lease);
+        if (subscription && !subscriptionUsesKey(subscription, key)) {
+          await subscription.unsubscribe();
+          requireIdentity(user, lease);
+          subscription = null;
+        }
         if (!subscription)
           subscription = await registration.pushManager.subscribe({
             userVisibleOnly: true,
@@ -356,7 +434,7 @@ function NotificationScreen({
               <input
                 type="checkbox"
                 checked={prefs.mealReminders}
-                disabled={!connected || !!pending}
+                disabled={!connected || !!pending || !preferencesReady}
                 onChange={(event) =>
                   void updatePreferences({
                     mealReminders: event.target.checked,
@@ -369,7 +447,7 @@ function NotificationScreen({
               <input
                 type="checkbox"
                 checked={prefs.pushEnabled}
-                disabled={!connected || !!pending}
+                disabled={!connected || !!pending || !preferencesReady}
                 onChange={(event) =>
                   void updatePreferences({ pushEnabled: event.target.checked })
                 }
@@ -379,7 +457,7 @@ function NotificationScreen({
           </>
         )}
         <h4>Push on this device</h4>
-        <p>{deviceLabel}</p>
+        <p>{deviceLabel()}</p>
         <ResourceState {...config} retry={() => void config.refresh()} />
         <ResourceState {...device} retry={() => void device.refresh()} />
         {installation && (
@@ -417,12 +495,18 @@ function NotificationScreen({
               permission === "denied" ||
               !configuration?.pushAvailable ||
               !configuration.publicKey ||
-              !prefs ||
-              (enabled && permission === "granted" && prefs.pushEnabled)
+              !preferencesReady ||
+              !configurationReady
             }
             onClick={enablePush}
           >
-            {pending === "enable" ? "Enabling…" : "Enable push notifications"}
+            {pending === "enable"
+              ? "Enabling…"
+              : enabled && prefs?.pushEnabled
+                ? keyMatches === false
+                  ? "Update push notifications"
+                  : "Refresh push notifications"
+                : "Enable push notifications"}
           </button>
           <button
             className="button button--quiet"

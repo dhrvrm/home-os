@@ -12,6 +12,14 @@ import {
 import { pushConfiguration, sendMealPush, type PushFetch } from "./push";
 import { validateNativeSubscription } from "./validation";
 
+// D1 Free counts a batch as one binding request. Reserve the complete
+// eligibility/claim/settlement path before admitting work, including retries.
+const D1_REQUEST_LIMIT = 50;
+const FIXED_TICK_REQUESTS = 6;
+const CANDIDATE_REQUESTS = 3;
+const DELIVERY_REQUESTS = 11;
+const CANDIDATE_PAGE_SIZE = 8;
+
 export interface NotificationTickSummary {
   candidates: number;
   attempted: number;
@@ -47,10 +55,10 @@ export async function runNotificationTick(
   const due = await source.listDueMealReminders(
     householdId,
     currentTime(),
-    50,
+    CANDIDATE_PAGE_SIZE,
     await repository.scanCursor(),
   );
-  const page = due.slice(0, 50);
+  const page = due.slice(0, CANDIDATE_PAGE_SIZE);
   for (const candidate of page) {
     const now = currentTime();
     if (
@@ -72,11 +80,23 @@ export async function runNotificationTick(
     summary.candidates++;
   }
   await repository.saveScanCursor(
-    page.length === 50 ? (page.at(-1)?.cursor ?? null) : null,
+    page.length === CANDIDATE_PAGE_SIZE ? (page.at(-1)?.cursor ?? null) : null,
   );
   await repository.prune(currentTime());
   if (!(await pushConfiguration(env)).pushAvailable) return summary;
-  const deliveries = await repository.dueDeliveries(currentTime(), 20);
+  const deliveryLimit = Math.min(
+    20,
+    Math.floor(
+      (D1_REQUEST_LIMIT -
+        FIXED_TICK_REQUESTS -
+        page.length * CANDIDATE_REQUESTS) /
+        DELIVERY_REQUESTS,
+    ),
+  );
+  const deliveries = await repository.dueDeliveries(
+    currentTime(),
+    deliveryLimit,
+  );
 
   async function allowed(
     subscription: SubscriptionRow,

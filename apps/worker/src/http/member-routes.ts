@@ -1,9 +1,19 @@
 import { Hono } from "hono";
 import type { Env } from "../env";
 import { z } from "zod";
-import { accessAudit, emailSchema, nameSchema, passwordSchema } from "../auth/support";
+import {
+  accessAudit,
+  emailSchema,
+  nameSchema,
+  passwordSchema,
+} from "../auth/support";
 import { hashPassword } from "../auth/crypto";
-import { passwordPepper, requireOwner } from "../auth/session";
+import {
+  currentDeviceGrant,
+  passwordPepper,
+  requireOwner,
+  type AuthContext,
+} from "../auth/session";
 import { createId } from "../platform/ids";
 import { HomeOSError, NotFoundError } from "../platform/errors";
 import { parsedJSON } from "./body";
@@ -19,13 +29,70 @@ interface MemberRow {
 }
 
 function mapMember(row: MemberRow) {
-  return { id: row.id, name: row.display_name, email: row.email, role: row.role, active: row.archived_at === null, hasLogin: !!row.has_login };
+  return {
+    id: row.id,
+    name: row.display_name,
+    email: row.email,
+    role: row.role,
+    active: row.archived_at === null,
+    hasLogin: !!row.has_login,
+  };
 }
 
 function memberConflict(error: unknown): never {
-  if (String(error).includes("last_active_owner")) throw new HomeOSError("Keep at least one active home owner.", "last_owner", 409);
-  if (String(error).includes("UNIQUE constraint")) throw new HomeOSError("That email already belongs to a member.", "email_in_use", 409);
+  if (String(error).includes("last_active_owner"))
+    throw new HomeOSError(
+      "Keep at least one active home owner.",
+      "last_owner",
+      409,
+    );
+  if (String(error).includes("expected_version = actual_version"))
+    throw new HomeOSError(
+      "Your owner access changed. Reopen Home OS before managing members.",
+      "forbidden",
+      403,
+    );
+  if (String(error).includes("UNIQUE constraint"))
+    throw new HomeOSError(
+      "That email already belongs to a member.",
+      "email_in_use",
+      409,
+    );
   throw error;
+}
+
+function ownerMutationAdmission(context: AuthContext) {
+  const owner = requireOwner(context);
+  const grant = currentDeviceGrant(context);
+  const operationId = createId();
+  // The first statement aborts the whole batch if authority ended while its
+  // body or password hash was awaited. The temporary guard contains no grant.
+  return {
+    guard: context.env.DB.prepare(
+      `INSERT INTO mutation_guards
+      (household_id, operation_id, expected_version, actual_version)
+      SELECT ?, ?, 1, EXISTS (
+        SELECT 1 FROM auth_sessions s
+        JOIN members m ON m.id = s.member_id
+        JOIN auth_accounts a ON a.member_id = m.id
+        WHERE s.token_hash = ? AND m.id = ? AND m.household_id = ?
+          AND m.role = 'owner' AND m.archived_at IS NULL
+          AND s.expires_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+          AND s.credential_version = a.credential_version
+          AND s.credential_version = ?
+      )`,
+    ).bind(
+      owner.householdId,
+      operationId,
+      grant.tokenHash,
+      owner.id,
+      owner.householdId,
+      grant.credentialVersion,
+    ),
+    cleanup: context.env.DB.prepare(
+      "DELETE FROM mutation_guards WHERE household_id = ? AND operation_id = ?",
+    ).bind(owner.householdId, operationId),
+  };
 }
 
 export function createMemberRoutes(): Hono<{ Bindings: Env }> {
@@ -45,78 +112,209 @@ export function createMemberRoutes(): Hono<{ Bindings: Env }> {
 
   routes.post("/members", async (context) => {
     const owner = requireOwner(context);
-    const input = await parsedJSON(context, z.object({ name: nameSchema, email: emailSchema, password: passwordSchema, role: z.enum(["owner", "member", "viewer"]).default("member") }));
+    const input = await parsedJSON(
+      context,
+      z.object({
+        name: nameSchema,
+        email: emailSchema,
+        password: passwordSchema,
+        role: z.enum(["owner", "member", "viewer"]).default("member"),
+      }),
+    );
     const id = createId();
     const now = new Date().toISOString();
-    const hash = await hashPassword(input.password, passwordPepper(context.env));
+    const hash = await hashPassword(
+      input.password,
+      passwordPepper(context.env),
+    );
+    const admission = ownerMutationAdmission(context);
     try {
       await context.env.DB.batch([
-        context.env.DB.prepare("INSERT INTO members (id, household_id, display_name, email, role, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
-          .bind(id, owner.householdId, input.name, input.email, input.role, now, now),
-        context.env.DB.prepare("INSERT INTO auth_accounts (member_id, email, password_hash, updated_at) VALUES (?, ?, ?, ?)").bind(id, input.email, hash, now),
+        admission.guard,
+        context.env.DB.prepare(
+          "INSERT INTO members (id, household_id, display_name, email, role, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        ).bind(
+          id,
+          owner.householdId,
+          input.name,
+          input.email,
+          input.role,
+          now,
+          now,
+        ),
+        context.env.DB.prepare(
+          "INSERT INTO auth_accounts (member_id, email, password_hash, updated_at) VALUES (?, ?, ?, ?)",
+        ).bind(id, input.email, hash, now),
         accessAudit(context, owner.id, id, "member.created"),
+        admission.cleanup,
       ]);
-    } catch (error) { memberConflict(error); }
-    return success(context, { member: { id, name: input.name, email: input.email, role: input.role, active: true, hasLogin: true } }, 201);
+    } catch (error) {
+      memberConflict(error);
+    }
+    return success(
+      context,
+      {
+        member: {
+          id,
+          name: input.name,
+          email: input.email,
+          role: input.role,
+          active: true,
+          hasLogin: true,
+        },
+      },
+      201,
+    );
   });
 
   routes.patch("/members/:id", async (context) => {
     const owner = requireOwner(context);
     const id = context.req.param("id");
-    const input = await parsedJSON(context, z.object({ name: nameSchema.optional(), email: emailSchema.optional(), role: z.enum(["owner", "member", "viewer"]).optional(), active: z.boolean().optional() }).strict());
-    const row = await context.env.DB.prepare(`SELECT m.id, m.display_name, m.email, m.role, m.archived_at,
+    const input = await parsedJSON(
+      context,
+      z
+        .object({
+          name: nameSchema.optional(),
+          email: emailSchema.optional(),
+          role: z.enum(["owner", "member", "viewer"]).optional(),
+          active: z.boolean().optional(),
+        })
+        .strict(),
+    );
+    const row = await context.env.DB.prepare(
+      `SELECT m.id, m.display_name, m.email, m.role, m.archived_at,
         EXISTS (SELECT 1 FROM auth_accounts a WHERE a.member_id = m.id) AS has_login
-        FROM members m WHERE m.id = ? AND m.household_id = ?`).bind(id, owner.householdId).first<MemberRow>();
+        FROM members m WHERE m.id = ? AND m.household_id = ?`,
+    )
+      .bind(id, owner.householdId)
+      .first<MemberRow>();
     if (!row) throw new NotFoundError("member", id);
     if (input.email !== undefined) {
-      const duplicate = await context.env.DB.prepare("SELECT member_id FROM auth_accounts WHERE email = ? COLLATE NOCASE AND member_id <> ?")
-        .bind(input.email, id).first();
-      if (duplicate) throw new HomeOSError("That email already belongs to a member.", "email_in_use", 409);
+      const duplicate = await context.env.DB.prepare(
+        "SELECT member_id FROM auth_accounts WHERE email = ? COLLATE NOCASE AND member_id <> ?",
+      )
+        .bind(input.email, id)
+        .first();
+      if (duplicate)
+        throw new HomeOSError(
+          "That email already belongs to a member.",
+          "email_in_use",
+          409,
+        );
     }
     const now = new Date().toISOString();
     const assignments = ["updated_at = ?"];
     const values: unknown[] = [now];
-    if (input.name !== undefined) { assignments.push("display_name = ?"); values.push(input.name); }
-    if (input.email !== undefined) { assignments.push("email = ?"); values.push(input.email); }
-    if (input.role !== undefined) { assignments.push("role = ?"); values.push(input.role); }
-    if (input.active !== undefined) { assignments.push("archived_at = ?"); values.push(input.active ? null : now); }
+    if (input.name !== undefined) {
+      assignments.push("display_name = ?");
+      values.push(input.name);
+    }
+    if (input.email !== undefined) {
+      assignments.push("email = ?");
+      values.push(input.email);
+    }
+    if (input.role !== undefined) {
+      assignments.push("role = ?");
+      values.push(input.role);
+    }
+    if (input.active !== undefined) {
+      assignments.push("archived_at = ?");
+      values.push(input.active ? null : now);
+    }
+    const admission = ownerMutationAdmission(context);
     try {
       const results = await context.env.DB.batch<MemberRow>([
-        context.env.DB.prepare(`UPDATE members SET ${assignments.join(", ")} WHERE id = ? AND household_id = ?`)
-          .bind(...values, id, owner.householdId),
-        ...(input.email !== undefined ? [context.env.DB.prepare("UPDATE auth_accounts SET email = ?, updated_at = ? WHERE member_id = ?").bind(input.email, now, id)] : []),
-        ...(input.active === false ? [context.env.DB.prepare("DELETE FROM auth_sessions WHERE member_id = ?").bind(id)] : []),
-        accessAudit(context, owner.id, id, input.active === false ? "member.deactivated" : input.active === true ? "member.reactivated" : "member.updated"),
-        context.env.DB.prepare(`SELECT m.id, m.display_name, m.email, m.role, m.archived_at,
+        admission.guard,
+        context.env.DB.prepare(
+          `UPDATE members SET ${assignments.join(", ")} WHERE id = ? AND household_id = ?`,
+        ).bind(...values, id, owner.householdId),
+        ...(input.email !== undefined
+          ? [
+              context.env.DB.prepare(
+                "UPDATE auth_accounts SET email = ?, updated_at = ? WHERE member_id = ?",
+              ).bind(input.email, now, id),
+            ]
+          : []),
+        ...(input.active === false
+          ? [
+              context.env.DB.prepare(
+                "DELETE FROM auth_sessions WHERE member_id = ?",
+              ).bind(id),
+            ]
+          : []),
+        accessAudit(
+          context,
+          owner.id,
+          id,
+          input.active === false
+            ? "member.deactivated"
+            : input.active === true
+              ? "member.reactivated"
+              : "member.updated",
+        ),
+        admission.cleanup,
+        context.env.DB.prepare(
+          `SELECT m.id, m.display_name, m.email, m.role, m.archived_at,
           EXISTS (SELECT 1 FROM auth_accounts a WHERE a.member_id = m.id) AS has_login
-          FROM members m WHERE m.id = ? AND m.household_id = ?`).bind(id, owner.householdId),
+          FROM members m WHERE m.id = ? AND m.household_id = ?`,
+        ).bind(id, owner.householdId),
       ]);
       const updated = results.at(-1)?.results[0];
       if (!updated) throw new NotFoundError("member", id);
       return success(context, { member: mapMember(updated) });
-    } catch (error) { memberConflict(error); }
+    } catch (error) {
+      memberConflict(error);
+    }
   });
 
   routes.post("/members/:id/password", async (context) => {
     const owner = requireOwner(context);
     const id = context.req.param("id");
-    if (id === owner.id) throw new HomeOSError("Change your own password in Account using your current password.", "invalid_request", 400);
-    const input = await parsedJSON(context, z.object({ password: passwordSchema }));
-    const member = await context.env.DB.prepare("SELECT email FROM members WHERE id = ? AND household_id = ?").bind(id, owner.householdId).first<{ email: string | null }>();
+    if (id === owner.id)
+      throw new HomeOSError(
+        "Change your own password in Account using your current password.",
+        "invalid_request",
+        400,
+      );
+    const input = await parsedJSON(
+      context,
+      z.object({ password: passwordSchema }),
+    );
+    const member = await context.env.DB.prepare(
+      "SELECT email FROM members WHERE id = ? AND household_id = ?",
+    )
+      .bind(id, owner.householdId)
+      .first<{ email: string | null }>();
     if (!member) throw new NotFoundError("member", id);
-    if (!member.email) throw new HomeOSError("Add an email to this member before setting a password.", "invalid_request", 400);
-    const hash = await hashPassword(input.password, passwordPepper(context.env));
+    if (!member.email)
+      throw new HomeOSError(
+        "Add an email to this member before setting a password.",
+        "invalid_request",
+        400,
+      );
+    const hash = await hashPassword(
+      input.password,
+      passwordPepper(context.env),
+    );
+    const admission = ownerMutationAdmission(context);
     try {
       await context.env.DB.batch([
-        context.env.DB.prepare(`INSERT INTO auth_accounts (member_id, email, password_hash, updated_at)
+        admission.guard,
+        context.env.DB.prepare(
+          `INSERT INTO auth_accounts (member_id, email, password_hash, updated_at)
           SELECT id, email, ?, ? FROM members WHERE id = ? AND household_id = ? AND email IS NOT NULL
           ON CONFLICT (member_id) DO UPDATE SET email = excluded.email, password_hash = excluded.password_hash,
-          credential_version = credential_version + 1, updated_at = excluded.updated_at`)
-          .bind(hash, new Date().toISOString(), id, owner.householdId),
-        context.env.DB.prepare("DELETE FROM auth_sessions WHERE member_id = ?").bind(id),
+          credential_version = credential_version + 1, updated_at = excluded.updated_at`,
+        ).bind(hash, new Date().toISOString(), id, owner.householdId),
+        context.env.DB.prepare(
+          "DELETE FROM auth_sessions WHERE member_id = ?",
+        ).bind(id),
         accessAudit(context, owner.id, id, "member.password_reset"),
+        admission.cleanup,
       ]);
-    } catch (error) { memberConflict(error); }
+    } catch (error) {
+      memberConflict(error);
+    }
     return success(context, { reset: true });
   });
 

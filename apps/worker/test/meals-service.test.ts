@@ -1,4 +1,10 @@
 import { describe, it, expect } from "vitest";
+import { countedD1 } from "./d1-budget";
+import { Hono } from "hono";
+import type { Env } from "../src/env";
+import { protectHousehold } from "../src/auth/session";
+import { createMealRoutes } from "../src/meals/routes";
+import { digest } from "../src/auth/crypto";
 import { env } from "cloudflare:workers";
 import { MealService } from "../src/meals/service";
 import { D1MealRepository } from "../src/meals/d1-repository";
@@ -44,6 +50,153 @@ async function stock(
     .run();
 }
 describe("cooking rules against real D1", () => {
+  it("checks combined demand when ingredient rows share exact stock", async () => {
+    const { service } = fixture();
+    const id = crypto.randomUUID();
+    await stock(id, "exact", 3, "cup");
+    const recipe = await service.createRecipe(context(), {
+      ...recipeInput,
+      ingredients: [
+        {
+          name: "First portion",
+          quantity: 2,
+          unit: "cup",
+          inventoryItemId: id,
+        },
+        {
+          name: "Second portion",
+          quantity: 2,
+          unit: "cup",
+          inventoryItemId: id,
+        },
+      ],
+    });
+    expect(recipe.availability.state).toBe("missing");
+    expect(recipe.availability.ingredients.map((entry) => entry.state)).toEqual(
+      ["missing", "missing"],
+    );
+    await env.DB.prepare("UPDATE inventory_items SET quantity = 4 WHERE id = ?")
+      .bind(id)
+      .run();
+    expect(
+      (await service.getRecipe("home", recipe.id)).availability.state,
+    ).toBe("ready");
+    const uncertain = await service.updateRecipe(context(1), recipe.id, {
+      ingredients: [
+        { name: "Measured", quantity: 2, unit: "cup", inventoryItemId: id },
+        { name: "Different unit", quantity: 2, unit: "g", inventoryItemId: id },
+        { name: "Unmeasured", inventoryItemId: id },
+      ],
+    });
+    expect(uncertain.availability.state).toBe("unknown");
+    expect(
+      uncertain.availability.ingredients.map((entry) => entry.state),
+    ).toEqual(["sufficient", "unknown", "unknown"]);
+  });
+  it("allows only floating-point roundoff when summing fractional linked demand", async () => {
+    const { service } = fixture();
+    const id = crypto.randomUUID();
+    await stock(id, "exact", 0.3, "cup");
+    const recipe = await service.createRecipe(context(), {
+      ...recipeInput,
+      ingredients: [
+        {
+          name: "First portion",
+          quantity: 0.1,
+          unit: "cup",
+          inventoryItemId: id,
+        },
+        {
+          name: "Second portion",
+          quantity: 0.2,
+          unit: "cup",
+          inventoryItemId: id,
+        },
+      ],
+    });
+    expect(recipe.availability.state).toBe("ready");
+    await env.DB.prepare(
+      "UPDATE inventory_items SET quantity = 0.2999 WHERE id = ?",
+    )
+      .bind(id)
+      .run();
+    expect(
+      (await service.getRecipe("home", recipe.id)).availability.state,
+    ).toBe("missing");
+    await env.DB.prepare("UPDATE inventory_items SET quantity = ? WHERE id = ?")
+      .bind(Number.MAX_VALUE, id)
+      .run();
+    const overflow = await service.updateRecipe(context(1), recipe.id, {
+      ingredients: [
+        {
+          name: "First overflow portion",
+          quantity: Number.MAX_VALUE,
+          unit: "cup",
+          inventoryItemId: id,
+        },
+        {
+          name: "Second overflow portion",
+          quantity: Number.MAX_VALUE,
+          unit: "cup",
+          inventoryItemId: id,
+        },
+      ],
+    });
+    expect(overflow.availability.state).toBe("missing");
+  });
+  it("serves a monthly menu with at least 48 meals under the Free D1 budget including authentication", async () => {
+    const marker = `budget-${crypto.randomUUID()}`;
+    const dates = Array.from({ length: 48 }, (_, index) =>
+      new Date(
+        Date.UTC(2093, 0, 1 + Math.floor(index / 2), index % 2 ? 14 : 8),
+      ).toISOString(),
+    );
+    await env.DB.batch(
+      dates.map((date, index) =>
+        env.DB.prepare(
+          "INSERT INTO meals (id, household_id, title, cooking_at, timezone, reminder_at, recipes_json, created_at, updated_at) VALUES (?, 'home', ?, ?, 'Asia/Kolkata', ?, '[]', ?, ?)",
+        ).bind(
+          `${marker}-${index}`,
+          marker,
+          date,
+          new Date(Date.parse(date) - 60 * 60_000).toISOString(),
+          date,
+          date,
+        ),
+      ),
+    );
+    await cookingApi("/recipes");
+    const token = await digest("cooking-fixture:local-owner");
+    const counted = countedD1(env.DB);
+    const app = new Hono<{ Bindings: Env }>();
+    app.use("/api/v1/*", protectHousehold);
+    app.route("/api/v1", createMealRoutes());
+    const response = await app.request(
+      "https://home-os.test/api/v1/meals?from=2093-01-01&to=2093-01-31",
+      { headers: { Cookie: `homeos_session=${token}` } },
+      { ...env, DB: counted.database },
+    );
+    expect(response.status).toBe(200);
+    const data = (await response.json()) as {
+      data: {
+        meals: Array<{
+          title: string;
+          attendance: { counts: { total: number; pending: number } };
+        }>;
+      };
+    };
+    const meals = data.data.meals.filter((meal) => meal.title === marker);
+    expect(meals).toHaveLength(48);
+    expect(
+      meals.every(
+        (meal) =>
+          meal.attendance.counts.total >= 1 &&
+          meal.attendance.counts.pending === meal.attendance.counts.total,
+      ),
+    ).toBe(true);
+    expect(counted.calls()).toBeLessThanOrEqual(50);
+  });
+
   it("qualifies exact stock honestly and never changes quantities", async () => {
     const { service } = fixture();
     const ids = [crypto.randomUUID(), crypto.randomUUID(), crypto.randomUUID()];

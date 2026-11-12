@@ -160,29 +160,55 @@ export class D1MealRepository {
         ingredient.inventoryItemId ? [ingredient.inventoryItemId] : [],
       ),
     );
-    for (const id of linked) {
-      const item = await this.database
-        .prepare(
-          "SELECT id FROM inventory_items WHERE household_id = ? AND id = ? AND archived_at IS NULL",
-        )
-        .bind(householdId, id)
-        .first();
-      if (!item)
-        throw new ValidationError(
-          "ingredients",
-          "select an active inventory item from this household",
-        );
-    }
+    if (!linked.size) return;
+    const rows = await this.database
+      .prepare(
+        `SELECT id FROM inventory_items WHERE household_id = ? AND id IN (${[...linked].map(() => "?").join(",")}) AND archived_at IS NULL`,
+      )
+      .bind(householdId, ...linked)
+      .all<{ id: string }>();
+    if (rows.results.length !== linked.size)
+      throw new ValidationError(
+        "ingredients",
+        "select an active inventory item from this household",
+      );
   }
 
-  async withAvailability(recipe: StoredRecipe): Promise<Recipe> {
+  async inventoryStock(
+    householdId: string,
+  ): Promise<Map<string, InventoryRow>> {
     const rows = await this.database
       .prepare(
         "SELECT id, unit, tracking_mode, quantity, stock_level, archived_at FROM inventory_items WHERE household_id = ?",
       )
-      .bind(recipe.householdId)
+      .bind(householdId)
       .all<InventoryRow>();
-    const stock = new Map(rows.results.map((row) => [row.id, row]));
+    return new Map(rows.results.map((row) => [row.id, row]));
+  }
+
+  async withAvailability(
+    recipe: StoredRecipe,
+    inventory?: ReadonlyMap<string, InventoryRow>,
+  ): Promise<Recipe> {
+    const stock = inventory ?? (await this.inventoryStock(recipe.householdId));
+    const demand = new Map<string, { quantity: number; terms: number }>();
+    for (const ingredient of recipe.ingredients) {
+      const item = ingredient.inventoryItemId
+        ? stock.get(ingredient.inventoryItemId)
+        : undefined;
+      if (
+        item &&
+        ingredient.quantity !== null &&
+        ingredient.unit &&
+        ingredient.unit === item.unit
+      ) {
+        const current = demand.get(item.id) ?? { quantity: 0, terms: 0 };
+        demand.set(item.id, {
+          quantity: current.quantity + ingredient.quantity,
+          terms: current.terms + 1,
+        });
+      }
+    }
     const ingredients = recipe.ingredients.map((ingredient, index) => {
       const item = ingredient.inventoryItemId
         ? stock.get(ingredient.inventoryItemId)
@@ -232,16 +258,23 @@ export class D1MealRepository {
             "A matching unit and positive ingredient quantity are required",
         };
       }
+      const combined = demand.get(item.id);
+      const requiredQuantity = combined?.quantity ?? ingredient.quantity;
+      // Addition can exceed an equal decimal stock value by a few rounding bits.
+      // Scale the bound to this sum; infinity and actual shortfalls stay missing.
+      const sufficient =
+        item.quantity >= requiredQuantity ||
+        (Number.isFinite(requiredQuantity) &&
+          requiredQuantity - item.quantity <=
+            Number.EPSILON *
+              Math.max(requiredQuantity, item.quantity) *
+              (combined?.terms ?? 1));
       return {
         ...base,
-        state:
-          item.quantity >= ingredient.quantity
-            ? ("sufficient" as const)
-            : ("missing" as const),
-        reason:
-          item.quantity >= ingredient.quantity
-            ? "Exact stock covers this ingredient"
-            : "Exact stock is below the requested quantity",
+        state: sufficient ? ("sufficient" as const) : ("missing" as const),
+        reason: sufficient
+          ? "Exact stock covers this ingredient"
+          : "Exact stock is below the requested quantity",
       };
     });
     return {
@@ -356,12 +389,8 @@ export class D1MealRepository {
     return rows.results.map(mealRow);
   }
 
-  async withAttendance(
-    meal: StoredMeal,
-    memberId: string,
-    override?: MealAttendance,
-  ): Promise<Meal> {
-    const rows = await this.database
+  private attendanceStatement(meal: StoredMeal): D1PreparedStatement {
+    return this.database
       .prepare(
         `SELECT m.id AS member_id, m.display_name, a.response, a.announcement_version, a.response_version, a.updated_at
        FROM members m LEFT JOIN meal_attendance a
@@ -369,9 +398,38 @@ export class D1MealRepository {
        WHERE m.household_id = ? AND m.archived_at IS NULL AND m.role IN ('owner', 'member')
        ORDER BY m.display_name, m.id`,
       )
-      .bind(meal.id, meal.householdId)
-      .all<AttendanceRow>();
-    const participants = rows.results.map((row) => {
+      .bind(meal.id, meal.householdId);
+  }
+
+  async withAttendanceForMeals(
+    meals: StoredMeal[],
+    memberId: string,
+  ): Promise<Meal[]> {
+    if (!meals.length) return [];
+    const rows = await this.database.batch<AttendanceRow>(
+      meals.map((meal) => this.attendanceStatement(meal)),
+    );
+    return meals.map((meal, index) =>
+      this.attendanceProjection(meal, memberId, rows[index]!.results),
+    );
+  }
+
+  async withAttendance(
+    meal: StoredMeal,
+    memberId: string,
+    override?: MealAttendance,
+  ): Promise<Meal> {
+    const rows = await this.attendanceStatement(meal).all<AttendanceRow>();
+    return this.attendanceProjection(meal, memberId, rows.results, override);
+  }
+
+  private attendanceProjection(
+    meal: StoredMeal,
+    memberId: string,
+    rows: AttendanceRow[],
+    override?: MealAttendance,
+  ): Meal {
+    const participants = rows.map((row) => {
       if (override?.memberId === row.member_id) return override;
       const answered = row.announcement_version ?? 0;
       return {

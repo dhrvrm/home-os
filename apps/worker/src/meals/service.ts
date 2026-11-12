@@ -73,10 +73,11 @@ export class MealService {
     householdId: string,
     filter: RecipeFilter = {},
   ): Promise<Recipe[]> {
+    const recipes = await this.repository.listRecipes(householdId, filter);
+    if (!recipes.length) return [];
+    const stock = await this.repository.inventoryStock(householdId);
     return Promise.all(
-      (await this.repository.listRecipes(householdId, filter)).map((recipe) =>
-        this.repository.withAvailability(recipe),
-      ),
+      recipes.map((recipe) => this.repository.withAvailability(recipe, stock)),
     );
   }
 
@@ -231,9 +232,7 @@ export class MealService {
       range.includeCancelled ?? false,
     );
     return {
-      meals: await Promise.all(
-        meals.map((meal) => this.repository.withAttendance(meal, memberId)),
-      ),
+      meals: await this.repository.withAttendanceForMeals(meals, memberId),
       timezone,
     };
   }

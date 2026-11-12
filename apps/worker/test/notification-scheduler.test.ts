@@ -1,4 +1,6 @@
 import { env } from "cloudflare:workers";
+import { countedD1 } from "./d1-budget";
+import { digest } from "../src/auth/crypto";
 import { beforeEach, describe, expect, it } from "vitest";
 import type { Env } from "../src/env";
 import type {
@@ -94,6 +96,77 @@ async function delivery() {
 }
 
 describe("bounded notification scheduling", () => {
+  it("delivers to every household device without exceeding the Free D1 invocation budget", async () => {
+    const fixture = await pushFixture();
+    const repository = new NotificationRepository(env.DB, "home");
+    for (let index = 0; index < 4; index++) {
+      const member = index === 0 ? "local-owner" : `notice-budget-${index}`;
+      const hash = await seedNotificationMember(
+        member,
+        index === 0 ? "owner" : "member",
+        String(index + 1).repeat(64),
+      );
+      await repository.setPreferences(
+        member,
+        { mealReminders: true, pushEnabled: true },
+        now,
+      );
+      const subscription = {
+        ...fixture.subscription,
+        endpoint: `${fixture.subscription.endpoint}-${index}`,
+      };
+      await repository.registerSubscription(
+        member,
+        {
+          tokenHash: hash,
+          expiresAt: "2099-01-01T00:00:00.000Z",
+          credentialVersion: 1,
+        },
+        subscription,
+        await digest(subscription.endpoint),
+        now,
+      );
+    }
+    let attempts = 0;
+    const perTick: number[] = [];
+    for (let tick = 0; tick < 4; tick++) {
+      const counted = countedD1(env.DB);
+      const source: MealReminderSource = {
+        listDueMealReminders: (home, instant, limit, after) =>
+          listDueMealReminders(counted.database, home, instant, limit, after),
+        isMealReminderEligible: (home, meal, version, member, instant) =>
+          isMealReminderEligible(
+            counted.database,
+            home,
+            meal,
+            version,
+            member,
+            instant,
+          ),
+      };
+      await runNotificationTick(
+        { ...fixture.settings, DB: counted.database },
+        source,
+        new Date(Date.parse(now) + tick * 60_000).toISOString(),
+        {
+          fetcher: async () => {
+            attempts++;
+            return new Response(null, { status: 201 });
+          },
+        },
+      );
+      perTick.push(counted.calls());
+    }
+    expect(Math.max(...perTick)).toBeLessThanOrEqual(50);
+    expect(attempts).toBe(4);
+    expect(await count("notifications")).toBe(4);
+    expect(
+      await env.DB.prepare(
+        "SELECT count(*) AS n FROM notification_deliveries WHERE state = 'accepted'",
+      ).first<number>("n"),
+    ).toBe(4);
+  });
+
   it("eventually visits every unanswered recipient beyond the first bounded meal page", async () => {
     const statements = Array.from({ length: 205 }, (_, index) =>
       env.DB.prepare(
@@ -122,14 +195,14 @@ describe("bounded notification scheduling", () => {
     };
     const perTick: number[] = [];
     let previous = 0;
-    for (let tick = 0; tick < 6; tick++) {
+    for (let tick = 0; tick < 27; tick++) {
       await runNotificationTick(env, realSource, now);
       const total = (await count("notifications"))!;
       perTick.push(total - previous);
       previous = total;
     }
     expect(await count("notifications")).toBe(206);
-    expect(Math.max(...perTick)).toBeLessThanOrEqual(50);
+    expect(Math.max(...perTick)).toBeLessThanOrEqual(8);
     expect(await count("notification_reminders")).toBe(206);
 
     // A new recipient ordered before the saved cursor is found after wrapping,
@@ -139,7 +212,7 @@ describe("bounded notification scheduling", () => {
     )
       .bind(now, now)
       .run();
-    for (let tick = 0; tick < 6; tick++)
+    for (let tick = 0; tick < 27; tick++)
       await runNotificationTick(env, realSource, now);
     expect(await count("notifications")).toBe(207);
     expect(await count("notification_reminders")).toBe(207);
@@ -550,7 +623,7 @@ describe("bounded notification scheduling", () => {
     expect(await count("notification_subscriptions")).toBe(0);
   });
 
-  it("bounds each tick to twenty provider attempts with at most four concurrent requests", async () => {
+  it("eventually delivers every device within each tick budget and four concurrent requests", async () => {
     const fixture = await enabledPush();
     const hash = await seedNotificationMember();
     const members = ["local-owner"];
@@ -581,11 +654,6 @@ describe("bounded notification scheduling", () => {
       );
       members.push(memberId);
     }
-    const candidates = members.map((memberId) => ({ ...candidate, memberId }));
-    const manySource: MealReminderSource = {
-      listDueMealReminders: async () => candidates,
-      isMealReminderEligible: async () => true,
-    };
     let active = 0;
     let peak = 0;
     let sends = 0;
@@ -597,16 +665,44 @@ describe("bounded notification scheduling", () => {
       active--;
       return new Response(null, { status: 201 });
     };
-    await runNotificationTick(fixture.settings as Env, manySource, now, {
-      fetcher,
-    });
-    expect(sends).toBe(20);
+    for (let tick = 0; tick < 25 && sends < members.length; tick++) {
+      const counted = countedD1(env.DB);
+      const pagedSource: MealReminderSource = {
+        listDueMealReminders: (household, instant, limit, after) =>
+          listDueMealReminders(
+            counted.database,
+            household,
+            instant,
+            limit,
+            after,
+          ),
+        isMealReminderEligible: (household, meal, version, member, instant) =>
+          isMealReminderEligible(
+            counted.database,
+            household,
+            meal,
+            version,
+            member,
+            instant,
+          ),
+      };
+      const result = await runNotificationTick(
+        { ...fixture.settings, DB: counted.database } as Env,
+        pagedSource,
+        new Date(Date.parse(now) + tick * 60_000).toISOString(),
+        { fetcher },
+      );
+      expect(counted.calls()).toBeLessThanOrEqual(50);
+      expect(result.attempted).toBeLessThanOrEqual(20);
+    }
+    expect(sends).toBe(25);
+    expect(peak).toBeGreaterThan(0);
     expect(peak).toBeLessThanOrEqual(4);
     expect(await count("notifications")).toBe(25);
     expect(
       await env.DB.prepare(
         "SELECT COUNT(*) AS count FROM notification_deliveries WHERE state = 'pending'",
       ).first("count"),
-    ).toBe(5);
+    ).toBe(0);
   });
 });
