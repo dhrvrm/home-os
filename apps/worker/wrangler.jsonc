@@ -24,7 +24,11 @@
     }
   ],
   "vars": {
-    "HOMEOS_DEFAULT_HOUSEHOLD_ID": "home"
+    "HOMEOS_DEFAULT_HOUSEHOLD_ID": "home",
+    "HOMEOS_VAPID_SUBJECT": "https://home.dhruvverma.dev"
+  },
+  "triggers": {
+    "crons": ["* * * * *"]
   },
   "observability": {
     "enabled": true

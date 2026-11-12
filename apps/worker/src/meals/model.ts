@@ -132,6 +132,8 @@ export interface AttendanceInput {
 }
 
 export interface MealReminderCandidate {
+  /** Opaque position in the cooking-owned due-recipient ordering. */
+  cursor?: string;
   mealId: string;
   announcementVersion: number;
   memberId: string;
@@ -144,9 +146,27 @@ export interface MealReminderCandidate {
 
 /** The database is bound by the adapter; notification processing consumes meaning. */
 export interface MealReminderSource {
-  listDueMealReminders(householdId: string, now: string, limit?: number): Promise<MealReminderCandidate[]>;
-  isMealReminderEligible(householdId: string, mealId: string, announcementVersion: number, memberId: string, now: string): Promise<boolean>;
+  listDueMealReminders(
+    householdId: string,
+    now: string,
+    limit?: number,
+    after?: string,
+  ): Promise<MealReminderCandidate[]>;
+  isMealReminderEligible(
+    householdId: string,
+    mealId: string,
+    announcementVersion: number,
+    memberId: string,
+    now: string,
+  ): Promise<boolean>;
 }
 
-export interface RecipeFilter { search?: string; archived?: ArchivedFilter }
-export interface MealRange { from: string; to: string; includeCancelled?: boolean }
+export interface RecipeFilter {
+  search?: string;
+  archived?: ArchivedFilter;
+}
+export interface MealRange {
+  from: string;
+  to: string;
+  includeCancelled?: boolean;
+}

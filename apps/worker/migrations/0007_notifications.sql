@@ -1,5 +1,12 @@
 CREATE UNIQUE INDEX auth_sessions_token_member_idx ON auth_sessions(token_hash, member_id);
 
+-- The cursor advances independently of unanswered attendance, preventing a full
+-- first page from hiding later recipients while keeping each cron invocation bounded.
+CREATE TABLE notification_scan_state (
+    household_id TEXT PRIMARY KEY REFERENCES households(id) ON DELETE CASCADE,
+    cursor TEXT
+);
+
 CREATE TABLE notification_preferences (
     member_id TEXT PRIMARY KEY,
     household_id TEXT NOT NULL,
@@ -34,6 +41,8 @@ CREATE TABLE notification_reminders (
     member_id TEXT NOT NULL,
     meal_id TEXT NOT NULL,
     announcement_version INTEGER NOT NULL CHECK (announcement_version > 0),
+    cooking_at TEXT NOT NULL,
+    reminder_at TEXT NOT NULL,
     created_at TEXT NOT NULL,
     expires_at TEXT NOT NULL,
     UNIQUE (household_id, member_id, meal_id, announcement_version),

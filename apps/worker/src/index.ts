@@ -11,6 +11,19 @@ import { createSyncRoutes } from "./sync/routes";
 import { createMcpRoutes } from "./mcp/routes";
 import { createAuthRoutes } from "./auth/routes";
 import { protectHousehold } from "./auth/session";
+import { createMealRoutes } from "./meals/routes";
+import { createContactRoutes } from "./contacts/routes";
+import { createNotificationRoutes } from "./notifications/routes";
+import { runNotificationTick } from "./notifications/scheduled";
+import { isMealReminderEligible, listDueMealReminders } from "./meals/reminders";
+import type { MealReminderSource } from "./meals/model";
+
+function mealReminderSource(env: Env): MealReminderSource {
+  return {
+    listDueMealReminders: (householdId, now, limit, after) => listDueMealReminders(env.DB, householdId, now, limit, after),
+    isMealReminderEligible: (householdId, mealId, version, memberId, now) => isMealReminderEligible(env.DB, householdId, mealId, version, memberId, now),
+  };
+}
 
 const app = new Hono<{ Bindings: Env }>();
 
@@ -39,6 +52,9 @@ app.route("/api/v1", createSyncRoutes());
 app.route("/api/v1", createInventoryRoutes());
 app.route("/api/v1", createExpenseRoutes());
 app.route("/api/v1", createMemberRoutes());
+app.route("/api/v1", createMealRoutes());
+app.route("/api/v1", createContactRoutes());
+app.route("/api/v1", createNotificationRoutes(mealReminderSource));
 app.route("/", createMcpRoutes());
 
 app.onError((error, context) => {
@@ -63,4 +79,10 @@ app.all("*", (context) => {
 });
 
 export { app };
-export default app;
+export default {
+  fetch: app.fetch,
+  async scheduled(_controller: ScheduledController, env: Env) {
+    const summary = await runNotificationTick(env, mealReminderSource(env));
+    console.log(JSON.stringify({ event: "meal_reminders", ...summary }));
+  },
+};
