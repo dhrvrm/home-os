@@ -1,0 +1,367 @@
+.hh-panel {
+  min-width: 0;
+  padding: 24px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+.hh-header,
+.hh-entry-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+.hh-header {
+  margin-bottom: 24px;
+}
+.hh-header h2 {
+  font-size: 28px;
+  margin: 0 0 8px;
+  letter-spacing: -0.04em;
+}
+.hh-header p,
+.hh-entry-header p {
+  margin: 4px 0;
+  color: var(--text-muted);
+}
+.hh-panel h3 {
+  font-size: 21px;
+  margin: 0 0 8px;
+}
+.hh-panel h4 {
+  font-size: 19px;
+  margin: 4px 0 12px;
+}
+.hh-panel p {
+  line-height: 1.55;
+}
+.hh-panel input,
+.hh-panel select,
+.hh-panel textarea,
+.hh-dialog input,
+.hh-dialog select,
+.hh-dialog textarea {
+  font-size: 16px;
+  max-width: 100%;
+  min-width: 0;
+}
+.hh-panel button,
+.hh-panel .button,
+.hh-dialog button {
+  min-height: 44px;
+}
+.hh-panel .button,
+.hh-dialog .button {
+  white-space: normal;
+  text-align: center;
+}
+.hh-toolbar {
+  display: flex;
+  gap: 12px;
+  align-items: end;
+  flex-wrap: wrap;
+  margin: 16px 0;
+}
+.hh-toolbar > .field:first-child {
+  flex: 1;
+  min-width: 160px;
+}
+.hh-toolbar .field {
+  max-width: 100%;
+}
+.hh-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 16px;
+}
+.hh-muted,
+.hh-ingredients small {
+  color: var(--text-muted);
+  font-size: 14px;
+}
+.hh-notice {
+  background: var(--warning-soft, var(--surface-muted));
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 12px;
+  line-height: 1.5;
+}
+.hh-status:empty {
+  display: none;
+}
+.hh-status {
+  color: var(--accent);
+  font-size: 14px;
+}
+.hh-list {
+  display: grid;
+  gap: 16px;
+}
+.hh-entry {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 20px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  background: var(--surface-strong);
+}
+.hh-entry--unread {
+  border-left: 4px solid var(--accent);
+}
+.hh-entry p:last-child {
+  margin-bottom: 0;
+}
+.hh-tag {
+  font-size: 13px;
+  border-radius: 99px;
+  padding: 6px 10px;
+  background: var(--surface-muted);
+  color: var(--text-muted);
+}
+.hh-lines {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.hh-panel summary {
+  cursor: pointer;
+  min-height: 44px;
+  align-content: center;
+  padding: 8px 0;
+}
+.hh-ingredients {
+  padding-left: 20px;
+}
+.hh-ingredients li {
+  margin: 12px 0;
+}
+.hh-ingredients small {
+  display: block;
+  margin-top: 4px;
+}
+.hh-empty {
+  padding: 20px 0;
+  color: var(--text-muted);
+}
+.hh-dates {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(84px, 1fr));
+  gap: 8px;
+  overflow-x: auto;
+  padding: 4px 0 12px;
+  margin: 20px 0;
+  scrollbar-width: thin;
+}
+.hh-date {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface-strong);
+  padding: 12px 8px;
+  display: grid;
+  gap: 6px;
+  color: var(--text);
+  cursor: pointer;
+}
+.hh-date[aria-current="date"] {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+.hh-date small {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+.hh-day {
+  padding: 20px 0;
+  border-top: 1px solid var(--line);
+  scroll-margin-top: 16px;
+}
+.hh-day > .hh-entry + .hh-entry {
+  margin-top: 16px;
+}
+.hh-time {
+  font-weight: 650;
+  font-size: 22px !important;
+  color: var(--text) !important;
+}
+.hh-time small {
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--text-muted);
+  display: inline-block;
+}
+.hh-counts {
+  display: flex;
+  gap: 12px 20px;
+  flex-wrap: wrap;
+}
+.hh-counts span {
+  font-size: 14px;
+}
+.hh-counts strong {
+  font-size: 19px;
+}
+.hh-dishes {
+  padding: 0;
+  list-style: none;
+  margin: 12px 0;
+}
+.hh-dishes > li > details > summary {
+  font-weight: 600;
+  font-size: 18px;
+}
+.hh-roster {
+  font-size: 14px;
+}
+.hh-roster ul {
+  padding-left: 20px;
+  line-height: 1.8;
+}
+.hh-meal--cancelled {
+  background: var(--surface-muted);
+}
+.hh-focused {
+  border: 1px solid var(--accent);
+  padding: 16px;
+  border-radius: var(--radius);
+  margin: 16px 0;
+}
+.hh-dialog {
+  max-width: 740px;
+}
+.hh-dialog fieldset {
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 16px;
+}
+.hh-dialog legend {
+  font-weight: 600;
+  padding: 0 8px;
+}
+.hh-ingredient-row {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+  gap: 12px;
+  border-bottom: 1px solid var(--line);
+  padding: 16px 0;
+  margin-bottom: 12px;
+}
+.hh-check {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 44px;
+  margin: 8px 0;
+  cursor: pointer;
+}
+.hh-check input {
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  accent-color: var(--accent);
+}
+.hh-selected > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 8px 0;
+  background: var(--surface-muted);
+  padding: 8px 12px;
+  border-radius: 10px;
+}
+.hh-preferences {
+  margin-top: 32px;
+  border-top: 1px solid var(--line);
+  padding-top: 24px;
+}
+.hh-preferences h4 {
+  margin-top: 24px;
+}
+.hh-current-record {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 240px;
+  overflow: auto;
+  font-size: 12px;
+}
+.hh-dialog .field--wide {
+  min-width: 0;
+}
+.hh-dialog .form-error {
+  overflow-wrap: anywhere;
+}
+@media (max-width: 640px) {
+  .hh-panel {
+    padding: 16px;
+  }
+  .hh-header {
+    gap: 12px;
+    margin-bottom: 16px;
+  }
+  .hh-header h2 {
+    font-size: 26px;
+  }
+  .hh-entry {
+    padding: 16px;
+  }
+  .hh-header > .button {
+    width: 100%;
+  }
+  .hh-ingredient-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .hh-panel .hh-range {
+    gap: 4px;
+  }
+  .hh-range .button {
+    padding: 8px 10px;
+  }
+  .hh-dates {
+    grid-template-columns: repeat(7, 92px);
+  }
+  .hh-time small {
+    display: block;
+    margin-top: 4px;
+  }
+  .hh-dialog .item-form {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .hh-panel .hh-actions > .button {
+    flex: 1 1 auto;
+  }
+  .hh-selected > div {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .hh-preferences .hh-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .hh-panel *,
+  .hh-dialog * {
+    scroll-behavior: auto !important;
+    transition: none !important;
+  }
+}
+.hh-panel .field > span,
+.hh-dialog .field > span {
+  font-size: 13px;
+}
+.hh-notice > .button {
+  margin: 8px 0 0;
+  display: flex;
+}
+.hh-dialog .hh-current-record {
+  padding: 12px;
+  background: var(--surface-strong);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  margin: 12px 0;
+  line-height: 1.5;
+}

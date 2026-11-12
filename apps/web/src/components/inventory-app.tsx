@@ -1,10 +1,17 @@
 "use client";
 
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
 import type { AuthSession } from "@/lib/auth";
 import { AccountPanel } from "./account-panel";
 import { MembersView } from "./members-view";
+import { MoreNavigation } from "./more-navigation";
+import { MenuView } from "@/household/menu-view";
+import { RecipesView } from "@/household/recipes-view";
+import { ContactsView } from "@/household/contacts-view";
+import { NotificationsView } from "@/household/notifications-view";
+import { householdDestination, readHouseholdLocation, type HomeView, type HouseholdLocation } from "@/lib/navigation";
+import "@/household/household.css";
 import {
   ArrowClockwise,
   Archive,
@@ -21,6 +28,11 @@ import {
   WifiSlash,
   Users,
   UserCircle,
+  CalendarBlank,
+  BookOpen,
+  AddressBook,
+  Bell,
+  DotsThree,
 } from "@phosphor-icons/react";
 import {
   exportInventory,
@@ -42,7 +54,7 @@ import { ExpensesView } from "./expenses-view";
 import { ShoppingView } from "./shopping-view";
 import { StockDialog } from "./stock-dialog";
 
-type PrimaryView = "inventory" | "shopping" | "expenses" | "members" | "account";
+type PrimaryView = HomeView;
 type StockDialogState = { item: InventoryItem; action: "consume" | "restock" | "mark_level" };
 
 export function InventoryApp({ session, onLogout, onSessionChange }: {
@@ -60,7 +72,10 @@ export function InventoryApp({ session, onLogout, onSessionChange }: {
   const [category, setCategory] = useState("All");
   const [showForm, setShowForm] = useState(false);
   const [showAssistant, setShowAssistant] = useState(false);
-  const [view, setView] = useState<PrimaryView>("inventory");
+  const [navigation, setNavigation] = useState<HouseholdLocation>({ view: "inventory" });
+  const view = navigation.view;
+  const [showMore, setShowMore] = useState(false);
+  const closeMore = useCallback(() => setShowMore(false), []);
   const [showArchived, setShowArchived] = useState(false);
   const [selectedItem, setSelectedItem] = useState<InventoryItem | null>(null);
   const [editingItem, setEditingItem] = useState<InventoryItem | null>(null);
@@ -71,6 +86,36 @@ export function InventoryApp({ session, onLogout, onSessionChange }: {
   const [saving, setSaving] = useState(false);
   const [pendingItem, setPendingItem] = useState<string | null>(null);
   const [assistant] = useState(() => new BrowserAssistant());
+
+  function setView(next: PrimaryView, detail: { mealId?: string; recipeId?: string } = {}) {
+    const destination = householdDestination(window.location.href, next, detail);
+    if (`${window.location.pathname}${window.location.search}` !== destination) window.history.pushState(null, "", destination);
+    setNavigation(readHouseholdLocation(window.location.search));
+    setShowMore(false);
+    setShowForm(false);
+    setSelectedItem(null);
+    setEditingItem(null);
+    setStockDialog(null);
+    setShowAssistant(false);
+    document.getElementById("main")?.scrollIntoView?.({ block: "start" });
+  }
+
+  useEffect(() => {
+    let active = true;
+    const restore = () => {
+      if (!active) return;
+      setNavigation(readHouseholdLocation(window.location.search));
+      setShowMore(false);
+      setShowForm(false);
+      setSelectedItem(null);
+      setEditingItem(null);
+      setStockDialog(null);
+      setShowAssistant(false);
+    };
+    queueMicrotask(restore);
+    window.addEventListener("popstate", restore);
+    return () => { active = false; window.removeEventListener("popstate", restore); };
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -254,6 +299,14 @@ export function InventoryApp({ session, onLogout, onSessionChange }: {
         return session ? <MembersView currentUser={session.user} /> : null;
       case "account":
         return session && onLogout && onSessionChange ? <AccountPanel session={session} onLogout={onLogout} onSessionChange={onSessionChange} hasPendingChanges={pendingCount > 0} /> : null;
+      case "menu":
+        return session ? <MenuView currentUser={session.user} focusedMealId={navigation.mealId} prefillRecipeId={navigation.recipeId} /> : null;
+      case "recipes":
+        return session ? <RecipesView currentUser={session.user} onAddToMenu={(recipeId) => setView("menu", { recipeId })} /> : null;
+      case "contacts":
+        return session ? <ContactsView currentUser={session.user} /> : null;
+      case "notifications":
+        return session ? <NotificationsView currentUser={session.user} onOpenMeal={(mealId) => setView("menu", { mealId })} /> : null;
       default:
         return null;
     }
@@ -267,11 +320,17 @@ export function InventoryApp({ session, onLogout, onSessionChange }: {
           <span>Home OS</span>
         </a>
         <nav className="primary-nav" aria-label="Primary navigation">
+          {session && <>
+            <button className={view === "menu" ? "nav-link is-active" : "nav-link"} aria-current={view === "menu" ? "page" : undefined} type="button" onClick={() => setView("menu")}><CalendarBlank size={19} aria-hidden="true" />Menu</button>
+            <button className={view === "recipes" ? "nav-link is-active" : "nav-link"} aria-current={view === "recipes" ? "page" : undefined} type="button" onClick={() => setView("recipes")}><BookOpen size={19} aria-hidden="true" />Recipes</button>
+          </>}
           <button className={view === "inventory" ? "nav-link is-active" : "nav-link"} type="button" onClick={() => setView("inventory")}><Package size={19} weight="duotone" aria-hidden="true" />Inventory</button>
           <button className={view === "shopping" ? "nav-link is-active" : "nav-link"} type="button" onClick={() => setView("shopping")}><ShoppingCartSimple size={19} aria-hidden="true" />Shopping</button>
           <button className={view === "expenses" ? "nav-link is-active" : "nav-link"} type="button" onClick={() => setView("expenses")}><Receipt size={19} weight="duotone" aria-hidden="true" />Expenses</button>
           {session && <>
+            <button className={view === "contacts" ? "nav-link is-active" : "nav-link"} aria-current={view === "contacts" ? "page" : undefined} type="button" onClick={() => setView("contacts")}><AddressBook size={19} aria-hidden="true" />Contacts</button>
             <button className={view === "members" ? "nav-link is-active" : "nav-link"} type="button" onClick={() => setView("members")}><Users size={19} aria-hidden="true" />Members</button>
+            <button className={view === "notifications" ? "nav-link is-active" : "nav-link"} aria-current={view === "notifications" ? "page" : undefined} type="button" onClick={() => setView("notifications")}><Bell size={19} aria-hidden="true" />Notifications</button>
             <button className={view === "account" ? "nav-link is-active" : "nav-link"} type="button" onClick={() => setView("account")}><UserCircle size={19} aria-hidden="true" />Account</button>
           </>}
         </nav>
@@ -297,7 +356,7 @@ export function InventoryApp({ session, onLogout, onSessionChange }: {
           </div>
         </header>
 
-        {inventory.syncStatus !== "synced" && inventory.syncStatus !== "starting" && <div className="offline-banner" role="status"><WifiSlash size={19} weight="fill" aria-hidden="true" /><span>{syncMessage(inventory.syncStatus)}</span><button className="button button--small button--quiet" type="button" onClick={() => void inventory.refresh()}>Sync now</button></div>}
+        {["inventory", "shopping"].includes(view) && inventory.syncStatus !== "synced" && inventory.syncStatus !== "starting" && <div className="offline-banner" role="status"><WifiSlash size={19} weight="fill" aria-hidden="true" /><span>{syncMessage(inventory.syncStatus)}</span><button className="button button--small button--quiet" type="button" onClick={() => void inventory.refresh()}>Sync now</button></div>}
 
         {view === "inventory" && <section className="overview" aria-label="Inventory summary">
           <div className="overview__intro">
@@ -357,16 +416,21 @@ export function InventoryApp({ session, onLogout, onSessionChange }: {
         </section> : secondaryView()}
       </main>
 
-      <nav className="mobile-nav" aria-label="Mobile navigation">
+      <nav className={session ? "mobile-nav mobile-nav--household" : "mobile-nav"} aria-label="Mobile navigation">
+        {session && <button className={view === "menu" ? "is-active mobile-nav__section" : "mobile-nav__section"} type="button" onClick={() => setView("menu")}><CalendarBlank size={20} aria-hidden="true" /><span>Menu</span></button>}
         <button className={view === "inventory" ? "is-active mobile-nav__section" : "mobile-nav__section"} type="button" onClick={() => setView("inventory")}><Package size={20} weight="fill" aria-hidden="true" /><span>Inventory</span></button>
         {!session && <button type="button" disabled={readOnly} onClick={() => setShowForm(true)} aria-label="Add item"><Plus size={22} weight="bold" aria-hidden="true" /></button>}
-        <button className={view === "shopping" ? "is-active mobile-nav__section" : "mobile-nav__section"} type="button" onClick={() => setView("shopping")}><ShoppingCartSimple size={20} aria-hidden="true" /><span>Shopping</span></button>
-        <button className={view === "expenses" ? "is-active mobile-nav__section" : "mobile-nav__section"} type="button" onClick={() => setView("expenses")}><Receipt size={20} aria-hidden="true" /><span>Expenses</span></button>
+        {!session && <>
+          <button className={view === "shopping" ? "is-active mobile-nav__section" : "mobile-nav__section"} type="button" onClick={() => setView("shopping")}><ShoppingCartSimple size={20} aria-hidden="true" /><span>Shopping</span></button>
+          <button className={view === "expenses" ? "is-active mobile-nav__section" : "mobile-nav__section"} type="button" onClick={() => setView("expenses")}><Receipt size={20} aria-hidden="true" /><span>Expenses</span></button>
+        </>}
         {session && <>
-          <button className={view === "members" ? "is-active mobile-nav__section" : "mobile-nav__section"} type="button" onClick={() => setView("members")}><Users size={20} aria-hidden="true" /><span>Members</span></button>
-          <button className={view === "account" ? "is-active mobile-nav__section" : "mobile-nav__section"} type="button" onClick={() => setView("account")}><UserCircle size={20} aria-hidden="true" /><span>Account</span></button>
+          <button className={view === "notifications" ? "is-active mobile-nav__section" : "mobile-nav__section"} type="button" onClick={() => setView("notifications")}><Bell size={20} aria-hidden="true" /><span>Notifications</span></button>
+          <button className={!["menu", "inventory", "notifications"].includes(view) ? "is-active mobile-nav__section" : "mobile-nav__section"} type="button" aria-haspopup="dialog" aria-expanded={showMore} onClick={() => setShowMore(true)}><DotsThree size={22} weight="bold" aria-hidden="true" /><span>More</span></button>
         </>}
       </nav>
+
+      {showMore && session && <MoreNavigation activeView={view} onNavigate={setView} onClose={closeMore} />}
 
       {showForm && !readOnly && <ItemForm pending={saving} error={mutationError} onClose={() => { setShowForm(false); setMutationError(null); }} onSubmit={addItem} />}
       {showAssistant && <InventoryAssistant assistant={assistant} items={items} onApply={applyAssistantProposal} onClose={() => setShowAssistant(false)} />}
@@ -378,7 +442,7 @@ export function InventoryApp({ session, onLogout, onSessionChange }: {
 }
 
 function viewTitle(view: PrimaryView): string {
-  return { inventory: "Inventory", shopping: "Shopping", expenses: "Expenses", members: "Household members", account: "Your account" }[view];
+  return { inventory: "Inventory", shopping: "Shopping", expenses: "Expenses", members: "Household members", account: "Your account", menu: "Your home menu", recipes: "Recipe library", contacts: "Household contacts", notifications: "Your notifications" }[view];
 }
 
 function itemCategories(item: InventoryItem): string[] {

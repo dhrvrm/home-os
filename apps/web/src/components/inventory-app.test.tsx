@@ -78,6 +78,7 @@ const milk: InventoryItem = {
 };
 
 beforeEach(async () => {
+  window.history.replaceState(null, "", "/");
   await homeOSDatabase.delete();
   await homeOSDatabase.open();
 });

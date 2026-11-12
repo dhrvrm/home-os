@@ -118,9 +118,10 @@ export function MembersView({ currentUser }: { currentUser: AuthUser }) {
   return (
     <section className="members-panel" aria-labelledby="members-title">
       <header className="members-heading">
-        <div><h2 id="members-title">People at home</h2><p>{loading ? "Loading your household" : `${members.filter((member) => member.active).length} active · ${members.filter((member) => !member.active).length} inactive`}</p></div>
+        <div><h2 id="members-title">People at home</h2><p>{loading ? "Loading your household" : `${activeOwners} ${activeOwners === 1 ? "owner" : "owners"} · ${members.filter((member) => member.active).length} active · ${members.filter((member) => !member.active).length} inactive`}</p></div>
         {owner && !adding && <button className="button button--primary" type="button" disabled={loading || pending || !online} onClick={() => { closeEditor(); setAdding(true); setNotice(null); }}>Add member</button>}
       </header>
+      {owner && <p className="account-description">You can have several home owners. Choose Owner access when adding or editing a member to let them manage accounts too.</p>}
       {!online && <div className="members-feedback"><p className="account-offline" role="status">Connect to manage household members and account access.</p></div>}
       {!owner && <div className="members-feedback"><p className="account-description">Household owners manage accounts and access. {currentUser.role === "viewer" ? "Your account has view-only access." : "Ask an owner if someone needs to be added."}</p></div>}
       {notice && <div className="members-feedback"><p className="account-success" role="status">{notice}</p></div>}
