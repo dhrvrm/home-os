@@ -1,7 +1,51 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { listExpenses, listItems, updateExpense, updateItemMetadata } from "./api";
+import { captureAccessProof, publishAccessBoundary, resumeHouseholdWork, setActiveMemberId } from "@/auth/work";
 
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => { vi.unstubAllGlobals(); localStorage.clear(); setActiveMemberId(null); resumeHouseholdWork(); });
+
+describe("session failure scope", () => {
+  it("does not turn a request from an old tab into global expiry before its storage event runs", async () => {
+    setActiveMemberId("alice");
+    publishAccessBoundary("ready", { id: "bob", householdId: "home" });
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ data: null, error: { code: "session_changed", message: "Member changed" } }), { status: 409 })));
+    const expired = vi.fn();
+    window.addEventListener("home-os:session-expired", expired);
+    try {
+      await expect(listItems()).rejects.toMatchObject({ code: "session_changed" });
+      expect(expired).not.toHaveBeenCalled();
+    } finally { window.removeEventListener("home-os:session-expired", expired); }
+  });
+  it.each([[401, "unauthorized"], [409, "session_changed"]])("ignores a stale HTTP%s from a superseded same-member grant", async (status, code) => {
+    setActiveMemberId("alice");
+    publishAccessBoundary("ready", { id: "alice", householdId: "home" });
+    let finish!: (response: Response) => void;
+    vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>((resolve) => { finish = resolve; })));
+    const expired = vi.fn();
+    window.addEventListener("home-os:session-expired", expired);
+    try {
+      const result = listItems().catch((error: unknown) => error);
+      publishAccessBoundary("ready", { id: "alice", householdId: "home" });
+      finish(new Response(JSON.stringify({ data: null, error: { code, message: "Old request failed" } }), { status }));
+      expect(await result).toMatchObject({ code });
+      expect(expired).not.toHaveBeenCalled();
+    } finally { window.removeEventListener("home-os:session-expired", expired); }
+  });
+
+  it("reports a current failed grant with its member and access generation", async () => {
+    setActiveMemberId("alice");
+    publishAccessBoundary("ready", { id: "alice", householdId: "home" });
+    const proof = captureAccessProof();
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ data: null, error: { code: "unauthorized", message: "Sign in again" } }), { status: 401 })));
+    const expired = vi.fn();
+    window.addEventListener("home-os:session-expired", expired);
+    try {
+      await expect(listItems()).rejects.toMatchObject({ code: "unauthorized" });
+      expect(expired).toHaveBeenCalledOnce();
+      expect((expired.mock.calls[0][0] as CustomEvent).detail).toEqual(proof);
+    } finally { window.removeEventListener("home-os:session-expired", expired); }
+  });
+});
 
 describe("inventory metadata API", () => {
   it("sends a guarded PATCH and returns the updated item", async () => {

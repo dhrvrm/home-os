@@ -11,9 +11,13 @@
     "dev:web": "npm run dev --workspace @home-os/web",
     "lint": "npm run lint --workspace @home-os/web && npm run lint --workspace @home-os/worker",
     "smoke": "node scripts/smoke.mjs",
-    "test": "npm run test --workspace @home-os/web && npm run test --workspace @home-os/worker"
+    "test": "npm run test --workspace @home-os/web && npm run test --workspace @home-os/worker",
+    "smoke:browser": "node scripts/household-browser-smoke.mjs"
   },
   "engines": {
     "node": ">=22.18.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.65.0"
   }
 }

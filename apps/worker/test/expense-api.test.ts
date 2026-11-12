@@ -1,8 +1,8 @@
-import { exports } from "cloudflare:workers";
+import { authenticatedFetch } from "./authenticated-worker";
 import { describe, expect, it } from "vitest";
 
 async function api(path: string, init?: RequestInit): Promise<Response> {
-  return exports.default.fetch(new Request(`https://home-os.test${path}`, init));
+  return authenticatedFetch(new Request(`https://home-os.test${path}`, init));
 }
 
 interface RuleBody {

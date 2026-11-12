@@ -19,8 +19,17 @@ This ledger defines the intended Home OS product and the measurable behavior of 
 | FR-PLT-01 | Serve the installable web application and versioned API from one Cloudflare Worker origin. | `/`, `/manifest.webmanifest`, `/api/v1`, `/healthz`, and `/readyz` are served from the deployed Worker; the web build has no Next.js server dependency. | Shipped |
 | FR-PLT-02 | Keep shared household data in D1 and device projections/outbox state in Dexie. | A fresh local or production database migrates successfully; supported inventory commands update Dexie first and later reconcile through `/api/v1/sync`. | Shipped |
 | FR-PLT-03 | Give every accepted mutation an idempotent operation ID, expected version, actor/source context, and audit event. | Replayed operations return the accepted result, stale versions produce explicit conflicts, and accepted changes append immutable field-level audit deltas. | Shipped |
-| FR-PLT-04 | Support household members, invitations, roles, device sessions, and per-module authorization. | An owner can invite/revoke a roommate; every HTTP and MCP read/write is household- and scope-authorized; removed sessions stop working. | Planned — iteration 3 |
-| FR-PLT-05 | Support complete export and recoverable archive lifecycles. | A household can export its durable records in a versioned format; archived entities are excluded from active views and can be restored where lifecycle recovery applies. | Inventory shipped; other modules planned with their iterations |
+| FR-PLT-04 | Support household members, invitations, roles, device sessions, and per-module authorization. | An owner can invite/revoke a roommate; every HTTP and MCP read/write is household- and scope-authorized; removed sessions stop working. | Email/password accounts, owner-managed membership, roles, session revocation, and protected HTTP APIs shipped; invitations and scoped MCP OAuth remain planned |
+| FR-PLT-05 | Support complete export and recoverable archive lifecycles. | A household can export its durable records in a versioned format; archived entities are excluded from active views and can be restored where lifecycle recovery applies. | Inventory export shipped; recipes/contacts archive/restore shipped; complete cross-module export remains planned |
+
+### Member sign-in and installed app
+
+| ID | Requirement | Acceptance | Release state |
+|---|---|---|---|
+| FR-AUTH-01 | Persist email/password sign-in without application password storage. | Setup requires the deployment key; owner-created accounts sign in with a session cookie; password fields support native password managers; remembered grants last up to 30 days, session-only grants expire after 12 hours. | Shipped |
+| FR-AUTH-02 | Enforce membership and account lifecycle. | Household HTTP requests require active membership; viewer writes fail; owner controls create/edit/reset/deactivate/reactivate; last owner is retained; password changes and resets invalidate old sessions; direct and queued commands carry the authenticated actor. | Shipped |
+| FR-AUTH-03 | Preserve the member boundary while offline or across tabs. | Unexpired remembered access can reopen the local inventory offline; explicit online denial and expiry lock it; same-member reauthentication keeps queued work; account switching and logout clear previous local state only after draining work and confirming pending-edit discard. | Shipped |
+| FR-PWA-01 | Provide a complete installable shell with controlled updates. | Manifest and PNG/maskable/Apple icons are served; versioned HTML, JS, CSS, and fonts reopen offline after first use; account/API/MCP responses are excluded from caches; updates require user action and queued edits block activation. | Shipped |
 
 ### Inventory and shopping
 
@@ -50,17 +59,27 @@ This ledger defines the intended Home OS product and the measurable behavior of 
 | ID | Requirement | Acceptance | Release state |
 |---|---|---|---|
 | FR-NTF-01 | Notify members about low stock and predicted run-out according to preferences. | A member can opt in/out by rule/channel, set quiet hours, and receives one deduplicated notification per rule occurrence. | Planned — iteration 2 |
-| FR-NTF-02 | Keep notification storage bounded. | The inbox retains at most 50 entries or 14 days; delivery deduplication expires after seven days; delivered push payloads and attempts are not permanent audit records. | Planned — iteration 2 |
-| FR-NTF-03 | Support installable-PWA Web Push with recoverable subscriptions. | Permission is requested only after user intent; invalid endpoints are retired; notification links open the relevant Home OS entity. | Planned — iteration 2 |
+| FR-NTF-02 | Keep notification storage bounded. | The inbox retains at most 50 entries or 14 days; delivery deduplication expires after seven days; delivered push payloads and attempts are not permanent audit records. | Shipped for meal reminders |
+| FR-NTF-03 | Support installable-PWA Web Push with recoverable subscriptions. | Permission is requested only after user intent; invalid endpoints are retired; notification links open the relevant Home OS meal; receiving authority is bound to the live sign-in. | Shipped for meal reminders |
+| FR-NTF-04 | Ask unanswered eligible members about an upcoming meal. | Due inbox entries are deduplicated by meal announcement/member, skip answered/cancelled/expired questions, and support personal preferences and read state. Web Push revalidates eligibility before bounded retries. | Shipped |
 
 ### Household contacts and documents
 
 | ID | Requirement | Acceptance | Release state |
 |---|---|---|---|
 | FR-HOM-01 | Manage rooms, storage spaces, and shared-space metadata. | Authorized members can create/archive spaces and inventory can reference stable space IDs while retaining readable labels offline. | Planned — iteration 3 |
-| FR-CON-01 | Manage important landlord, maintenance, building, utility, medical, and emergency contacts. | Contacts support multiple labels/channels, household scope, search, archive, audit, and one-tap call/message where the browser permits. | Planned — iteration 4 |
+| FR-CON-01 | Manage important landlord, maintenance, building, utility, medical, and emergency contacts. | Contacts support role, phone/email/address, labels/notes, household scope, search, archive/restore, audit, and safe call/email links. | Shipped |
 | FR-DOC-01 | Store household document metadata and protected attachments. | D1 stores metadata; R2 stores files; signed/authorized retrieval enforces household access; leases, warranties, manuals, and receipts are searchable. | Planned — iteration 4 |
 | FR-DOC-02 | Track document lifecycle and reminders. | Expiry/renewal dates can produce reminders; replacement/archive creates audit events; attachment contents never enter audit deltas. | Planned — iteration 4 |
+
+### Recipes, menus, and attendance
+
+| ID | Requirement | Acceptance | Release state |
+|---|---|---|---|
+| FR-MEAL-01 | Keep reusable recipes and ingredient availability guidance. | Authorized members create/edit/archive/restore recipes with ingredients and instructions. Linked exact stock with matching units can establish sufficiency; approximate or unlinked stock stays uncertain. Planning never consumes stock. | Shipped |
+| FR-MEAL-02 | Plan multiple dishes for tomorrow or the next seven days. | Meals retain recipe snapshots, household-local cooking time, reminder lead, and notes. Date queries use the household zone; archived recipe sources remain in existing meal snapshots. | Shipped |
+| FR-MEAL-03 | Ask each eligible member whether they will eat. | Owners/members answer only for themselves with yes/no/pending; counts exclude inactive/viewer members; cooking-time/dish changes require reconfirmation, notes preserve answers, and cooking/cancellation closes the question. | Shipped |
+| FR-MEAL-04 | Preserve cached reads and honest save outcomes. | Menu/recipe/contact/inbox reads are member-scoped and reopen offline; writes require connectivity, use idempotent receipts/version conflicts, and never claim an offline save was accepted. | Shipped |
 
 ### Shared expenses
 
@@ -68,7 +87,7 @@ This ledger defines the intended Home OS product and the measurable behavior of 
 |---|---|---|---|
 | FR-MNY-01 | Record shared expenses with payer, participants, currency, date, category, notes, and receipt. | Equal, exact, percentage, and share-based splits sum exactly using integer minor units and reject invalid allocations. | Planned — iteration 5 |
 | FR-MNY-02 | Calculate balances and simplify settlements without changing the ledger. | Balances equal the sum of immutable expense/settlement entries; simplification is a derived suggestion and never rewrites history. | Planned — iteration 5 |
-| FR-MNY-03 | Record settlements, corrections, recurring bills, and exports. | Settlements/corrections append events, recurring instances are idempotent, and CSV/JSON exports reconcile to displayed balances. | Planned — iteration 5 |
+| FR-MNY-03 | Record settlements, corrections, recurring bills, and exports. | Settlements/corrections append events, recurring instances are idempotent, and CSV/JSON exports reconcile to displayed balances. | Recurring expense rules with deterministic splits shipped; actual period charges, payments, settlements, and ledger exports remain planned — iteration 5 |
 
 ### Chores, maintenance, calendar, and automation
 
@@ -96,11 +115,11 @@ This ledger defines the intended Home OS product and the measurable behavior of 
 | NFR-PERF-01 | Query performance | Deterministic query and retrieval code handles 1,000 inventory records without network access and bounds combined model context to 3,800 UTF-8 bytes. | Shipped |
 | NFR-PERF-02 | Interface performance | Model loading/generation occurs in a worker and does not block React rendering; every long operation exposes progress or an `aria-live` status. | Shipped |
 | NFR-STOR-01 | Model storage | Before a 105 MB model download, estimate quota, reserve at least 32 MiB or 25% headroom, request persistent storage when supported, and fail recoverably when known capacity is insufficient. | Shipped |
-| NFR-STOR-02 | Ephemeral bounds | Local activity is limited to 30 days or 2,000 events; notification inbox/deduplication obeys FR-NTF-02; prompts, retrieved context, model output, and delivery attempts are not durable product records. | Platform policy shipped; pruning/notifications planned — iteration 2 |
+| NFR-STOR-02 | Ephemeral bounds | Local activity is limited to 30 days or 2,000 events; notification inbox/deduplication obeys FR-NTF-02; prompts, retrieved context, model output, and delivery attempts are not durable product records. | Inventory policy shipped; meal notification pruning shipped |
 | NFR-PRIV-01 | AI privacy | Inventory, prompts, retrieved evidence, and model output are never sent to a hosted inference API; the only model network request is the consented, revision-pinned weight download. | Shipped |
 | NFR-SEC-01 | Secrets | API/MCP credentials exist only in Worker secrets, OS keychain, or ignored local vars; logs, audit, client bundles, Git history, and error envelopes contain no credentials. | Shipped |
 | NFR-SAFE-01 | Model safety | Model output cannot directly mutate or author facts; plans are allowlisted and validated; accepted mutations require visible confirmation. | Shipped |
-| NFR-INT-01 | Integrity | Domain mutations are validated, idempotent, optimistic-concurrency checked, and atomically commit authoritative projection, operation result, durable event, and audit delta where applicable. | Shipped for inventory |
+| NFR-INT-01 | Integrity | Domain mutations are validated, idempotent, optimistic-concurrency checked, and atomically commit authoritative projection, operation result, durable event, and audit delta where applicable. | Shipped for inventory; shipped for recipes, meals, attendance, and contacts |
 | NFR-A11Y-01 | Accessibility | All workflows are keyboard operable, dialogs trap/restore focus, controls have accessible names, status/errors use appropriate live semantics, and WCAG 2.2 AA contrast is the design target. | Shipped for current UI; regression-tested each iteration |
 | NFR-COMP-01 | Compatibility | Current Chromium, Firefox, and Safari can use deterministic/offline behavior; WebGPU is an enhancement and WebAssembly is the model fallback. | Shipped |
 | NFR-OBS-01 | Observability | Worker exceptions and request outcomes are observable without logging household payloads or secrets; health, readiness, sync conflicts, and deployment versions are distinguishable. | Shipped |
@@ -116,6 +135,7 @@ This ledger defines the intended Home OS product and the measurable behavior of 
 | FR-INV, FR-SHP-01 | `apps/worker/src/inventory`, `apps/web/src/components`, `apps/web/src/offline` | inventory service/API tests; inventory app and sync tests |
 | FR-AST, NFR-PERF-01, NFR-STOR-01, NFR-SAFE-01 | `apps/web/src/lib/assistant-retrieval.ts`, `inventory-assistant.ts`, `browser-assistant.ts`, assistant UI | retrieval, assistant parser/runtime, and component suites |
 | FR-MCP, NFR-SEC | `apps/worker/src/mcp`, Worker secrets | MCP route tests and production unauthorized/authorized smoke |
+| FR-MEAL, FR-CON, FR-NTF-02/03/04 | `apps/worker/src/meals`, `contacts`, `notifications`, `apps/web/src/household`, service worker | Domain/API/scheduler/crypto/component tests; real Worker HTTP and browser journeys |
 | Planned module groups | `docs/product-architecture.md` iteration boundaries | Each owning iteration adds domain, adapter, offline, authorization, audit, and acceptance tests before status changes |
 
-Release verification is `npm test && npm run lint && npm run build && npm run smoke`, followed by production health/readiness/API/MCP checks. A requirement moves to **Shipped** only in the same commit series that contains its passing acceptance evidence.
+Release verification is `npm test && npm run lint && npm run build && npm run smoke && npm run smoke:browser`, followed by production health/readiness/API/MCP checks. A requirement moves to **Shipped** only in the same commit series that contains its passing acceptance evidence.

@@ -12,6 +12,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@block65/webcrypto-web-push": "2.0.0",
     "@modelcontextprotocol/server": "2.0.0",
     "agents": "0.21.0",
     "hono": "4.13.5",

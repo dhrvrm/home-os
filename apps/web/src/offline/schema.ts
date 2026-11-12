@@ -62,3 +62,11 @@ export interface HouseholdSyncState {
   lastSyncedAt: string | null;
   lastError: string | null;
 }
+
+export interface HouseholdCacheRow {
+  key: string;
+  householdId: string;
+  memberId: string;
+  data: unknown;
+  savedAt: string;
+}

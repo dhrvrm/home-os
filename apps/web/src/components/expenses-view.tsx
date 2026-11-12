@@ -9,7 +9,7 @@ import { ExpenseRuleDialog } from "./expense-rule-dialog";
 type LoadState = "loading" | "error" | "ready";
 type DialogState = { mode: "create" } | { mode: "edit"; rule: ExpenseRule; expectedVersion: number };
 
-export function ExpensesView() {
+export function ExpensesView({ readOnly = false }: { readOnly?: boolean } = {}) {
   const [rules, setRules] = useState<ExpenseRule[]>([]);
   const [archivedRules, setArchivedRules] = useState<ExpenseRule[]>([]);
   const [members, setMembers] = useState<Member[]>([]);
@@ -48,6 +48,7 @@ export function ExpensesView() {
   }, [load]);
 
   async function saveRule(input: CreateExpenseInput) {
+    if (readOnly) return;
     setSaving(true);
     setMutationError(null);
     try {
@@ -115,7 +116,7 @@ export function ExpensesView() {
           <button className="button button--small button--quiet" type="button" onClick={() => setShowArchived((current) => !current)}>
             <Archive size={16} aria-hidden="true" /> {showArchived ? "Active" : "Archived"}
           </button>
-          {!showArchived && <button className="button button--primary" type="button" onClick={() => setDialog({ mode: "create" })}>
+          {!showArchived && !readOnly && <button className="button button--primary" type="button" onClick={() => setDialog({ mode: "create" })}>
             <Plus size={18} weight="bold" aria-hidden="true" /> Add expense
           </button>}
         </div>
@@ -140,7 +141,7 @@ export function ExpensesView() {
           <Receipt size={26} aria-hidden="true" />
           <h3>{showArchived ? "No archived expenses" : "No recurring expenses yet"}</h3>
           <p>{showArchived ? "Expenses you archive stay recoverable here." : "Add rent, utilities, or any shared cost that repeats."}</p>
-          {!showArchived && <button className="button button--primary" type="button" onClick={() => setDialog({ mode: "create" })}>Add your first expense</button>}
+          {!showArchived && !readOnly && <button className="button button--primary" type="button" onClick={() => setDialog({ mode: "create" })}>Add your first expense</button>}
         </div>
       )}
 
@@ -160,20 +161,20 @@ export function ExpensesView() {
                   <WarningCircle size={16} weight="fill" aria-hidden="true" /> {inactiveNames(rule, members)} no longer in the household.
                 </p>}
               </div>
-              <div className="expense-actions">
+              {!readOnly && <div className="expense-actions">
                 {showArchived
                   ? <button className="button button--small button--quiet" type="button" disabled={pendingRule === rule.id} onClick={() => void restoreRule(rule)} aria-label={`Restore ${rule.name}`}>Restore</button>
                   : <>
                       <button className="button button--small button--quiet" type="button" onClick={() => setDialog({ mode: "edit", rule, expectedVersion: rule.version })} aria-label={`Edit ${rule.name}`}>Edit</button>
                       <button className="button button--small button--quiet" type="button" disabled={pendingRule === rule.id} onClick={() => void archiveRule(rule)} aria-label={`Archive ${rule.name}`}>Archive</button>
                     </>}
-              </div>
+              </div>}
             </article>
           ))}
         </div>
       )}
 
-      {dialog && <ExpenseRuleDialog
+      {dialog && !readOnly && <ExpenseRuleDialog
         rule={dialog.mode === "edit" ? dialog.rule : undefined}
         members={members}
         pending={saving}

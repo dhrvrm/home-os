@@ -96,4 +96,16 @@ describe("offline inventory commands", () => {
     expect(restored).toMatchObject({ archivedAt: null, version: 4 });
     await expect(database.stockEvents.where("itemId").equals(created.id).count()).resolves.toBe(1);
   });
+
+  it("keeps household read caches alongside pending inventory and clears them with the member boundary", async () => {
+    await createLocalItem(database, { name: "Rice" }, options);
+    await database.householdCache.put({ key: "home:owner:recipes", householdId: "home", memberId: "owner", data: { recipes: [] }, savedAt: options.now().toISOString() });
+    expect(await database.outbox.count()).toBe(1);
+    expect(await database.householdCache.count()).toBe(1);
+    await database.transaction("rw", database.tables, async () => {
+      await Promise.all(database.tables.map((table) => table.clear()));
+    });
+    expect(await database.outbox.count()).toBe(0);
+    expect(await database.householdCache.count()).toBe(0);
+  });
 });

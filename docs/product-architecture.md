@@ -1,6 +1,6 @@
 # Home OS product architecture
 
-Home OS is a shared operating system for a household. Inventory is the first complete module, not the final boundary of the product. Every later module uses the same household identity, offline command, synchronization, authorization, and activity-history foundations.
+Home OS is a shared operating system for a household. The current release includes inventory, member accounts and multiple owners, recurring expense rules, recipes, menus and meal attendance, contacts, and meal reminder notifications. These modules share household identity, authorization, and activity history; supported inventory commands also work offline. The roadmap below preserves future boundaries rather than claiming they are deployed.
 
 ## Information architecture
 
@@ -16,6 +16,9 @@ Home
 │   ├── Locations
 │   ├── Shopping
 │   └── Consumption insights
+├── Cooking
+│   ├── Menu and attendance
+│   └── Recipes and ingredient guidance
 ├── Household
 │   ├── Members and roles
 │   ├── Rooms and shared spaces

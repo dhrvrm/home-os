@@ -1,4 +1,5 @@
 import { exports } from "cloudflare:workers";
+import { authenticatedFetch } from "./authenticated-worker";
 import { describe, expect, it } from "vitest";
 
 const mcpHeaders = {
@@ -57,7 +58,7 @@ describe("read-only MCP server", () => {
   });
 
   it("queries D1 inventory through MCP", async () => {
-    const create = await exports.default.fetch(new Request("https://home-os.test/api/v1/items", {
+    const create = await authenticatedFetch(new Request("https://home-os.test/api/v1/items", {
       method: "POST",
       headers: { "Content-Type": "application/json", "X-Operation-ID": "mcp-seed-item" },
       body: JSON.stringify({ name: "Masoor dal", alternativeNames: ["मसूर दाल"], categories: ["Food", "Staples"], levelPercent: 20 }),

@@ -7,11 +7,11 @@ const geist = Geist({ subsets: ["latin"], variable: "--font-sans" });
 const geistMono = Geist_Mono({ subsets: ["latin"], variable: "--font-mono" });
 
 export const metadata: Metadata = {
-  title: "Home OS Inventory",
-  description: "A shared household inventory for roommates.",
+  title: "Home OS",
+  description: "Your shared home, inventory, and household expenses.",
   applicationName: "Home OS",
   appleWebApp: { capable: true, statusBarStyle: "default", title: "Home OS" },
-  icons: { icon: "/icon.svg", apple: "/icon.svg" },
+  icons: { icon: "/icon.svg", apple: "/icons/apple-touch-icon.png" },
 };
 
 export const viewport: Viewport = {

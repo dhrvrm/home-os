@@ -1,0 +1,43 @@
+import { z } from "zod";
+export { validate, archivedFilter } from "../http/validation";
+
+export const contactSchema = z
+  .object({
+    name: z.string().trim().min(1).max(120),
+    role: z.string().trim().max(120).optional(),
+    phone: z
+      .string()
+      .trim()
+      .max(40)
+      .refine(
+        (value) => !value || /^\+?[\d ()\-.]+$/.test(value),
+        "enter a phone number",
+      )
+      .transform((value) => value.replace(/[ ()\-.]/g, ""))
+      .refine(
+        (value) => !value || /^\+?\d{3,20}$/.test(value),
+        "enter a phone number",
+      )
+      .optional(),
+    email: z
+      .string()
+      .trim()
+      .max(254)
+      .refine(
+        (value) =>
+          !value ||
+          /^[A-Za-z0-9.!#$&'*+\-/=?^_`{|}~]+@[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?\.[A-Za-z]{2,}$/.test(
+            value,
+          ),
+        "enter a valid email address",
+      )
+      .optional(),
+    address: z.string().trim().max(500).optional(),
+    labels: z.array(z.string().trim().min(1).max(40)).max(12).optional(),
+    notes: z.string().trim().max(2000).optional(),
+  })
+  .strict();
+export const contactUpdateSchema = contactSchema
+  .partial()
+  .refine((value) => Object.keys(value).length > 0, "provide fields to change");
+export const identifier = z.string().trim().min(1).max(128);

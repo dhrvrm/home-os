@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import type { ContentfulStatusCode } from "hono/utils/http-status";
 import type { Env } from "./env";
 import { createActivityRoutes } from "./http/activity-routes";
 import { failure, success } from "./http/envelope";
@@ -8,6 +9,21 @@ import { createMemberRoutes } from "./http/member-routes";
 import { ConflictError, HomeOSError, ValidationError } from "./platform/errors";
 import { createSyncRoutes } from "./sync/routes";
 import { createMcpRoutes } from "./mcp/routes";
+import { createAuthRoutes } from "./auth/routes";
+import { protectHousehold } from "./auth/session";
+import { createMealRoutes } from "./meals/routes";
+import { createContactRoutes } from "./contacts/routes";
+import { createNotificationRoutes } from "./notifications/routes";
+import { runNotificationTick } from "./notifications/scheduled";
+import { isMealReminderEligible, listDueMealReminders } from "./meals/reminders";
+import type { MealReminderSource } from "./meals/model";
+
+function mealReminderSource(env: Env): MealReminderSource {
+  return {
+    listDueMealReminders: (householdId, now, limit, after) => listDueMealReminders(env.DB, householdId, now, limit, after),
+    isMealReminderEligible: (householdId, mealId, version, memberId, now) => isMealReminderEligible(env.DB, householdId, mealId, version, memberId, now),
+  };
+}
 
 const app = new Hono<{ Bindings: Env }>();
 
@@ -29,11 +45,16 @@ app.get("/readyz", async (context) => {
   }
 });
 
+app.use("/api/v1/*", protectHousehold);
+app.route("/api/v1", createAuthRoutes());
 app.route("/api/v1", createActivityRoutes());
 app.route("/api/v1", createSyncRoutes());
 app.route("/api/v1", createInventoryRoutes());
 app.route("/api/v1", createExpenseRoutes());
 app.route("/api/v1", createMemberRoutes());
+app.route("/api/v1", createMealRoutes());
+app.route("/api/v1", createContactRoutes());
+app.route("/api/v1", createNotificationRoutes(mealReminderSource));
 app.route("/", createMcpRoutes());
 
 app.onError((error, context) => {
@@ -44,7 +65,7 @@ app.onError((error, context) => {
     return failure(context, { code: error.code, message: error.message, details: error.details }, 409);
   }
   if (error instanceof HomeOSError) {
-    return failure(context, { code: error.code, message: error.message }, error.status as 404 | 409);
+    return failure(context, { code: error.code, message: error.message }, error.status as ContentfulStatusCode);
   }
   console.error("Unhandled Home OS request error", error);
   return failure(context, { code: "internal_error", message: "Home OS could not complete the request." }, 500);
@@ -58,4 +79,10 @@ app.all("*", (context) => {
 });
 
 export { app };
-export default app;
+export default {
+  fetch: app.fetch,
+  async scheduled(_controller: ScheduledController, env: Env) {
+    const summary = await runNotificationTick(env, mealReminderSource(env));
+    console.log(JSON.stringify({ event: "meal_reminders", ...summary }));
+  },
+};

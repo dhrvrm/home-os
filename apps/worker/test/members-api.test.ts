@@ -1,9 +1,9 @@
 import { env } from "cloudflare:test";
-import { exports } from "cloudflare:workers";
+import { authenticatedFetch } from "./authenticated-worker";
 import { describe, expect, it } from "vitest";
 
 async function api(path: string, init?: RequestInit): Promise<Response> {
-  return exports.default.fetch(new Request(`https://home-os.test${path}`, init));
+  return authenticatedFetch(new Request(`https://home-os.test${path}`, init));
 }
 
 interface MemberBody {
@@ -24,11 +24,11 @@ describe("household members HTTP API", () => {
     const listed = await api("/api/v1/members");
     expect(listed.status).toBe(200);
     const envelope = await listed.json<{ data: { members: MemberBody[] } }>();
-    expect(envelope.data.members).toContainEqual({ id: "local-owner", name: "Home owner", active: true });
-    expect(envelope.data.members).toContainEqual({
+    expect(envelope.data.members).toContainEqual(expect.objectContaining({ id: "local-owner", name: "Home owner", active: true }));
+    expect(envelope.data.members).toContainEqual(expect.objectContaining({
       id: "api-members-departed",
       name: "Departed housemate",
       active: false,
-    });
+    }));
   });
 });
