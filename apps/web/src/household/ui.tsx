@@ -114,9 +114,14 @@ export function useResource<T>(
   const currentRefresh = useRef<(() => Promise<void>) | null>(null);
   useLayoutEffect(() => {
     currentRefresh.current = refresh;
-    return () => { currentRefresh.current = null; };
+    return () => {
+      currentRefresh.current = null;
+    };
   }, [refresh]);
-  const refreshCurrent = useCallback(() => currentRefresh.current?.() ?? Promise.resolve(), []);
+  const refreshCurrent = useCallback(
+    () => currentRefresh.current?.() ?? Promise.resolve(),
+    [],
+  );
   useEffect(() => {
     let active = true;
     const requests = sequence;

@@ -4,8 +4,7 @@ import type { Env } from "../env";
 import { currentMember } from "../auth/session";
 import { success } from "../http/envelope";
 import { parsedJSON } from "../http/body";
-import { commandContext } from "../http/request-context";
-import { ValidationError } from "../platform/errors";
+import { requiredOperationCommandContext as command } from "../http/request-context";
 import { D1ContactRepository } from "./d1-repository";
 import { ContactService } from "./service";
 import {
@@ -18,13 +17,6 @@ import {
 
 function service(context: Context<{ Bindings: Env }>): ContactService {
   return new ContactService(new D1ContactRepository(context.env.DB));
-}
-
-function command(context: Context<{ Bindings: Env }>) {
-  if (!context.req.header("X-Operation-ID")?.trim()) {
-    throw new ValidationError("X-Operation-ID", "provide an operation ID");
-  }
-  return commandContext(context);
 }
 
 export function createContactRoutes(): Hono<{ Bindings: Env }> {

@@ -214,7 +214,7 @@ function MenuScreen({
                 ) : (
                   meals.map((meal) => (
                     <MealEntry
-                      key={meal.id}
+                      key={`${meal.id}:${meal.announcementVersion}:${meal.status}`}
                       user={user}
                       meal={meal}
                       writable={writable}

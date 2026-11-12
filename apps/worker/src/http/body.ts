@@ -1,6 +1,7 @@
 import type { z } from "zod";
 import { ValidationError } from "../platform/errors";
 import type { commandContext } from "./request-context";
+import { validate } from "./validation";
 
 const MAX_BODY_BYTES = 64 * 1024;
 
@@ -45,13 +46,5 @@ export async function parsedJSON<T extends z.ZodType>(
     if (error instanceof ValidationError) throw error;
     throw new ValidationError("body", "must contain valid JSON");
   }
-  const parsed = schema.safeParse(body);
-  if (!parsed.success) {
-    const issue = parsed.error.issues[0];
-    throw new ValidationError(
-      issue?.path.join(".") || "body",
-      issue?.message ?? "is invalid",
-    );
-  }
-  return parsed.data;
+  return validate(schema, body);
 }

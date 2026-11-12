@@ -4,7 +4,7 @@ import type { Env } from "../env";
 import { currentMember } from "../auth/session";
 import { success } from "../http/envelope";
 import { parsedJSON } from "../http/body";
-import { commandContext } from "../http/request-context";
+import { requiredOperationCommandContext as command } from "../http/request-context";
 import { ValidationError } from "../platform/errors";
 import { D1MealRepository } from "./d1-repository";
 import { MealService } from "./service";
@@ -21,13 +21,6 @@ import {
 
 function service(context: Context<{ Bindings: Env }>): MealService {
   return new MealService(new D1MealRepository(context.env.DB));
-}
-
-function command(context: Context<{ Bindings: Env }>) {
-  if (!context.req.header("X-Operation-ID")?.trim()) {
-    throw new ValidationError("X-Operation-ID", "provide an operation ID");
-  }
-  return commandContext(context);
 }
 
 export function createMealRoutes(): Hono<{ Bindings: Env }> {
