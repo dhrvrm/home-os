@@ -26,7 +26,7 @@ async function jsonRpc<T>(response: Response): Promise<T> {
   return JSON.parse(data) as T;
 }
 
-describe("read-only MCP server", () => {
+describe("personally authorized MCP server", () => {
   it("requires personal OAuth authorization", async () => {
     const response = await exports.default.fetch(new Request("https://home-os.test/mcp", {
       method: "POST",
@@ -38,7 +38,7 @@ describe("read-only MCP server", () => {
     expect(response.headers.get("WWW-Authenticate")).toContain('resource_metadata="https://home-os.test/.well-known/oauth-protected-resource/mcp"');
   });
 
-  it("initializes and exposes only read-only inventory and audit tools", async () => {
+  it("initializes and exposes permitted inventory, recurring-rule and audit tools", async () => {
     const initialized = await callMcp("initialize", {
       protocolVersion: "2025-11-25",
       capabilities: {},
@@ -52,11 +52,11 @@ describe("read-only MCP server", () => {
     const body = await jsonRpc<{ result: { tools: Array<{ name: string; annotations: { readOnlyHint: boolean } }> } }>(listed);
     expect(body.result.tools.map((tool) => tool.name).sort()).toEqual([
       "activity_list",
-      "inventory_attention",
-      "inventory_get",
-      "inventory_list",
-    ]);
-    expect(body.result.tools.every((tool) => tool.annotations.readOnlyHint)).toBe(true);
+      "expenses_archive", "expenses_create", "expenses_get", "expenses_list", "expenses_restore", "expenses_update",
+      "inventory_archive", "inventory_attention", "inventory_create", "inventory_events", "inventory_export", "inventory_get", "inventory_list", "inventory_restore", "inventory_stock", "inventory_update",
+    ].sort());
+    expect(body.result.tools.filter(tool => ["activity_list", "inventory_list", "inventory_attention", "inventory_get", "inventory_events", "inventory_export", "expenses_get", "expenses_list"].includes(tool.name)).every(tool => tool.annotations.readOnlyHint)).toBe(true);
+    expect(body.result.tools.filter(tool => tool.name.endsWith("_create")).every(tool => !tool.annotations.readOnlyHint)).toBe(true);
   });
 
   it("queries D1 inventory through MCP", async () => {
@@ -93,7 +93,7 @@ it("connects and reads the existing MCP surface using the official 2.4 client tr
   const client = new Client({ name: "official-client-integration", version: "1.0.0" });
   try {
     await client.connect(transport);
-    expect((await client.listTools()).tools.map(tool => tool.name).sort()).toEqual(["activity_list", "inventory_attention", "inventory_get", "inventory_list"]);
+    expect((await client.listTools()).tools.map(tool => tool.name).sort()).toEqual(["activity_list", "expenses_get", "expenses_list", "inventory_attention", "inventory_events", "inventory_export", "inventory_get", "inventory_list"]);
     expect(await client.callTool({ name: "inventory_list", arguments: {} })).toMatchObject({ structuredContent: { items: expect.any(Array) } });
     expect((await client.readResource({ uri: "home-os://inventory/catalog" })).contents).toHaveLength(1);
   } finally { await client.close(); }

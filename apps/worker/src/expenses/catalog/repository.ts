@@ -12,6 +12,7 @@ export interface ExpenseMutation {
 }
 
 export interface ExpenseRepository {
+  listRulesPage?(householdId: string, filter: ExpenseFilter, page: import("../../inventory/validation").PageInput): Promise<import("../../inventory/validation").Page<StoredExpenseRule>>;
   beginMutation?(context: CommandContext, action: string, entityId: string | undefined, input: unknown): Promise<{ command: HouseholdCommand; replay: StoredExpenseRule | null }>;
   listRules(householdId: string, filter: ExpenseFilter): Promise<StoredExpenseRule[]>;
   getRule(householdId: string, ruleId: string): Promise<StoredExpenseRule>;

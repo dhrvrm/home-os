@@ -1,3 +1,4 @@
+import { pageLimit, readCursor, writeCursor, type PageInput } from "../../inventory/validation";
 import { beginCommand, replayCommand, commitCommand } from "../../platform/household-command";
 import { ConflictError, NotFoundError } from "../../platform/errors";
 import type { CadenceUnit, ExpenseFilter, StoredExpenseParticipant, StoredExpenseRule } from "./model";
@@ -62,6 +63,15 @@ export class D1ExpenseRepository implements ExpenseRepository {
 
     const participants = await this.participantsFor(rows.map((row) => row.id));
     return rows.map((row) => mapRule(row, participants.get(row.id) ?? []));
+  }
+
+  async listRulesPage(householdId: string, filter: ExpenseFilter, page: PageInput) {
+    const limit = pageLimit(page), cursor = readCursor(page.cursor);
+    const archived = filter.archived === 'only' ? 'AND archived_at IS NOT NULL' : filter.archived === 'include' ? '' : 'AND archived_at IS NULL';
+    const result = await this.database.prepare(`SELECT ${RULE_COLUMNS} FROM expense_rules WHERE household_id = ? ${archived} AND id > ? ORDER BY id ASC LIMIT ?`).bind(householdId, cursor[0] ?? '', limit + 1).all<RuleRow>();
+    const rows = result.results.slice(0, limit);
+    const participants = rows.length ? await this.participantsFor(rows.map(row => row.id)) : new Map();
+    return { items: rows.map(row => mapRule(row, participants.get(row.id) ?? [])), nextCursor: result.results.length > limit ? writeCursor(rows.at(-1)!.id) : null };
   }
 
   async getRule(householdId: string, ruleId: string): Promise<StoredExpenseRule> {

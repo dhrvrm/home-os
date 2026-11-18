@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { z } from "zod";
+import { createItemInput, updateItemInput, stockEventInput } from "../inventory/validation";
 import type { Env } from "../env";
 import { D1InventoryRepository } from "../inventory/d1-repository";
 import { InventoryService } from "../inventory/service";
@@ -7,41 +8,6 @@ import { ValidationError } from "../platform/errors";
 import { parsedJSON } from "./body";
 import { commandContext } from "./request-context";
 import { success } from "./envelope";
-
-const trackingMode = z.enum(["simple", "exact"]);
-const stockLevel = z.enum(["full", "okay", "low", "out"]);
-const createItemInput = z.object({
-  id: z.string().min(1).optional(),
-  name: z.string(),
-  alternativeNames: z.array(z.string()).optional(),
-  category: z.string().optional(),
-  categories: z.array(z.string()).optional(),
-  location: z.string().optional(),
-  unit: z.string().optional(),
-  trackingMode: trackingMode.optional(),
-  quantity: z.number().optional(),
-  stockLevel: stockLevel.optional(),
-  levelPercent: z.number().optional(),
-  minQuantity: z.number().optional(),
-  restockIntervalDays: z.number().nullable().optional(),
-});
-const updateItemInput = z.object({
-  name: z.string().optional(),
-  alternativeNames: z.array(z.string()).optional(),
-  categories: z.array(z.string()).optional(),
-  location: z.string().optional(),
-  unit: z.string().optional(),
-  minQuantity: z.number().optional(),
-  restockIntervalDays: z.number().nullable().optional(),
-});
-const stockEventInput = z.object({
-  id: z.string().min(1).optional(),
-  type: z.enum(["consume", "restock", "mark_level"]),
-  quantity: z.number().optional(),
-  stockLevel: stockLevel.optional(),
-  levelPercent: z.number().optional(),
-  note: z.string().optional(),
-});
 
 export function createInventoryRoutes(): Hono<{ Bindings: Env }> {
   const routes = new Hono<{ Bindings: Env }>();
@@ -51,6 +17,7 @@ export function createInventoryRoutes(): Hono<{ Bindings: Env }> {
     if (archived !== "exclude" && archived !== "only" && archived !== "include") {
       throw new ValidationError("archived", "must be only or include");
     }
+    const stockLevel = z.enum(["full", "okay", "low", "out"]);
     const requestedStock = context.req.query("stockLevel");
     if (requestedStock && !stockLevel.safeParse(requestedStock).success) {
       throw new ValidationError("stockLevel", "must be full, okay, low, or out");

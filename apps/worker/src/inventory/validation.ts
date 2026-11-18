@@ -1,3 +1,4 @@
+import { z } from "zod";
 import { ValidationError } from "../platform/errors";
 import type { StockLevel } from "./model";
 
@@ -92,3 +93,60 @@ export function percentageForLevel(level: StockLevel): number {
   if (level === "out") return 0;
   return 50;
 }
+
+const trackingMode = z.enum(["simple", "exact"]);
+const stockLevel = z.enum(["full", "okay", "low", "out"]);
+export const createItemInput = z.object({
+  id: z.string().min(1).optional(),
+  name: z.string(),
+  alternativeNames: z.array(z.string()).optional(),
+  category: z.string().optional(),
+  categories: z.array(z.string()).optional(),
+  location: z.string().optional(),
+  unit: z.string().optional(),
+  trackingMode: trackingMode.optional(),
+  quantity: z.number().optional(),
+  stockLevel: stockLevel.optional(),
+  levelPercent: z.number().optional(),
+  minQuantity: z.number().optional(),
+  restockIntervalDays: z.number().nullable().optional(),
+});
+export const updateItemInput = z.object({
+  name: z.string().optional(),
+  alternativeNames: z.array(z.string()).optional(),
+  categories: z.array(z.string()).optional(),
+  location: z.string().optional(),
+  unit: z.string().optional(),
+  minQuantity: z.number().optional(),
+  restockIntervalDays: z.number().nullable().optional(),
+});
+export const stockEventInput = z.object({
+  id: z.string().min(1).optional(),
+  type: z.enum(["consume", "restock", "mark_level"]),
+  quantity: z.number().optional(),
+  stockLevel: stockLevel.optional(),
+  levelPercent: z.number().optional(),
+  note: z.string().optional(),
+});
+
+
+export const pageInput = z.object({
+  limit: z.number().int().min(1).max(50).default(25),
+  cursor: z.string().max(1024).optional(),
+});
+export interface PageInput { limit?: number; cursor?: string; }
+export interface Page<T> { items: T[]; nextCursor: string | null; }
+export function pageLimit(input: PageInput): number {
+  const limit = input.limit ?? 25;
+  if (!Number.isInteger(limit) || limit < 1 || limit > 50) throw new ValidationError('limit', 'must be between 1 and 50');
+  return limit;
+}
+export function readCursor(cursor?: string): string[] {
+  if (!cursor) return [];
+  try {
+    const value: unknown = JSON.parse(decodeURIComponent(atob(cursor)));
+    if (!Array.isArray(value) || value.length > 3 || !value.every(part => typeof part === 'string' && part.length <= 256)) throw new Error('cursor');
+    return value;
+  } catch { throw new ValidationError('cursor', 'must be a valid page cursor'); }
+}
+export function writeCursor(...values: string[]): string { return btoa(encodeURIComponent(JSON.stringify(values))); }

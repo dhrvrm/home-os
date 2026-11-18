@@ -59,6 +59,13 @@ export class ExpenseService {
     return rules.map((rule) => enrich(rule, members));
   }
 
+  async listRulesPage(householdId: string, filter: ExpenseFilter, page: import("../../inventory/validation").PageInput = {}) {
+    if (!this.repository.listRulesPage) throw new Error("Paged expenses require a bounded repository");
+    const result = await this.repository.listRulesPage(householdId, filter, page);
+    const members = await this.memberIndex(householdId);
+    return { rules: result.items.map(rule => enrich(rule, members)), nextCursor: result.nextCursor };
+  }
+
   async getRule(householdId: string, ruleId: string): Promise<ExpenseRule> {
     const rule = await this.repository.getRule(householdId, ruleId.trim());
     return enrich(rule, await this.memberIndex(householdId));
