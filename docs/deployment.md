@@ -1,14 +1,15 @@
 # Cloudflare deployment and operations
 
-Home OS deploys as one Cloudflare Worker. Workers Static Assets serves the exported Next.js PWA; Hono serves `/api/v1`, health checks, synchronization, and `/mcp`; D1 stores authoritative household state and audit history. There is no separately hosted backend or database process.
+Home OS deploys as one Cloudflare Worker. Workers Static Assets serves the exported Next.js PWA; Hono serves `/api/v1`, health checks, and synchronization. The official Cloudflare OAuth provider wraps the personal `/mcp` endpoint. D1 stores authoritative household state and audit history; `OAUTH_KV` stores provider-managed client, token, and temporary consent records.
 
-The primary app address is `https://home.dhruvverma.dev`. The Worker custom domain is declared in `apps/worker/wrangler.jsonc`; Cloudflare manages its DNS and HTTPS certificate. Use this address when installing the PWA. The `workers.dev` address remains available for deployment checks.
+The primary app address is `https://home.dhruvverma.dev`. The Worker custom domain is declared in `apps/worker/wrangler.jsonc`; Cloudflare manages its DNS and HTTPS certificate. Use this address when installing the PWA and connecting MCP. The `workers.dev` address remains available for ordinary app and health checks; OAuth and MCP require the configured canonical origin.
 
 ## Services and free-tier shape
 
 - **Workers Static Assets:** PWA shell and bundled Wllama runtimes.
 - **Worker:** API, sync, and stateless MCP protocol handling.
 - **D1:** accounts, inventory, recurring expense rules, recipes, meals/attendance, contacts, notification state, idempotency records, and audit events.
+- **Workers KV (`OAUTH_KV`):** official OAuth provider state. D1 connection records remain authoritative for permission and revocation.
 - **Browser IndexedDB/Dexie:** local projections, recent activity, and queued writes. It is not a backup for D1.
 - **Browser origin-private storage:** optional 105 MB GGUF model, downloaded only after consent and reused offline. The client checks quota with at least 32 MiB or 25% headroom and requests persistent storage when the browser supports it.
 
@@ -27,14 +28,7 @@ npx wrangler whoami
 
 The helper exports account configuration and the Keychain token. Set `HOMEOS_USE_KEYCHAIN_API_TOKEN=0` before sourcing to use an existing Wrangler OAuth session instead. Never enable shell tracing while loading secrets, or commit `.dev.vars` or copied credential output. Tokens shared in chat should be replaced.
 
-MCP uses a separate high-entropy credential. Store the production value only as a Worker secret:
-
-```bash
-source scripts/cloudflare-env.zsh
-openssl rand -base64 36 | tr -d '\n' | npx wrangler secret put HOMEOS_MCP_TOKEN --config apps/worker/wrangler.jsonc
-```
-
-Save the generated MCP credential in a password manager before piping it if a client will need it later. For local development, copy `apps/worker/.dev.vars.example` to the ignored `apps/worker/.dev.vars` and replace its placeholder.
+MCP uses personal OAuth connections. `HOMEOS_MCP_TOKEN` is no longer read or accepted. An old deployment secret can remain unused for rollback; never give it to new clients. Preserve existing setup, password-pepper, and VAPID secrets when deploying. For local development, copy `apps/worker/.dev.vars.example` to the ignored `apps/worker/.dev.vars` and replace its example values.
 
 ## First deployment
 
@@ -50,15 +44,17 @@ npx wrangler secret put HOMEOS_PASSWORD_PEPPER --config apps/worker/wrangler.jso
 
 `HOMEOS_SETUP_TOKEN` is the first-owner setup code. `HOMEOS_PASSWORD_PEPPER` must contain at least 32 characters and must be backed up separately from D1. Losing or changing it makes stored password verifiers unusable; do not rotate it as if it were a session token. Keep both secrets out of source, logs, and browser storage. Setup is disabled without valid deployment configuration. There is no public signup or email-delivery dependency.
 
-Visit the deployed app, enter the setup code, and choose the owner's email/password. Add other accounts through Members. Owners can edit member details/roles, set a password for existing members, reset other members' passwords, deactivate/reactivate accounts, and change their own password in Account. The final active owner cannot be demoted or deactivated. Deactivation and password reset revoke sessions while preserving member IDs and household history. If the only owner loses their password, recovery needs a deployment operator; no email reset service is configured.
+Visit the deployed app, enter the setup code, and choose the owner's email/password. Add other accounts through Members. Owners can edit member details/roles, set a password for existing members, reset other members' passwords, deactivate/reactivate accounts, and change their own password in Account. At least one active owner with an established login must remain; an owner profile without login access cannot be the replacement. Deactivation and password replacement revoke all pre-change browser and MCP grants while preserving member IDs and household history. Reactivation never restores those grants. If the only owner loses their password, recovery needs a deployment operator; no email reset service is configured.
 
 Password verifiers use per-account random salts and an independent HMAC pepper before PBKDF2-SHA256. The 100,000-iteration setting respects Cloudflare's production PBKDF2 ceiling; it is below the general OWASP PBKDF2 recommendation. The pepper is therefore required rather than optional. Login attempts are bounded by email and source address. Verify request CPU against the actual Worker plan before assuming free-tier compatibility.
 
-Sessions use random opaque credentials in HttpOnly, SameSite=Strict cookies (Secure on HTTPS); only token hashes live in D1. Remembered sessions expire after 30 days; nonremembered sessions use a browser-session cookie and expire after 12 hours. Password changes end old sessions and issue a fresh nonremembered session. Same-origin JSON checks protect mutations. Protected writes also require `X-HomeOS-Member` matching the session, so an old tab cannot borrow a different member's new cookie; the PWA sends this automatically. Close/reopen older installed versions after this release. Cookies do not authorize MCP.
+Sessions use random opaque credentials in HttpOnly, SameSite=Strict cookies (Secure on HTTPS); only token hashes live in D1. New sessions have no automatic server deadline and return `expiresAt: null`. Migration promotes only still-valid legacy sessions with current active accounts; expired, revoked, or stale-credential grants cannot return. Cookies use the browser's 400-day retention maximum. Ordered online status checks renew them under an origin-wide Web Lock; ordinary domain responses cannot overwrite a newer sign-in cookie. Storage clearing and browser/device policy can still require login.
+
+Same-origin JSON checks protect mutations. Protected writes require `X-HomeOS-Member` matching the session. The current PWA also binds sign-out to its original public session ID, so a delayed old tab cannot sign out a newer grant. Sign-out ends only that browser session and its notification device. Account shows self sessions/connections, and owners can inspect and revoke household access. Cookies never authorize MCP.
 
 The PWA precaches a content-versioned HTML/JS/CSS/font shell and PNG icons. Authentication, API, MCP, health, and external model responses are never service-worker cached. Installation requires HTTPS outside localhost. Test installation and relaunch on the target phones; password-manager save prompts and iOS installation are browser-controlled.
 
-Offline access uses only the last accepted unexpired identity and the device's household copy. Server revocation is enforced when the device reconnects; it cannot be observed while disconnected. An explicit online rejection locks the app without granting an offline fallback. Pending edits survive same-member reauthentication. Sign-out requires server revocation before clearing the local copy; account switching requires clearing the previous member's local work. Device-local storage is not encrypted by this change.
+Offline access uses only the last accepted current identity and the device's household copy. Server revocation is enforced when the device reconnects; it cannot be observed while disconnected. An explicit online rejection locks the app without granting an offline fallback. Pending edits survive same-member reauthentication. Sign-out requires server revocation before clearing the local copy; account switching requires clearing the previous member's local work. Old transitions cannot clear a newer member's saved work. Device-local storage is not encrypted by this change.
 
 1. Install and verify everything:
 
@@ -77,13 +73,14 @@ Offline access uses only the last accepted unexpired identity and the device's h
    npx wrangler d1 create home-os --config apps/worker/wrangler.jsonc
    ```
 
-3. Apply all remote migrations:
+3. Provision a KV namespace once if `OAUTH_KV` is not already configured, and put its returned ID in `apps/worker/wrangler.jsonc`. Then apply all remote migrations:
 
    ```bash
+   npx wrangler kv namespace create home-os-oauth --binding OAUTH_KV --update-config=false --config apps/worker/wrangler.jsonc
    npx wrangler d1 migrations apply home-os --remote --config apps/worker/wrangler.jsonc
    ```
 
-4. Set `HOMEOS_MCP_TOKEN`, then deploy the unified Worker:
+4. Confirm `HOMEOS_MCP_RESOURCE` is `https://home.dhruvverma.dev/mcp`, and deploy the unified Worker:
 
    ```bash
    npm run build --workspace @home-os/web
@@ -99,9 +96,25 @@ Offline access uses only the last accepted unexpired identity and the device's h
    curl -s -o /dev/null -w '%{http_code}\n' https://home-os.<workers-subdomain>.workers.dev/api/v1/items
    ```
 
-Use an MCP Inspector or client with `Authorization: Bearer <HOMEOS_MCP_TOKEN>` for `/mcp`. Opening `/mcp` in a browser is not a protocol test.
+Use an MCP Inspector or compatible OAuth client with remote server URL `https://home.dhruvverma.dev/mcp`. Complete the browser sign-in and consent flow. Opening `/mcp` alone is not an authorized protocol test. An anonymous request must return an RFC9728 resource-metadata challenge, and the retired operator bearer must fail.
 
 After deployment, check `/api/v1/auth/status` has `setupAvailable: true`, complete owner setup, and verify remembered login survives a browser restart, password-manager fields are recognized, anonymous API access is denied, and logout rejects the old cookie. Verify offline inventory and app-update handling on a phone. Monitor auth errors and Worker CPU without recording request bodies, passwords, cookies, pepper, or setup keys. Unexpected authenticated 401s, login 5xx, CPU-limit errors, or lost local queues require investigation. An anonymous 401 is the intended behavior and is not a rollback trigger.
+
+## Personal MCP and continuing-access release
+
+Back up D1 before applying `0008_continuing_access.sql`, `0009_mcp_connections.sql`, and `0010_usable_owner.sql`. They add session policy/public IDs, OAuth connection and consent state, and protection for the last owner who can sign in. They do not rebuild the session table referenced by notification devices. Preserve the existing password pepper, setup key, and VAPID pair. Configure the persistent `OAUTH_KV` namespace before deploying the new Worker.
+
+The Worker must run before static assets for `/mcp`, OAuth discovery, `/api/oauth/*`, `/api/app`, and protected API paths. Keep `global_fetch_strictly_public` enabled for Client ID Metadata Document fetches. Canonical issuer/resource values come from trusted configuration, never an incoming Host header. Ordinary fallback app/health requests still work; alternate-origin OAuth requests are refused.
+
+Discovery is available at `/.well-known/oauth-authorization-server` and `/.well-known/oauth-protected-resource/mcp`. Authorization, token exchange, and dynamic registration use `/api/oauth/authorize`, `/api/oauth/token`, and `/api/oauth/register`. Token requests require form-urlencoded bodies. Modern clients may use HTTPS Client ID Metadata Documents; compatible clients may dynamically register. Consent uses the official provider's browser-binding helpers and displays the client, destination, capabilities, and any local-app caveat.
+
+Every connection uses scope `home:access`; effective permission is the person's current role intersected with the explicitly approved role. Promotion requires reconnecting for broader access. Fifteen-minute access tokens renew through a refresh grant with no configured deadline or idle timeout. D1 admission checks apply to every request and refresh, so password replacement, deactivation, replacement consent, and accepted revocation take effect even if provider cleanup is delayed. A temporary D1 outage returns a retryable failure without revoking a healthy grant.
+
+Connection revocation is supported in Account and through the permitted MCP revoke command. Optional RFC7009 token revocation is omitted from discovery and rejected; do not configure clients or monitoring to depend on it. Anonymous registration and consent admission are bounded, and abandoned records are cleaned through bounded lifecycle maintenance without expanding the notification cron.
+
+Existing shared-token clients must reconnect at the canonical MCP URL. Password/account setup and native notification enrollment remain app interactions; tools return a trusted `requires_user_action` destination. An older installed PWA can open `https://home.dhruvverma.dev/api/app` for the current document without forced service-worker activation or queue deletion. Consent documents under `/api/oauth/consent` also bypass the old shell's navigation cache. Actual HTML and JSON access responses use no-store and anti-framing headers.
+
+Release evidence must include the deployed version/SHA, public health/readiness/PWA checks, metadata/challenge checks, and local real-provider/browser verification. Use an existing controlled production identity for an authorized live flow only when one exists. Never create the household's first owner or choose their password for testing. If setup is still pending, record that live authorized verification was unavailable and leave setup to the owner.
 
 ## Meal reminders and Web Push
 
@@ -118,7 +131,7 @@ npx wrangler secret put HOMEOS_VAPID_PRIVATE_KEY --config apps/worker/wrangler.j
 
 The `* * * * *` Cron Trigger uses UTC and runs while the app is closed. A tick scans at most eight due recipients and reserves database capacity before admitting deliveries. It attempts at most four sends, with four concurrent sends and short transport timeouts, within D1 Free’s fifty binding requests per invocation. A database batch counts as one binding request. Due delivery requires an unanswered current announcement, enabled preferences, an active eligible member, and the exact live sign-in used to register that browser. Permanent provider rejection retires the subscription; transient failures use bounded retries before cooking time. Repeated ticks create one logical reminder per announcement/member. Inbox retention is at most fifty entries or fourteen days, with separate seven-day deduplication. Cron changes can take up to fifteen minutes to propagate; inspect configured triggers after deployment.
 
-On the device, open Notifications and choose Enable on this device. Permission requires a gesture; iOS/iPadOS requires installation to the Home Screen. Signing out, session expiry, password changes, and deactivation end that device grant. Re-enable after a new sign-in when needed. The service worker asks the API for a fresh recipient verdict before showing details, and falls back to a generic visible alert when disconnected or access changed. Provider acceptance and synthetic browser checks do not establish physical-device delivery.
+On the device, open Notifications and choose Enable on this device. Permission requires a gesture; iOS/iPadOS requires installation to the Home Screen. Signing out, exact session revocation, password changes, and deactivation end that device grant. Native push subscriptions may expire independently of continuing browser access. Re-enable after a new sign-in when needed. The service worker asks the API for a fresh recipient verdict before showing details, and falls back to a generic visible alert when disconnected or access changed. Provider acceptance and synthetic browser checks do not establish physical-device delivery.
 
 A local scheduled handler is available only with Wrangler's `--test-scheduled`; production exposes no public scheduler mutation endpoint. Run `npm run smoke` for real D1 deduplication and `npm run smoke:browser` for the installed shell and household interaction checks. A real phone permission/receipt check remains device-specific.
 
@@ -148,4 +161,4 @@ The PWA JSON export is useful for household portability but is not a full audit/
 
 ## Security boundary
 
-The deployment serves one configured household with email/password member accounts and owner/member/viewer roles. The owner controls account creation; viewer accounts cannot mutate household data. MCP remains a separately authenticated read-only personal endpoint. Third-party MCP clients still require OAuth 2.1, scoped grants, revocation, and an authorization audit before broad sharing or write tools. Contacts, recipes, meals, and attendance use the same admitted household roles. Viewers can read shared records and manage only their own notification preferences/read state/device; attendance is restricted to eligible owners and members. MCP remains inventory/activity-only and does not expose these new domains.
+The deployment serves one configured household with Owner, Member, and Viewer roles. Owners manage membership and household access. Owners and members maintain shared facts and answer attendance only for themselves. Viewers read shared facts and control their own notification preferences/read state, sessions, and connections. MCP uses the same action policy and domain services, with a consent ceiling and implicit actor/household. Passwords, raw tokens, proof hashes, and push receiving secrets are excluded from MCP parameters and results. Domain mutations recheck exact current authority in the acceptance transaction, including receipt replays. Access changes are audited with non-secret actor, source, client/tool, and operation metadata.
