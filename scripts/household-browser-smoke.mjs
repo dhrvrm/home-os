@@ -162,12 +162,19 @@ async function signIn(page, account) {
 async function nav(page, name) {
   // Desktop sidebar and mobile nav coexist; use the one currently visible.
   const button = page.getByRole("button", { name, exact: true });
+  const more = page.getByRole("button", { name: "More", exact: true });
+  // Reload can finish before sign-in restoration mounts navigation. Wait for
+  // the shell before deciding whether the destination lives in More.
+  await button
+    .filter({ visible: true })
+    .or(more.filter({ visible: true }))
+    .first()
+    .waitFor();
   for (const candidate of await button.all())
     if (await candidate.isVisible()) {
       await candidate.click();
       return;
     }
-  const more = page.getByRole("button", { name: "More", exact: true });
   await more.click();
   await page
     .getByRole("dialog")
