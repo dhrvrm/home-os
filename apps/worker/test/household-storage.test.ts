@@ -1,7 +1,10 @@
 import { env } from "cloudflare:workers";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 
 const now = "2026-11-12T12:00:00.000Z";
+beforeEach(async () => {
+  await env.DB.prepare("INSERT OR IGNORE INTO auth_accounts (member_id, email, password_hash, updated_at) VALUES ('local-owner', 'storage-owner@example.test', 'fixture-verifier', ?)").bind(now).run();
+});
 
 describe("household planning storage", () => {
   it("adds household planning tables without replacing the established owner or household", async () => {

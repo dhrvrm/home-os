@@ -7,7 +7,7 @@ import { APIError } from "@/lib/api";
 import { getAuthStatus, logout, type AuthSession, type AuthStatus } from "@/lib/auth";
 import { clearInventoryCache, loadInventoryCache } from "@/lib/inventory-cache";
 import { homeOSDatabase } from "@/offline/db";
-import { clearDataOwner, clearSavedSession, readDataOwner, readSavedSession, saveSession, setDataOwner } from "./session";
+import { sessionIsCurrent, clearDataOwner, clearSavedSession, readDataOwner, readSavedSession, saveSession, setDataOwner } from "./session";
 import { ACCESS_BOUNDARY_KEY, boundaryMember, boundaryState, captureAccessProof, drainHouseholdWork, isCurrentAccessProof, lockHouseholdWork, publishAccessBoundary, readAccessBoundary, resumeHouseholdWork, setActiveMemberId, type AccessProof } from "./work";
 import "@/components/auth.css";
 
@@ -43,7 +43,7 @@ export function AuthGate() {
   }, []);
 
   const admitSession = useCallback(async (session: AuthSession, interactive: boolean, ticket: number, expectedBoundary?: string | null) => {
-    if (!Number.isFinite(Date.parse(session.expiresAt)) || Date.parse(session.expiresAt) <= Date.now()) {
+    if (!sessionIsCurrent(session)) {
       throw new Error("This sign-in has expired. Sign in again to continue.");
     }
     lockHouseholdWork();
@@ -100,7 +100,7 @@ export function AuthGate() {
     const ticket = ++sequence.current;
     const current = sessionRef.current;
     const sharedMember = boundaryMember();
-    const background = !!current && Date.parse(current.expiresAt) > Date.now() && boundaryState() === "ready"
+    const background = !!current && sessionIsCurrent(current) && boundaryState() === "ready"
       && (!sharedMember || (sharedMember.id === current.user.id && sharedMember.householdId === current.user.householdId));
     if (!background) {
       lockHouseholdWork();
@@ -127,7 +127,7 @@ export function AuthGate() {
       if (!status) throw new AccountSwitchRequired("Sign-in keeps changing in another tab. Reopen Home OS to retry.");
       if (status.session) {
         if (background && current.user.id === status.session.user.id && current.user.householdId === status.session.user.householdId
-          && current.user.role === status.session.user.role && Date.parse(status.session.expiresAt) > Date.now() && boundaryState() === "ready" && readAccessBoundary() === acceptedBoundary) {
+          && current.user.role === status.session.user.role && sessionIsCurrent(status.session) && boundaryState() === "ready" && readAccessBoundary() === acceptedBoundary) {
           // Rechecking a valid same-member session must not unmount open forms
           // or invalidate inventory work already admitted for that member.
           saveSession(status.session);
@@ -225,10 +225,11 @@ export function AuthGate() {
   useEffect(() => {
     if (state.kind !== "ready") return;
     const proof = captureAccessProof();
+    if (state.session.expiresAt === null) return;
     const remaining = Date.parse(state.session.expiresAt) - Date.now();
     const timeout = window.setTimeout(() => {
       if (sessionRef.current !== state.session) return;
-      if (Date.parse(state.session.expiresAt) <= Date.now() && isCurrentAccessProof(proof)) expireAccess();
+      if (!sessionIsCurrent(state.session) && isCurrentAccessProof(proof)) expireAccess();
       else void verifyAccess();
     }, Math.min(Math.max(remaining, 0), 2_147_483_647));
     return () => window.clearTimeout(timeout);

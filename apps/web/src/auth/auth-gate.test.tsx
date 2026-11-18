@@ -9,8 +9,8 @@ import { AuthGate } from "./auth-gate";
 import { readSavedSession, saveSession, setDataOwner } from "./session";
 import { ACCESS_BOUNDARY_KEY, publishAccessBoundary, readAccessBoundary, resumeHouseholdWork, runHouseholdWork } from "./work";
 
-const alice: AuthSession = { user: { id: "alice", householdId: "home", name: "Alice", email: "alice@example.com", role: "member" }, expiresAt: "2099-12-01T00:00:00.000Z" };
-const bob: AuthSession = { user: { id: "bob", householdId: "home", name: "Bob", email: "bob@example.com", role: "member" }, expiresAt: "2099-12-01T00:00:00.000Z" };
+const alice: AuthSession = { user: { id: "alice", householdId: "home", name: "Alice", email: "alice@example.com", role: "member" }, expiresAt: null };
+const bob: AuthSession = { user: { id: "bob", householdId: "home", name: "Bob", email: "bob@example.com", role: "member" }, expiresAt: null };
 
 vi.mock("@/lib/auth", () => ({ getAuthStatus: vi.fn(), logout: vi.fn() }));
 vi.mock("@/components/inventory-app", () => ({ InventoryApp: ({ session, onLogout }: { session: AuthSession; onLogout: () => Promise<void> }) => <div>Open {session.user.name}<input aria-label="Unsaved note" defaultValue="" /><button onClick={() => void onLogout().catch(() => {})}>Sign out test</button></div> }));

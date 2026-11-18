@@ -8,7 +8,7 @@ const password = "correct horse battery staple";
 const replacement = "a new household password";
 
 type MemberRole = "owner" | "member" | "viewer";
-interface SessionBody { user: { id: string; householdId: string; email: string; role: MemberRole }; expiresAt: string }
+interface SessionBody { user: { id: string; householdId: string; email: string; role: MemberRole }; expiresAt: string | null }
 interface MemberBody { id: string; name: string; email: string; role: MemberRole; active: boolean; hasLogin: boolean }
 
 async function api(path: string, body?: unknown, cookie?: string, method = body ? "POST" : "GET", headers: HeadersInit = {}) {
@@ -142,11 +142,9 @@ describe("household email/password access", () => {
     expect(header).toContain("Secure");
     expect(header).toContain("SameSite=Strict");
     expect(header).toContain("Path=/");
-    expect(header).toContain("Max-Age=2592000");
+    expect(header).toContain("Max-Age=34560000");
     const session = await response.json<{ data: SessionBody }>();
-    const remaining = Date.parse(session.data.expiresAt) - Date.now();
-    expect(remaining).toBeGreaterThan(29 * 86400000);
-    expect(remaining).toBeLessThanOrEqual(30 * 86400000);
+    expect(session.data.expiresAt).toBeNull();
     const status = await api("/auth/status", undefined, cookie);
     await expect(status.json()).resolves.toMatchObject({ data: { setupRequired: false, session: { user: { id: "local-owner", role: "owner", email: "owner@example.com" } } } });
     expect((await api("/items", undefined, cookie)).status).toBe(200);
@@ -177,17 +175,15 @@ describe("household email/password access", () => {
     expect(JSON.stringify(audit.results)).not.toContain(account!.password_hash);
   });
 
-  it("normalizes emails and supports a shorter browser-session cookie without remembering", async () => {
+  it("normalizes emails and persists access even for legacy requests without remembering", async () => {
     await setup();
     const response = await login(" OWNER@EXAMPLE.COM ");
     const cookie = cookieOf(response);
     const liveCookie = response.headers.getSetCookie().findLast((value) => value.startsWith(cookie))!;
-    expect(liveCookie).not.toContain("Max-Age");
+    expect(liveCookie).toContain("Max-Age=34560000");
     const session = await response.json<{ data: SessionBody }>();
     expect(session.data.user.email).toBe("owner@example.com");
-    const remaining = Date.parse(session.data.expiresAt) - Date.now();
-    expect(remaining).toBeGreaterThan(11 * 3600000);
-    expect(remaining).toBeLessThanOrEqual(12 * 3600000);
+    expect(session.data.expiresAt).toBeNull();
     expect((await api("/items", undefined, cookie)).status).toBe(200);
   });
 
@@ -215,7 +211,7 @@ describe("household email/password access", () => {
   it("rejects expired, forged, and credential-version-revoked cookies", async () => {
     const cookie = cookieOf(await setup());
     expect((await api("/items", undefined, "homeos_session=bad-token")).status).toBe(401);
-    await env.DB.prepare("UPDATE auth_sessions SET expires_at = '2000-01-01T00:00:00.000Z'").run();
+    await env.DB.prepare("UPDATE auth_sessions SET permanent = 0, expires_at = '2000-01-01T00:00:00.000Z'").run();
     expect((await api("/items", undefined, cookie)).status).toBe(401);
     await expect((await api("/auth/status", undefined, cookie)).json()).resolves.toMatchObject({ data: { session: null } });
     const freshCookie = cookieOf(await login());

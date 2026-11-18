@@ -31,7 +31,7 @@ export function AuthScreen({ setupRequired, setupAvailable, message, onAuthentic
     setPending(true);
     setError(null);
     try {
-      const credentials = { email: String(values.get("email") ?? "").trim(), password, remember: values.get("remember") === "on" };
+      const credentials = { email: String(values.get("email") ?? "").trim(), password };
       const session = settingUp
         ? await setupOwner({ ...credentials, name: String(values.get("name") ?? "").trim(), setupToken: String(values.get("setupToken") ?? "") })
         : await login(credentials);
@@ -63,8 +63,7 @@ export function AuthScreen({ setupRequired, setupAvailable, message, onAuthentic
               <PasswordField label="Confirm password" name="confirmPassword" autoComplete="new-password" disabled={pending} />
               <div className="field auth-field"><label htmlFor="home-setup-code">Home setup code</label><input id="home-setup-code" name="setupToken" type="password" autoComplete="off" required maxLength={256} disabled={pending} aria-describedby="setup-code-help" /><small className="auth-help" id="setup-code-help">The private setup code from the person setting up this home. Used only for the first owner.</small></div>
             </>}
-            <label className="auth-check"><input name="remember" type="checkbox" defaultChecked disabled={pending} /><span>Keep me signed in</span></label>
-            <p className="auth-help auth-remember-help">For 30 days on this device. Leave unchecked on a shared device.</p>
+            <p className="auth-help">Stay signed in until you sign out or access is revoked. Clearing browser storage or device policy may require signing in again. Sign out on shared devices.</p>
             {error && <p className="form-error" role="alert">{error}</p>}
             <button type="submit" className="button button--primary auth-submit" disabled={pending}>{pending ? (settingUp ? "Setting up…" : "Signing in…") : (settingUp ? "Set up your home" : "Sign in")}</button>
             {!settingUp && <p className="auth-help">Need an account or a new password? Ask a household owner.</p>}

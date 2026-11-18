@@ -1,3 +1,5 @@
+import { SessionAccessService } from "./session-access";
+import { revokeMemberGrants } from "./session-policy";
 import { authorityGuard, releaseAuthorityGuard } from "./authority";
 import { commandContext } from "../http/request-context";
 import { Hono } from "hono";
@@ -28,7 +30,7 @@ export async function rateLimit(context: AuthContext, name: string, limit: numbe
   }
 }
 
-const loginSchema = z.object({ email: emailSchema, password: z.string().min(1).max(128), remember: z.boolean().default(false) });
+const loginSchema = z.object({ email: emailSchema, password: z.string().min(1).max(128) });
 const setupSchema = loginSchema.extend({ name: nameSchema, password: passwordSchema, setupToken: z.string().min(1).max(256) });
 
 export function createAuthRoutes(): Hono<{ Bindings: Env }> {
@@ -70,7 +72,7 @@ export function createAuthRoutes(): Hono<{ Bindings: Env }> {
       if (String(error).includes("UNIQUE constraint")) throw new HomeOSError("This home is already set up. Sign in instead.", "already_configured", 409);
       throw error;
     }
-    return success(context, await createSession(context, { id, householdId, name: input.name, email: input.email, role: "owner" }, input.remember, 1), 201);
+    return success(context, await createSession(context, { id, householdId, name: input.name, email: input.email, role: "owner" }, 1), 201);
   });
 
   routes.post("/auth/login", async (context) => {
@@ -92,7 +94,7 @@ export function createAuthRoutes(): Hono<{ Bindings: Env }> {
     return success(context, await createSession(context, {
       id: row.member_id, householdId: context.env.HOMEOS_DEFAULT_HOUSEHOLD_ID,
       name: row.display_name, email: row.email, role: row.role,
-    }, input.remember, row.credential_version));
+    }, row.credential_version));
   });
 
   routes.post("/auth/logout", async (context) => {
@@ -116,7 +118,7 @@ export function createAuthRoutes(): Hono<{ Bindings: Env }> {
       authorityGuard(context.env.DB, command, "account_password_change"),
       context.env.DB.prepare("UPDATE auth_accounts SET password_hash = ?, credential_version = credential_version + 1, updated_at = ? WHERE member_id = ? AND credential_version = ?")
         .bind(hash, new Date().toISOString(), member.id, account.credential_version),
-      context.env.DB.prepare("DELETE FROM auth_sessions WHERE member_id = ? AND credential_version <= ?").bind(member.id, account.credential_version),
+      ...revokeMemberGrants(context.env.DB, member.id, "credentials"),
       accessAudit(context, member.id, member.id, "member.password_changed", hash, command),
       releaseAuthorityGuard(context.env.DB, command),
     ]).catch(error => {
@@ -124,8 +126,19 @@ export function createAuthRoutes(): Hono<{ Bindings: Env }> {
       throw error;
     });
     if (results[1]!.meta.changes !== 1) throw new HomeOSError("Your password changed elsewhere. Sign in again.", "unauthorized", 401);
-    return success(context, await createSession(context, member, false, account.credential_version + 1));
+    return success(context, await createSession(context, member, account.credential_version + 1));
   });
 
+  routes.get("/auth/sessions", async (context) => {
+    const query = context.req.query();
+    return success(context, await new SessionAccessService(context.env.DB).listSessions(commandContext(context), {
+      memberId: query.memberId, limit: query.limit === undefined ? undefined : Number(query.limit), cursor: query.cursor,
+    }));
+  });
+  routes.post("/auth/sessions/:id/revoke", async (context) => {
+    const result = await new SessionAccessService(context.env.DB).revokeSession(commandContext(context), context.req.param("id"));
+    if (result.current) await revokeCurrentSession(context);
+    return success(context, result);
+  });
   return routes;
 }

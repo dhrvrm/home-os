@@ -3,12 +3,20 @@ import type { AuthSession } from "@/lib/auth";
 const SESSION_KEY = "home-os:session:v1";
 const OWNER_KEY = "home-os:data-owner:v1";
 
+export function validSessionDeadline(value: unknown): value is string | null {
+  return value === null || (typeof value === "string" && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/.test(value) && Number.isFinite(Date.parse(value)));
+}
+
+export function sessionIsCurrent(session: { expiresAt: unknown }, now = Date.now()): boolean {
+  return validSessionDeadline(session.expiresAt) && (session.expiresAt === null || Date.parse(session.expiresAt) > now);
+}
+
 export interface DataOwner { id: string; householdId: string }
 
 function validatedSession(value: unknown): AuthSession | null {
   if (!value || typeof value !== "object") return null;
   const candidate = value as Record<string, unknown>;
-  if (typeof candidate.expiresAt !== "string" || !Number.isFinite(Date.parse(candidate.expiresAt))) return null;
+  if (!validSessionDeadline(candidate.expiresAt)) return null;
   const user = candidate.user;
   if (!user || typeof user !== "object") return null;
   const fields = user as Record<string, unknown>;
@@ -28,7 +36,7 @@ export function readSavedSession(now = Date.now()): AuthSession | null {
   for (const source of [() => sessionStorage, () => localStorage]) {
     try {
       const candidate = stored(source());
-      if (candidate && Date.parse(candidate.expiresAt) > now) return candidate;
+      if (candidate && sessionIsCurrent(candidate, now)) return candidate;
     } catch { /* No application storage means no offline access evidence. */ }
   }
   return null;
@@ -39,7 +47,7 @@ export function saveSession(session: AuthSession): void {
   if (!safe) throw new Error("Home OS received an invalid sign-in response.");
   try {
     const previous = stored(localStorage);
-    const persistent = Date.parse(safe.expiresAt) - Date.now() > 13 * 60 * 60 * 1000
+    const persistent = safe.expiresAt === null || Date.parse(safe.expiresAt) - Date.now() > 13 * 60 * 60 * 1000
       || (previous?.user.id === safe.user.id && previous.expiresAt === safe.expiresAt);
     if (persistent) localStorage.setItem(SESSION_KEY, JSON.stringify(safe));
     else localStorage.removeItem(SESSION_KEY);

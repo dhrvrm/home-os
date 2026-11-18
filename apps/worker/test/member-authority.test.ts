@@ -237,7 +237,7 @@ describe("continuing owner authority at transaction commit", () => {
       await held.entered;
       if (reason === "expired") {
         await env.DB.prepare(
-          "UPDATE auth_sessions SET expires_at = '2000-01-01T00:00:00.000Z' WHERE member_id = 'local-owner'",
+          "UPDATE auth_sessions SET permanent = 0, expires_at = '2000-01-01T00:00:00.000Z' WHERE member_id = 'local-owner'",
         ).run();
       } else {
         await env.DB.prepare(

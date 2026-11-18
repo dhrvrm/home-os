@@ -1,3 +1,4 @@
+import { revokeMemberGrants } from "./session-policy";
 import { z } from "zod";
 import type { CommandContext } from "../platform/context";
 import {
@@ -245,11 +246,7 @@ export class MemberService {
               ]
             : []),
           ...(input.active === false
-            ? [
-                this.database
-                  .prepare("DELETE FROM auth_sessions WHERE member_id = ?")
-                  .bind(id),
-              ]
+            ? revokeMemberGrants(this.database, id, "deactivated")
             : []),
         ],
         async () => {},
@@ -316,9 +313,7 @@ export class MemberService {
       credential_version = credential_version + 1, updated_at = excluded.updated_at`,
             )
             .bind(hash, now, id, context.householdId),
-          this.database
-            .prepare("DELETE FROM auth_sessions WHERE member_id = ?")
-            .bind(id),
+          ...revokeMemberGrants(this.database, id, "credentials"),
         ],
         async () => {},
       );

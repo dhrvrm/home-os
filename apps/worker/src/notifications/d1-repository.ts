@@ -1,3 +1,4 @@
+import { sessionLifetimeSQL } from "../auth/session-policy";
 import { authorizedBatch, authorityDenied } from "../auth/authority";
 import type { Action } from "../auth/permissions";
 import type { CommandContext } from "../platform/context";
@@ -31,7 +32,7 @@ export interface SubscriptionRow {
   auth: string;
   expiration_time: number | null;
   created_at: string;
-  session_expires_at?: string;
+  session_expires_at?: string | null;
 }
 export interface DeliveryRow {
   cooking_at: string;
@@ -217,15 +218,18 @@ export class NotificationRepository {
     const row = await this.db
       .prepare(
         `SELECT n.id, n.created_at, n.expiration_time FROM notification_subscriptions n
-      WHERE n.household_id = ? AND n.member_id = ? AND n.session_hash = ? AND (n.expiration_time IS NULL OR n.expiration_time > ?)`,
+      JOIN auth_sessions s ON s.token_hash = n.session_hash
+      JOIN members m ON m.id = s.member_id JOIN auth_accounts a ON a.member_id = m.id
+      WHERE ${sessionLifetimeSQL("s")} AND m.archived_at IS NULL AND m.household_id = n.household_id AND s.member_id = n.member_id
+        AND s.credential_version = a.credential_version AND n.household_id = ? AND n.member_id = ? AND n.session_hash = ? AND (n.expiration_time IS NULL OR n.expiration_time > ?)`,
       )
-      .bind(this.householdId, memberId, grant.tokenHash, Date.parse(now))
+      .bind(now, this.householdId, memberId, grant.tokenHash, Date.parse(now))
       .first<{
         id: string;
         created_at: string;
         expiration_time: number | null;
       }>();
-    if (!row || grant.expiresAt <= now) return { enabled: false };
+    if (!row || (grant.expiresAt !== null && grant.expiresAt <= now)) return { enabled: false };
     return {
       enabled: true,
       id: row.id,
@@ -234,7 +238,7 @@ export class NotificationRepository {
         row.expiration_time == null
           ? grant.expiresAt
           : new Date(
-              Math.min(row.expiration_time, Date.parse(grant.expiresAt)),
+              Math.min(row.expiration_time, grant.expiresAt === null ? Infinity : Date.parse(grant.expiresAt)),
             ).toISOString(),
     };
   }
@@ -315,7 +319,7 @@ export class NotificationRepository {
         (id, household_id, member_id, session_hash, endpoint_hash, endpoint, p256dh, auth, expiration_time, created_at, updated_at)
         SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE EXISTS
           (SELECT 1 FROM auth_sessions s JOIN members m ON m.id = s.member_id JOIN auth_accounts a ON a.member_id = m.id
-           WHERE s.token_hash = ? AND m.id = ? AND m.household_id = ? AND m.archived_at IS NULL AND s.expires_at > ? AND s.credential_version = a.credential_version)
+           WHERE s.token_hash = ? AND m.id = ? AND m.household_id = ? AND m.archived_at IS NULL AND ${sessionLifetimeSQL("s")} AND s.credential_version = a.credential_version)
         ON CONFLICT(session_hash) DO UPDATE SET endpoint_hash = excluded.endpoint_hash, endpoint = excluded.endpoint,
           p256dh = excluded.p256dh, auth = excluded.auth, expiration_time = excluded.expiration_time, updated_at = excluded.updated_at
         WHERE household_id = excluded.household_id AND member_id = excluded.member_id`,
@@ -520,7 +524,7 @@ export class NotificationRepository {
   ): Promise<SubscriptionRow | null> {
     return this.db
       .prepare(
-        `SELECT s.*, a.expires_at AS session_expires_at FROM notification_subscriptions s
+        `SELECT s.*, CASE WHEN a.permanent = 1 THEN NULL ELSE a.expires_at END AS session_expires_at FROM notification_subscriptions s
       JOIN auth_sessions a ON a.token_hash = s.session_hash
       WHERE s.household_id = ? AND s.member_id = ? AND s.id = ?`,
       )
@@ -621,7 +625,7 @@ export class NotificationRepository {
           (SELECT 1 FROM auth_sessions s JOIN members m ON m.id = s.member_id JOIN auth_accounts a ON a.member_id = m.id
            WHERE s.token_hash = notification_subscriptions.session_hash AND s.member_id = notification_subscriptions.member_id
              AND m.household_id = notification_subscriptions.household_id AND m.archived_at IS NULL
-             AND s.credential_version = a.credential_version AND s.expires_at > ?))`,
+             AND s.credential_version = a.credential_version AND ${sessionLifetimeSQL("s")}))`,
         )
         .bind(this.householdId, Date.parse(now), now),
     ]);

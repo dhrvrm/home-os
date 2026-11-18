@@ -1,3 +1,4 @@
+import { sessionLifetimeSQL } from "./session-policy";
 import type { CommandContext } from "../platform/context";
 import { HomeOSError } from "../platform/errors";
 import {
@@ -61,7 +62,7 @@ export function authorityPredicate(
     sql: `EXISTS (SELECT 1 FROM auth_sessions s JOIN members m ON m.id = s.member_id JOIN auth_accounts a ON a.member_id = m.id
     WHERE s.token_hash = ? AND m.id = ? AND m.household_id = ? AND m.archived_at IS NULL
     AND m.role IN (${roles.map(() => "?").join(",")})
-    AND s.expires_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+    AND ${sessionLifetimeSQL('s', "strftime('%Y-%m-%dT%H:%M:%fZ', 'now')")}
     AND s.credential_version = a.credential_version AND s.credential_version = ?)`,
     values: [
       authority.proof.tokenHash,
