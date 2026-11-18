@@ -44,6 +44,9 @@ async function seedOtherOwner() {
     "INSERT INTO members (id, household_id, display_name, email, role, created_at, updated_at) VALUES ('other-owner', 'home', 'Other owner', 'other@example.test', 'owner', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
   ).run();
   expect(response.meta.changes).toBe(1);
+  await env.DB.prepare(
+    "INSERT INTO auth_accounts (member_id, email, password_hash, updated_at) SELECT 'other-owner', 'other@example.test', password_hash, CURRENT_TIMESTAMP FROM auth_accounts WHERE member_id = 'local-owner'",
+  ).run();
 }
 function heldJSON(path: string, cookie: string, method: string, body: unknown) {
   let enter!: () => void;
@@ -162,7 +165,7 @@ describe("continuing owner authority at transaction commit", () => {
     const cookie = await ownerCookie();
     await seedOtherOwner();
     await env.DB.prepare(
-      "INSERT INTO auth_accounts (member_id, email, password_hash, updated_at) VALUES ('other-owner', 'other@example.test', 'unchanged-verifier', CURRENT_TIMESTAMP)",
+      "UPDATE auth_accounts SET password_hash = 'unchanged-verifier' WHERE member_id = 'other-owner'",
     ).run();
     const before = await env.DB.prepare(
       "SELECT password_hash, credential_version FROM auth_accounts WHERE member_id = 'other-owner'",

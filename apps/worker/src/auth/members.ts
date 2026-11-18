@@ -64,7 +64,7 @@ function mapMember(row: MemberRow) {
 function memberConflict(error: unknown): never {
   if (String(error).includes("last_active_owner"))
     throw new HomeOSError(
-      "Keep at least one active home owner.",
+      "Keep at least one active home owner who can sign in.",
       "last_owner",
       409,
     );

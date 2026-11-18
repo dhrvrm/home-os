@@ -335,6 +335,9 @@ describe("cooking rules against real D1", () => {
       "INSERT INTO members (id,household_id,display_name,role,created_at,updated_at) VALUES ('backup-cooking-owner','home','Backup','owner','2090-01-01','2090-01-01')",
     ).run();
     await env.DB.prepare(
+      "INSERT INTO auth_accounts (member_id,email,password_hash,updated_at) SELECT 'backup-cooking-owner','backup-cooking-owner@example.test',password_hash,CURRENT_TIMESTAMP FROM auth_accounts WHERE member_id='local-owner'",
+    ).run();
+    await env.DB.prepare(
       "UPDATE members SET role='viewer' WHERE id='local-owner'",
     ).run();
     expect(await eligible(2, "2090-01-01T11:30:00.000Z")).toBe(false);

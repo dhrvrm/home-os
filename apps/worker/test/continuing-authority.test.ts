@@ -171,6 +171,9 @@ for (const [domain, path, body, table, method] of mutations) {
       await env.DB.prepare(
         "INSERT INTO members (id, household_id, display_name, role, created_at, updated_at) VALUES ('other-owner', 'home', 'Other owner', 'owner', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
       ).run();
+      await env.DB.prepare(
+        "INSERT INTO auth_accounts (member_id, email, password_hash, updated_at) SELECT 'other-owner', 'other@fixture.test', password_hash, CURRENT_TIMESTAMP FROM auth_accounts WHERE member_id = 'local-owner'",
+      ).run();
       let payload: unknown = body;
       if (domain === "meal") {
         const recipeResponse = await exports.default.fetch(
@@ -520,6 +523,9 @@ it.each(["revoked", "replaced", "deactivated"])(
     await env.DB.batch([
       env.DB.prepare(
         "INSERT INTO members (id, household_id, display_name, role, created_at, updated_at) VALUES ('other-owner', 'home', 'Other owner', 'owner', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+      ),
+      env.DB.prepare(
+        "INSERT INTO auth_accounts (member_id, email, password_hash, updated_at) SELECT 'other-owner', 'other@fixture.test', password_hash, CURRENT_TIMESTAMP FROM auth_accounts WHERE member_id = 'local-owner'",
       ),
       env.DB.prepare(
         "UPDATE members SET role = 'viewer' WHERE id = 'local-owner'",
