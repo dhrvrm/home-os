@@ -1,4 +1,5 @@
 import { captureAccessProof, signalSessionExpired } from "@/auth/work";
+import { canCoordinateBrowserAuth, withBrowserAuthHandshake } from "@/auth/browser-handshake";
 import { request } from "./api";
 
 export interface AuthUser {
@@ -19,16 +20,19 @@ export interface MemberAccount {
   hasLogin: boolean;
 }
 
-export function getAuthStatus(): Promise<AuthStatus> { return request("/api/v1/auth/status"); }
+export function getAuthStatus(): Promise<AuthStatus> {
+  if (!canCoordinateBrowserAuth()) return request("/api/v1/auth/status");
+  return withBrowserAuthHandshake(() => request("/api/v1/auth/status", { headers: { "X-HomeOS-Session-Renew": "1" } }), false);
+}
 export function login(input: { email: string; password: string }): Promise<AuthSession> {
-  return request("/api/v1/auth/login", { method: "POST", body: JSON.stringify(input) });
+  return withBrowserAuthHandshake(() => request("/api/v1/auth/login", { method: "POST", body: JSON.stringify(input) }));
 }
 export function setupOwner(input: { name: string; email: string; password: string; setupToken: string }): Promise<AuthSession> {
-  return request("/api/v1/auth/setup", { method: "POST", body: JSON.stringify(input) });
+  return withBrowserAuthHandshake(() => request("/api/v1/auth/setup", { method: "POST", body: JSON.stringify(input) }));
 }
 export async function logout(): Promise<void> { await request("/api/v1/auth/logout", { method: "POST", body: "{}" }); }
 export function changePassword(input: { currentPassword: string; newPassword: string }): Promise<AuthSession> {
-  return request("/api/v1/auth/password", { method: "POST", body: JSON.stringify(input) });
+  return withBrowserAuthHandshake(() => request("/api/v1/auth/password", { method: "POST", body: JSON.stringify(input) }));
 }
 export async function getMembers(): Promise<MemberAccount[]> {
   return (await request<{ members: MemberAccount[] }>("/api/v1/members")).members;

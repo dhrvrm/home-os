@@ -61,7 +61,7 @@ it("runs the actual migration backfill only for currently valid credentials, pre
   expect(await env.DB.prepare("SELECT COUNT(*) n FROM notification_deliveries").first("n")).toBe(1);
 });
 
-it("renews permanent HTTPS cookies during reads without writing D1 and survives creation-time metadata", async () => {
+it("renews permanent HTTPS cookies only on explicit status checks without writing D1 and survives creation-time metadata", async () => {
   const hash = await seedNotificationMember();
   await env.DB.prepare("UPDATE auth_sessions SET permanent = 1, expires_at = '2000-01-01T00:00:00.000Z'").run();
   let writes = 0;
@@ -71,7 +71,10 @@ it("renews permanent HTTPS cookies during reads without writing D1 and survives 
   } });
   const response = await worker.fetch(new Request(`${origin}/api/v1/items`, { headers: { Cookie: `homeos_session=${"a".repeat(64)}` } }), { ...env, DB: database });
   expect(response.status).toBe(200);
-  expect(response.headers.get("Set-Cookie")).toMatch(/Max-Age=34560000; Path=\/; HttpOnly; Secure; SameSite=Strict/);
+  expect(response.headers.getSetCookie()).toEqual([]);
+  const status = await worker.fetch(new Request(`${origin}/api/v1/auth/status`, { headers: { Cookie: `homeos_session=${"a".repeat(64)}`, "X-HomeOS-Session-Renew": "1" } }), { ...env, DB: database });
+  expect(status.status).toBe(200);
+  expect(status.headers.get("Set-Cookie")).toMatch(/Max-Age=34560000; Path=\/; HttpOnly; Secure; SameSite=Strict/);
   expect(writes).toBe(0);
   expect(await hasNotificationDeliveryAuthority(env.DB, "home", "local-owner", hash, "2100-01-01T00:00:00.000Z")).toBe(true);
 });
@@ -91,7 +94,7 @@ it("lists bounded public grants and revokes the exact device with its delivery c
   const repo = new NotificationRepository(env.DB, "home");
   await repo.registerSubscription("local-owner", { tokenHash: hash, expiresAt: null, credentialVersion: 1 }, fixture.subscription, await digest(fixture.subscription.endpoint), now);
   const response = await exports.default.fetch(new Request(`${origin}/api/v1/auth/sessions/${current.id}/revoke`, { method: "POST", headers: { Cookie: `homeos_session=${"a".repeat(64)}`, Origin: origin, "Content-Type": "application/json", "X-HomeOS-Member": "local-owner" }, body: "{}" }));
-  expect(response.status).toBe(200); expect(response.headers.get("Set-Cookie")).toContain("Max-Age=0");
+  expect(response.status).toBe(200); expect(response.headers.getSetCookie()).toEqual([]);
   expect(await env.DB.prepare("SELECT COUNT(*) n FROM notification_subscriptions").first("n")).toBe(0);
   expect(await hasNotificationDeliveryAuthority(env.DB, "home", "local-owner", other, now)).toBe(true);
   expect(await hasNotificationDeliveryAuthority(env.DB, "home", "local-owner", hash, now)).toBe(false);

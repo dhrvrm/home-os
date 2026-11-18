@@ -152,7 +152,7 @@ describe("household email/password access", () => {
     expect((await api("/auth/setup", { name: "Other", email: "other@example.com", password, setupToken: "test-setup-secret" })).status).toBe(409);
     const ended = await api("/auth/logout", {}, cookie);
     expect(ended.status).toBe(200);
-    expect(ended.headers.get("Set-Cookie")).toContain("Max-Age=0");
+    expect(ended.headers.getSetCookie()).toEqual([]);
     expect((await api("/items", undefined, cookie)).status).toBe(401);
     const { results } = await env.DB.prepare("SELECT token_hash FROM auth_sessions").all();
     expect(results).toHaveLength(0);

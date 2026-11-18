@@ -40,7 +40,7 @@ export function createAuthRoutes(): Hono<{ Bindings: Env }> {
     const configured = !!context.env.HOMEOS_SETUP_TOKEN && (context.env.HOMEOS_PASSWORD_PEPPER?.length ?? 0) >= 32;
     const bootstrapped = await context.env.DB.prepare("SELECT household_id FROM auth_bootstrap WHERE household_id = ?")
       .bind(context.env.HOMEOS_DEFAULT_HOUSEHOLD_ID).first();
-    return success(context, { setupRequired: !bootstrapped, setupAvailable: configured, session: await readSession(context) });
+    return success(context, { setupRequired: !bootstrapped, setupAvailable: configured, session: await readSession(context, context.req.header("X-HomeOS-Session-Renew") === "1") });
   });
 
   routes.post("/auth/setup", async (context) => {
@@ -137,7 +137,6 @@ export function createAuthRoutes(): Hono<{ Bindings: Env }> {
   });
   routes.post("/auth/sessions/:id/revoke", async (context) => {
     const result = await new SessionAccessService(context.env.DB).revokeSession(commandContext(context), context.req.param("id"));
-    if (result.current) await revokeCurrentSession(context);
     return success(context, result);
   });
   return routes;

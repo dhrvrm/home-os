@@ -61,7 +61,7 @@ export async function hasNotificationDeliveryAuthority(database: D1Database, hou
   return grant !== null;
 }
 
-async function readSessionWithGrant(context: AuthContext): Promise<(AuthSession & { grant: DeviceGrant }) | null> {
+async function readSessionWithGrant(context: AuthContext, renewCookie = false): Promise<(AuthSession & { grant: DeviceGrant }) | null> {
   const token = getCookie(context, COOKIE);
   if (!token || !/^[a-f0-9]{64}$/.test(token)) return null;
   const tokenHash = await digest(token);
@@ -83,17 +83,19 @@ async function readSessionWithGrant(context: AuthContext): Promise<(AuthSession 
         WHERE m.id = auth_sessions.member_id AND m.household_id = ? AND m.archived_at IS NULL
           AND a.credential_version = auth_sessions.credential_version) RETURNING permanent`)
       .bind(tokenHash, row.credential_version, new Date().toISOString(), row.household_id).first();
-    if (!upgraded) return readSessionWithGrant(context);
+    if (!upgraded) return readSessionWithGrant(context, renewCookie);
     row.permanent = 1;
   }
-  renewSessionCookie(context, token);
+  // Only coordinated status requests renew retention. An ordinary delayed
+  // response must never install its old proof over a later sign-in's cookie.
+  if (renewCookie) renewSessionCookie(context, token);
   const expiresAt = row.permanent === 1 ? null : row.expires_at;
   return { capabilities: capabilities({ memberId: row.id, householdId: row.household_id, role: row.role, kind: "browser" }), user: { id: row.id, householdId: row.household_id, name: row.display_name, email: row.email, role: row.role }, expiresAt,
     grant: { tokenHash, expiresAt, credentialVersion: row.credential_version } };
 }
 
-export async function readSession(context: AuthContext): Promise<AuthSession | null> {
-  const session = await readSessionWithGrant(context);
+export async function readSession(context: AuthContext, renewCookie = false): Promise<AuthSession | null> {
+  const session = await readSessionWithGrant(context, renewCookie);
   return session ? { user: session.user, expiresAt: session.expiresAt, capabilities: session.capabilities } : null;
 }
 
@@ -122,7 +124,8 @@ export async function createSession(context: AuthContext, user: AuthUser, creden
 export async function revokeCurrentSession(context: AuthContext): Promise<void> {
   const token = getCookie(context, COOKIE);
   if (token) await context.env.DB.prepare("DELETE FROM auth_sessions WHERE token_hash = ?").bind(await digest(token)).run();
-  setCookie(context, COOKIE, "", { path: "/", httpOnly: true, sameSite: "Strict", secure: new URL(context.req.url).protocol === "https:", maxAge: 0 });
+  // The revoked proof is inert. Clearing the origin's shared cookie here could
+  // erase a newer sign-in whose response completed while this one was pending.
 }
 
 export const protectHousehold: MiddlewareHandler<{ Bindings: Env }> = async (context, next) => {
