@@ -1,55 +1,85 @@
 ---
 name: member-access-experience
 definition: >
-  Keeps a person's visible household experience consistent with their
-  established access and the data retained on this device. Returning access
-  may reveal the same member's saved household work while disconnected only
-  until the last accepted grant expires. Expiry preserves that person's
-  pending work behind fresh proof; explicit departure or a change of person
-  removes the previous person's local household state before another person
-  can use it. Without this subsystem persisted sign-in and offline work can
-  disagree about whose information and pending actions are on the device.
+  Keeps a person's visible household experience consistent with established
+  access and the information retained on their device, and lets them knowingly
+  authorize or end connected access. Returning direct access has no automatic
+  deadline. Retained household work belongs only to the last accepted person;
+  departure or a change of person clears that person's local state before
+  another person can enter. Remote revocation can be learned only when the
+  device communicates, and remembered access is never fresh authority for a
+  shared change. Without this subsystem persistent sign-in, disconnected
+  work, and connection consent can disagree about whose authority is used.
 inputs:
   - name: member-session-intent
     description: >
       The person's intent to enter, remain signed in, leave, replace their
-      password, or maintain household members. Includes transient identity
-      proof and explicit decisions about pending work. This meaning enters
-      from the person using the household application.
+      password, maintain members, or inspect, approve, refuse, and revoke
+      connected access. Supplied by the person using the household app and
+      includes transient proof and explicit decisions about pending work.
   - name: member-access-outcome
     description: >
-      The authority's accepted or refused access result, including the
-      verified member and household, current role, and grant expiry.
-      Required to display authenticated, locked, and retryable states without
-      treating a remembered name as fresh authority.
+      Accepted or refused direct access, including the verified person,
+      household, current role, permitted actions, and continuing-grant state.
+      Supplied by household access so an authenticated, locked, or retryable
+      view never treats a remembered identity as fresh authority.
+  - name: connection-access-state
+    description: >
+      The authority's identified client, intended resource, requested and
+      permitted actions, and the person's allowed connection records.
+      Required to present explicit consent and understandable per-connection
+      revocation without displaying or retaining reusable access proof.
+  - name: connection-access-outcome
+    description: >
+      The authority's accepted approval, refusal, revocation, or requirement
+      for personal action. Required so a connection is not shown as approved
+      or revoked before the authority accepts the person's decision.
   - name: household-membership
     description: >
-      The household's stable member identities, display information, roles,
-      and active status. Required to show the member roster and let owners
-      maintain access while retaining departed members' historical identity.
+      Stable household member identities, display information, roles, and
+      active state. Supplied by household access to show the roster and
+      owner controls while retaining departed people's historical identity.
+  - name: interactive-action-handoff
+    description: >
+      A requested account or identity-proof action and the safe household
+      location where the person can complete it. Supplied by connected
+      household interaction as an invitation to act, never proof that a
+      member was created or credentials changed. The person must still hold
+      the required household authority at acceptance.
   - name: device-access-evidence
     description: >
-      The last accepted non-secret access result, connectivity, retained
-      household work, and access changes observed elsewhere on this device.
-      Supplied by the device environment so reopening, reconnection, and
-      simultaneous views respect the same member boundary. Passwords and
-      reusable identity proofs are excluded from retained application data.
-  - name: present-time
-    description: >
-      The current device moment. Required to stop exposing saved household
-      work when the last accepted access grant has expired, even before a
-      connection is available to obtain a new decision.
+      The last accepted non-secret access decision, connectivity, retained
+      work, and access changes observed elsewhere on this device. Supplied by
+      the device environment so reopening and simultaneous views respect one
+      person boundary. Device retention can be renewed during use but can be
+      lost through clearing, device policy, or the person's departure; such
+      loss requires fresh proof without reviving an ended grant. Passwords
+      and reusable identity proof are excluded from retained application data.
 outputs:
   - name: member-access-request
     description: >
-      The person's access or member-maintenance intent and transient proof,
-      passed to the household authority for a decision. Remembering access
-      requests a bounded continuing grant; saving a password is delegated
-      to the person's password manager rather than retained by the app.
+      The person's access or membership intent and necessary transient proof,
+      supplied to household access. Remaining signed in requests continuing
+      access without an automatic deadline; password saving belongs to the
+      person's password manager. Secret proof entry and replacement remain
+      direct personal interactions rather than connected-client commands.
+  - name: connection-access-request
+    description: >
+      The proven person's explicit connection approval, refusal, inspection,
+      or revocation request and the client, resource, and action ceiling they
+      reviewed. Supplied to household access so the authority can accept the
+      exact consent decision rather than infer consent from opening a link.
   - name: device-access-verdict
     description: >
-      Whether household views may open, must remain locked, or must clear
-      the prior person's saved household state and pending work. Supplied to
-      the local household experience before it mounts or resumes, including
-      when another view signs out or the current authority refuses access.
+      Whether household views may open, must lock, or must clear the previous
+      person's saved state and pending work. Supplied to household experiences
+      before mounting or resuming, including when another view signs out or
+      the authority refuses access. Disconnected retained views remain tied
+      to the last accepted identity and cannot establish new shared authority.
+  - name: member-access-presentation
+    description: >
+      The person's access state, role-appropriate actions, consent details,
+      connection status, completed changes, and recoverable failures.
+      Supplied to the person using the household app so approval, attempted
+      change, and accepted change remain distinguishable.
 ---

@@ -8,6 +8,13 @@ definition: >
   different person. Without this subsystem the household's accepted facts
   and authority exist without a coherent daily planning experience.
 inputs:
+  - name: interactive-action-handoff
+    description: >
+      A requested personal device-delivery action and the household location
+      where it can be completed. Supplied by connected household interaction
+      as a request for direct personal action, never a claim that permission
+      or registration succeeded. The device and household authority must
+      separately accept their respective permissions.
   - name: household-planning-intent
     description: >
       The person's intention to browse or maintain recipes, scheduled meals,

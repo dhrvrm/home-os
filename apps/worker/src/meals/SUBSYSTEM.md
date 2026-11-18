@@ -16,8 +16,9 @@ inputs:
       A member's intention to create, revise, retire, or restore a reusable
       dish, including its name, ingredients, stated quantities and units,
       instructions, serving basis, and optional links to household stock.
-      Supplied by the household planning experience so useful dishes can
-      be selected repeatedly without rewriting their meaning each time.
+      Supplied by household planning or connected household interaction so
+      useful dishes can be selected repeatedly without rewriting their
+      meaning each time.
   - name: menu-maintenance-intent
     description: >
       A member's intention to announce or revise a meal with one or more
@@ -29,15 +30,16 @@ inputs:
   - name: meal-attendance-intent
     description: >
       An admitted participant's own yes or no answer to the current meal
-      announcement. Supplied by the household planning experience with the
-      announcement the person observed, so another person cannot impersonate
-      their answer and a stale view cannot assent to a changed meal.
+      announcement. Supplied by household planning or connected household
+      interaction with the announcement the person observed, so another
+      person cannot impersonate their answer and a stale view cannot assent
+      to a changed meal.
   - name: cooking-query
     description: >
       The dishes or bounded local-date period a household reader wants to
-      inspect, including retired recipes when explicitly requested.
-      Supplied by the household planning experience so tomorrow and the
-      coming week refer to the household's named time zone.
+      inspect, including retired recipes when explicitly requested. Supplied
+      by household planning or connected household interaction so tomorrow
+      and the coming week refer to the household's named time zone.
   - name: protected-action-admission
     description: >
       The household access decision and verified member authority for the
@@ -73,15 +75,17 @@ outputs:
     description: >
       The household's reusable dishes and their lifecycle, serving basis,
       ingredients, instructions, versions, and reason-bearing stock hints.
-      Supplied to the household planning experience so a member can choose
-      dishes without assuming that scheduling them consumes inventory.
+      Supplied to household planning or connected household interaction so a
+      member can choose dishes without assuming that scheduling them
+      consumes inventory.
   - name: meal-state
     description: >
       The current and retained meal announcements, selected dish snapshots,
       cooking moments and named time zones, reminder timing, cancellation
       state, and each eligible participant's effective response with yes,
-      no, and unanswered totals. Supplied to the household planning
-      experience so the menu and the cook's headcount express one meaning.
+      no, and unanswered totals. Supplied to household planning or connected
+      household interaction so the menu and the cook's headcount express one
+      meaning.
   - name: meal-reminder-state
     description: >
       The current meal announcement identity, cooking and reminder moments,
@@ -93,12 +97,13 @@ outputs:
     description: >
       The accepted recipe, meal, or personal response; a conflict showing
       the current relevant version; or a refusal explaining the violated
-      condition. Supplied to the household planning experience so failure
-      never looks like a saved announcement or accepted attendance.
+      condition. Supplied to household planning or connected household
+      interaction so failure never looks like a saved announcement or
+      accepted attendance.
   - name: cooking-change-record
     description: >
       The actor, affected household fact, accepted change, and resulting
-      version supplied to household accountability. Preserves the history
-      of recipes, announcements, cancellations, and personal answers without
+      version supplied to household accountability. Preserves the history of
+      recipes, announcements, cancellations, and personal answers without
       treating reminder attempts as changes to the cooking commitment.
 ---
