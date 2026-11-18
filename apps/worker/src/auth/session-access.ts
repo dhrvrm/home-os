@@ -1,6 +1,7 @@
 import type { CommandContext } from "../platform/context";
 import { ValidationError } from "../platform/errors";
-import { assertAuthority, authorizedBatch, authorityPredicate } from "./authority";
+import { acceptedAccessBatch } from "./connections";
+import { assertAuthority, authorityPredicate } from "./authority";
 import { sessionLifetimeSQL } from "./session-policy";
 
 export interface BrowserSessionAccess {
@@ -43,9 +44,11 @@ export class SessionAccessService {
       .bind(context.authority?.proof.kind === "browser" ? context.authority.proof.tokenHash : "", id, context.householdId)
       .first<{ member_id: string; current: number }>();
     const subject = { householdId: context.householdId, memberId: target?.member_id ?? context.actorId };
-    await authorizedBatch(this.database, context, "sessions_revoke", [
-      this.database.prepare("DELETE FROM auth_sessions WHERE public_id = ? AND member_id = ?").bind(id, subject.memberId),
-    ], subject);
+    await acceptedAccessBatch(this.database, context, "sessions_revoke", subject, {
+      entityType: "browser_session", id, event: "session.revoked",
+      exists: "EXISTS (SELECT 1 FROM auth_sessions WHERE public_id = ? AND member_id = ?)", values: [id, subject.memberId],
+      statements: [this.database.prepare("DELETE FROM auth_sessions WHERE public_id = ? AND member_id = ?").bind(id, subject.memberId)],
+    });
     return { id, revoked: true, current: !!target?.current };
   }
 }

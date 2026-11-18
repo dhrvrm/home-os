@@ -16,7 +16,7 @@ export interface AuthUser {
   role: "owner" | "member" | "viewer";
 }
 
-export interface AuthSession { user: AuthUser; expiresAt: string | null; capabilities: Action[] }
+export interface AuthSession { sessionId: string; user: AuthUser; expiresAt: string | null; capabilities: Action[] }
 export interface DeviceGrant { tokenHash: string; expiresAt: string | null; credentialVersion: number }
 export type AuthContext = Context<{ Bindings: Env }>;
 
@@ -66,13 +66,13 @@ async function readSessionWithGrant(context: AuthContext, renewCookie = false): 
   if (!token || !/^[a-f0-9]{64}$/.test(token)) return null;
   const tokenHash = await digest(token);
   const row = await context.env.DB.prepare(
-    `SELECT m.id, m.household_id, m.display_name, a.email, m.role, s.expires_at, s.permanent, s.credential_version
+    `SELECT m.id, m.household_id, m.display_name, a.email, m.role, s.public_id, s.expires_at, s.permanent, s.credential_version
        FROM auth_sessions s JOIN members m ON m.id = s.member_id
        JOIN auth_accounts a ON a.member_id = m.id
       WHERE s.token_hash = ? AND ${sessionLifetimeSQL("s")} AND m.archived_at IS NULL AND m.household_id = ?
         AND s.credential_version = a.credential_version`,
   ).bind(tokenHash, new Date().toISOString(), context.env.HOMEOS_DEFAULT_HOUSEHOLD_ID)
-    .first<{ id: string; household_id: string; display_name: string; email: string; role: AuthUser["role"]; expires_at: string; permanent: number; credential_version: number }>();
+    .first<{ id: string; household_id: string; display_name: string; email: string; role: AuthUser["role"]; public_id: string; expires_at: string; permanent: number; credential_version: number }>();
   if (!row) return null;
   if (row.permanent === 0) {
     // A rolling old runtime may create a legacy row after migration backfill.
@@ -90,13 +90,13 @@ async function readSessionWithGrant(context: AuthContext, renewCookie = false): 
   // response must never install its old proof over a later sign-in's cookie.
   if (renewCookie) renewSessionCookie(context, token);
   const expiresAt = row.permanent === 1 ? null : row.expires_at;
-  return { capabilities: capabilities({ memberId: row.id, householdId: row.household_id, role: row.role, kind: "browser" }), user: { id: row.id, householdId: row.household_id, name: row.display_name, email: row.email, role: row.role }, expiresAt,
+  return { sessionId: row.public_id, capabilities: capabilities({ memberId: row.id, householdId: row.household_id, role: row.role, kind: "browser" }), user: { id: row.id, householdId: row.household_id, name: row.display_name, email: row.email, role: row.role }, expiresAt,
     grant: { tokenHash, expiresAt, credentialVersion: row.credential_version } };
 }
 
 export async function readSession(context: AuthContext, renewCookie = false): Promise<AuthSession | null> {
   const session = await readSessionWithGrant(context, renewCookie);
-  return session ? { user: session.user, expiresAt: session.expiresAt, capabilities: session.capabilities } : null;
+  return session ? { sessionId: session.sessionId, user: session.user, expiresAt: session.expiresAt, capabilities: session.capabilities } : null;
 }
 
 function renewSessionCookie(context: AuthContext, token: string): void {
@@ -105,6 +105,7 @@ function renewSessionCookie(context: AuthContext, token: string): void {
 
 export async function createSession(context: AuthContext, user: AuthUser, credentialVersion: number): Promise<AuthSession> {
   const token = randomToken();
+  const sessionId = crypto.randomUUID().replaceAll("-", "");
   const now = new Date().toISOString();
   // Ordinary legacy metadata protects fresh rows from an in-flight old runtime's
   // expiry cleanup during rollout. Only permanent controls current admission.
@@ -114,11 +115,11 @@ export async function createSession(context: AuthContext, user: AuthUser, creden
     context.env.DB.prepare(`INSERT INTO auth_sessions (token_hash, public_id, member_id, credential_version, expires_at, created_at, permanent)
       SELECT ?, ?, ?, ?, ?, ?, 1 WHERE EXISTS (SELECT 1 FROM members m JOIN auth_accounts a ON a.member_id = m.id
       WHERE m.id = ? AND m.household_id = ? AND m.archived_at IS NULL AND a.credential_version = ?)`)
-      .bind(await digest(token), crypto.randomUUID().replaceAll("-", ""), user.id, credentialVersion, legacyExpiresAt, now, user.id, user.householdId, credentialVersion),
+      .bind(await digest(token), sessionId, user.id, credentialVersion, legacyExpiresAt, now, user.id, user.householdId, credentialVersion),
   ]);
   if (results[1]!.meta.changes !== 1) throw new HomeOSError("Your access changed. Sign in again.", "unauthorized", 401);
   renewSessionCookie(context, token);
-  return { user, expiresAt: null, capabilities: capabilities({ memberId: user.id, householdId: user.householdId, role: user.role, kind: "browser" }) };
+  return { sessionId, user, expiresAt: null, capabilities: capabilities({ memberId: user.id, householdId: user.householdId, role: user.role, kind: "browser" }) };
 }
 
 export async function revokeCurrentSession(context: AuthContext): Promise<void> {
@@ -141,7 +142,7 @@ export const protectHousehold: MiddlewareHandler<{ Bindings: Env }> = async (con
   }
   if (["/api/v1/auth/status", "/api/v1/auth/login", "/api/v1/auth/setup", "/api/v1/auth/logout"].includes(context.req.path)) return next();
   // Unknown auth routes remain 404 rather than revealing household state.
-  if (context.req.path.startsWith("/api/v1/auth/") && !["/api/v1/auth/password", "/api/v1/auth/sessions"].includes(context.req.path) && !/^\/api\/v1\/auth\/sessions\/[^/]+\/revoke$/.test(context.req.path)) return next();
+  if (context.req.path.startsWith("/api/v1/auth/") && !["/api/v1/auth/password", "/api/v1/auth/sessions"].includes(context.req.path) && !/^\/api\/v1\/auth\/(sessions|connections)\/[^/]+\/revoke$/.test(context.req.path) && context.req.path !== "/api/v1/auth/connections" && !/^\/api\/v1\/auth\/consent\/[^/]+(?:\/(?:approve|deny))?$/.test(context.req.path)) return next();
   const session = await readSessionWithGrant(context);
   if (!session) return failure(context, { code: "unauthorized", message: "Your session has ended. Sign in again to continue." }, 401);
   const expectedMember = context.req.header("X-HomeOS-Member");

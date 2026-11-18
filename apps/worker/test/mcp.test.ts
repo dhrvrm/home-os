@@ -1,4 +1,5 @@
 import { exports } from "cloudflare:workers";
+import { personalOAuth } from "./oauth-fixtures";
 import { authenticatedFetch } from "./authenticated-worker";
 import { describe, expect, it } from "vitest";
 
@@ -9,9 +10,10 @@ const mcpHeaders = {
 };
 
 async function callMcp(method: string, params?: unknown, id = 1): Promise<Response> {
+  const oauth = await personalOAuth();
   return exports.default.fetch(new Request("https://home-os.test/mcp", {
     method: "POST",
-    headers: mcpHeaders,
+    headers: { ...mcpHeaders, Authorization: `Bearer ${oauth.tokens.access_token}` },
     body: JSON.stringify({ jsonrpc: "2.0", id, method, ...(params === undefined ? {} : { params }) }),
   }));
 }
@@ -25,7 +27,7 @@ async function jsonRpc<T>(response: Response): Promise<T> {
 }
 
 describe("read-only MCP server", () => {
-  it("requires the configured bearer token", async () => {
+  it("requires personal OAuth authorization", async () => {
     const response = await exports.default.fetch(new Request("https://home-os.test/mcp", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -33,7 +35,7 @@ describe("read-only MCP server", () => {
     }));
 
     expect(response.status).toBe(401);
-    expect(response.headers.get("WWW-Authenticate")).toBe('Bearer realm="home-os-mcp"');
+    expect(response.headers.get("WWW-Authenticate")).toContain('resource_metadata="https://home-os.test/.well-known/oauth-protected-resource/mcp"');
   });
 
   it("initializes and exposes only read-only inventory and audit tools", async () => {
@@ -79,4 +81,20 @@ describe("read-only MCP server", () => {
       },
     });
   });
+});
+
+it("connects and reads the existing MCP surface using the official 2.4 client transport", async () => {
+  const { Client, StreamableHTTPClientTransport } = await import("@modelcontextprotocol/client");
+  const oauth = await personalOAuth("viewer", "official-sdk-viewer");
+  const transport = new StreamableHTTPClientTransport(new URL("https://home-os.test/mcp"), {
+    authProvider: { token: async () => oauth.tokens.access_token },
+    fetch: async (input, init) => exports.default.fetch(new Request(input, init)),
+  });
+  const client = new Client({ name: "official-client-integration", version: "1.0.0" });
+  try {
+    await client.connect(transport);
+    expect((await client.listTools()).tools.map(tool => tool.name).sort()).toEqual(["activity_list", "inventory_attention", "inventory_get", "inventory_list"]);
+    expect(await client.callTool({ name: "inventory_list", arguments: {} })).toMatchObject({ structuredContent: { items: expect.any(Array) } });
+    expect((await client.readResource({ uri: "home-os://inventory/catalog" })).contents).toHaveLength(1);
+  } finally { await client.close(); }
 });

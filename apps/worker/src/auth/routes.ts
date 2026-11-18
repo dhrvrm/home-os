@@ -1,3 +1,6 @@
+import { ConnectionAccessService, maintainConnections } from "./connections";
+import { oauthHelpers, oauthMaintenanceHelpers } from "./oauth";
+import { previewConsent, decideConsent } from "./consent";
 import { SessionAccessService } from "./session-access";
 import { revokeMemberGrants } from "./session-policy";
 import { authorityGuard, releaseAuthorityGuard } from "./authority";
@@ -98,6 +101,11 @@ export function createAuthRoutes(): Hono<{ Bindings: Env }> {
   });
 
   routes.post("/auth/logout", async (context) => {
+    const input = await parsedJSON(context, z.object({ expectedSessionId: z.string().regex(/^[a-f0-9]{32}$/).optional() }).strict());
+    if (input.expectedSessionId) {
+      const session = await readSession(context);
+      if (session && session.sessionId !== input.expectedSessionId) throw new HomeOSError("Your session changed. Reopen Home OS before signing out.", "session_changed", 409);
+    }
     await revokeCurrentSession(context);
     return success(context, { signedOut: true });
   });
@@ -138,6 +146,24 @@ export function createAuthRoutes(): Hono<{ Bindings: Env }> {
   routes.post("/auth/sessions/:id/revoke", async (context) => {
     const result = await new SessionAccessService(context.env.DB).revokeSession(commandContext(context), context.req.param("id"));
     return success(context, result);
+  });
+  routes.get("/auth/connections", async context => {
+    const query = context.req.query();
+    const result = await new ConnectionAccessService(context.env.DB).listConnections(commandContext(context), {
+      memberId: query.memberId, limit: query.limit === undefined ? undefined : Number(query.limit), cursor: query.cursor,
+    });
+    await maintainConnections(context.env, oauthMaintenanceHelpers(context.env)).catch(() => {});
+    return success(context, result);
+  });
+  routes.post("/auth/connections/:id/revoke", async context => {
+    const result = await new ConnectionAccessService(context.env.DB).revokeConnection(commandContext(context), context.req.param("id"));
+    await maintainConnections(context.env, oauthMaintenanceHelpers(context.env)).catch(() => {});
+    return success(context, result);
+  });
+  routes.get("/auth/consent/:id", async context => success(context, await previewConsent(context, oauthHelpers(context.env), context.req.param("id"))));
+  for (const decision of ["approve", "deny"] as const) routes.post(`/auth/consent/:id/${decision}`, async context => {
+    await parsedJSON(context, z.object({}).strict());
+    return success(context, await decideConsent(context, oauthHelpers(context.env), context.req.param("id"), decision));
   });
   return routes;
 }

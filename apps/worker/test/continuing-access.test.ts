@@ -1,7 +1,7 @@
 import { env, exports } from "cloudflare:workers";
 import type { D1Migration } from "cloudflare:test";
 import { beforeEach, expect, it } from "vitest";
-import worker from "../src/index";
+import { app } from "../src/index";
 import { digest } from "../src/auth/crypto";
 import { hasNotificationDeliveryAuthority } from "../src/auth/session";
 import { SessionAccessService } from "../src/auth/session-access";
@@ -69,10 +69,10 @@ it("renews permanent HTTPS cookies only on explicit status checks without writin
     if (property === "prepare") return (sql: string) => { if (/^\s*(INSERT|UPDATE|DELETE)/i.test(sql)) writes++; return target.prepare(sql); };
     const value = Reflect.get(target, property, target); return typeof value === "function" ? value.bind(target) : value;
   } });
-  const response = await worker.fetch(new Request(`${origin}/api/v1/items`, { headers: { Cookie: `homeos_session=${"a".repeat(64)}` } }), { ...env, DB: database });
+  const response = await app.fetch(new Request(`${origin}/api/v1/items`, { headers: { Cookie: `homeos_session=${"a".repeat(64)}` } }), { ...env, DB: database });
   expect(response.status).toBe(200);
   expect(response.headers.getSetCookie()).toEqual([]);
-  const status = await worker.fetch(new Request(`${origin}/api/v1/auth/status`, { headers: { Cookie: `homeos_session=${"a".repeat(64)}`, "X-HomeOS-Session-Renew": "1" } }), { ...env, DB: database });
+  const status = await app.fetch(new Request(`${origin}/api/v1/auth/status`, { headers: { Cookie: `homeos_session=${"a".repeat(64)}`, "X-HomeOS-Session-Renew": "1" } }), { ...env, DB: database });
   expect(status.status).toBe(200);
   expect(status.headers.get("Set-Cookie")).toMatch(/Max-Age=34560000; Path=\/; HttpOnly; Secure; SameSite=Strict/);
   expect(writes).toBe(0);

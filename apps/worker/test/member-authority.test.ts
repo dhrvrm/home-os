@@ -1,6 +1,6 @@
 import { env, exports } from "cloudflare:workers";
 import { beforeEach, describe, expect, it } from "vitest";
-import worker from "../src/index";
+import { app } from "../src/index";
 import { digest } from "../src/auth/crypto";
 
 const origin = "https://home-os.test";
@@ -69,7 +69,7 @@ function heldJSON(path: string, cookie: string, method: string, body: unknown) {
     { highWaterMark: 0 },
   );
   const headers = request(path, cookie).headers;
-  const response = worker.fetch(
+  const response = app.fetch(
     new Request(`${origin}/api/v1${path}`, { method, headers, body: stream }),
     env,
   );
@@ -205,7 +205,7 @@ describe("continuing owner authority at transaction commit", () => {
         return typeof value === "function" ? value.bind(target) : value;
       },
     });
-    const response = await worker.fetch(
+    const response = await app.fetch(
       request(
         "/members/other-owner",
         cookie,

@@ -1,3 +1,6 @@
+import { assertAuthority, type VerifiedAuthority } from "../auth/authority";
+import { createId } from "../platform/ids";
+import type { Action } from "../auth/permissions";
 import { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import type { Env } from "../env";
@@ -12,10 +15,11 @@ const readOnlyAnnotations = {
   openWorldHint: false,
 } as const;
 
-export function createHomeOSMcpServer(env: Env): McpServer {
+export function createHomeOSMcpServer(env: Env, authority: VerifiedAuthority, clientId: string): McpServer {
   const server = new McpServer({ name: "home-os", version: "0.1.0" });
   const inventory = new InventoryService(new D1InventoryRepository(env.DB));
-  const householdId = env.HOMEOS_DEFAULT_HOUSEHOLD_ID;
+  const householdId = authority.householdId;
+  const admit = (action: Action) => assertAuthority(env.DB, { householdId, actorId: authority.memberId, authority, actorType: "mcp", source: "mcp", operationId: createId(), mcpClientId: clientId }, action);
 
   server.registerTool(
     "inventory_list",
@@ -31,6 +35,7 @@ export function createHomeOSMcpServer(env: Env): McpServer {
       annotations: readOnlyAnnotations,
     },
     async ({ query, category, stockLevel, archived }) => {
+      await admit("inventory_list");
       const items = await inventory.listItems(householdId, { query, category, stockLevel, archived });
       return result({ items, count: items.length });
     },
@@ -45,6 +50,7 @@ export function createHomeOSMcpServer(env: Env): McpServer {
       annotations: readOnlyAnnotations,
     },
     async ({ itemId }) => {
+      await admit("inventory_get");
       const [item, events] = await Promise.all([
         inventory.getItem(householdId, itemId),
         inventory.listEvents(householdId, itemId),
@@ -62,6 +68,7 @@ export function createHomeOSMcpServer(env: Env): McpServer {
       annotations: readOnlyAnnotations,
     },
     async ({ category }) => {
+      await admit("inventory_attention");
       const [out, low] = await Promise.all([
         inventory.listItems(householdId, { category, stockLevel: "out", archived: "exclude" }),
         inventory.listItems(householdId, { category, stockLevel: "low", archived: "exclude" }),
@@ -85,7 +92,7 @@ export function createHomeOSMcpServer(env: Env): McpServer {
       }),
       annotations: readOnlyAnnotations,
     },
-    async (filter) => result(await listAuditEvents(env.DB, householdId, filter)),
+    async (filter) => { await admit("activity_list"); return result(await listAuditEvents(env.DB, householdId, filter)); },
   );
 
   server.registerResource(
@@ -97,6 +104,7 @@ export function createHomeOSMcpServer(env: Env): McpServer {
       mimeType: "application/json",
     },
     async (uri) => {
+      await admit("inventory_list");
       const items = await inventory.listItems(householdId, { archived: "exclude" });
       return {
         contents: [{

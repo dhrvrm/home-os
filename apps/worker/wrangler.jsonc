@@ -3,17 +3,30 @@
   "name": "home-os",
   "workers_dev": true,
   "routes": [
-    { "pattern": "home.dhruvverma.dev", "custom_domain": true }
+    {
+      "pattern": "home.dhruvverma.dev",
+      "custom_domain": true
+    }
   ],
   "main": "src/index.ts",
   "compatibility_date": "2026-08-27",
-  "compatibility_flags": ["nodejs_compat"],
+  "compatibility_flags": [
+    "nodejs_compat",
+    "global_fetch_strictly_public"
+  ],
   "assets": {
     "directory": "../web/out",
     "binding": "ASSETS",
     "not_found_handling": "single-page-application",
     "html_handling": "auto-trailing-slash",
-    "run_worker_first": ["/api/*", "/mcp", "/mcp/*", "/healthz", "/readyz"]
+    "run_worker_first": [
+      "/api/*",
+      "/mcp",
+      "/mcp/*",
+      "/healthz",
+      "/readyz",
+      "/.well-known/*"
+    ]
   },
   "d1_databases": [
     {
@@ -25,12 +38,21 @@
   ],
   "vars": {
     "HOMEOS_DEFAULT_HOUSEHOLD_ID": "home",
-    "HOMEOS_VAPID_SUBJECT": "https://home.dhruvverma.dev"
+    "HOMEOS_VAPID_SUBJECT": "https://home.dhruvverma.dev",
+    "HOMEOS_MCP_RESOURCE": "https://home.dhruvverma.dev/mcp"
   },
   "triggers": {
-    "crons": ["* * * * *"]
+    "crons": [
+      "* * * * *"
+    ]
   },
   "observability": {
     "enabled": true
-  }
+  },
+  "kv_namespaces": [
+    {
+      "binding": "OAUTH_KV",
+      "id": "e27b57dd7fa94d6eb96a621ecfc86d3d"
+    }
+  ]
 }

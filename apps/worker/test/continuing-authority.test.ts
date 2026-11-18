@@ -1,6 +1,6 @@
 import { env, exports } from "cloudflare:workers";
 import { beforeEach, describe, expect, it } from "vitest";
-import worker from "../src/index";
+import { app } from "../src/index";
 const origin = "https://home-os.test";
 let cookie: string;
 function request(
@@ -68,7 +68,7 @@ describe("continuing browser authority", () => {
         return typeof value === "function" ? value.bind(target) : value;
       },
     });
-    const response = await worker.fetch(
+    const response = await app.fetch(
       request("/items", { id: "rejected-item", name: "Rejected rice" }),
       { ...env, DB: database },
     );
@@ -250,7 +250,7 @@ for (const [domain, path, body, table, method] of mutations) {
         },
       });
       const raw = request(path, payload);
-      const response = await worker.fetch(new Request(raw, { method }), {
+      const response = await app.fetch(new Request(raw, { method }), {
         ...env,
         DB: database,
       });
@@ -405,7 +405,7 @@ it("refuses delayed sync acceptance after exact grant revocation", async () => {
       return typeof value === "function" ? value.bind(target) : value;
     },
   });
-  const response = await worker.fetch(
+  const response = await app.fetch(
     request("/sync", {
       cursor: 0,
       operations: [
@@ -476,7 +476,7 @@ it.each(["success", "version conflicts", "receipt conflicts"])(
       payload: { name: `After ${index}`, restockIntervalDays: 7 },
     }));
     const counted = countedD1(env.DB);
-    const response = await worker.fetch(
+    const response = await app.fetch(
       request("/sync", { cursor: 0, operations }),
       { ...env, DB: counted.database },
     );
@@ -554,7 +554,7 @@ it.each(["revoked", "replaced", "deactivated"])(
         return typeof value === "function" ? value.bind(target) : value;
       },
     });
-    const response = await worker.fetch(
+    const response = await app.fetch(
       new Request(request("/notifications/notice-id", { read: true }), {
         method: "PATCH",
       }),

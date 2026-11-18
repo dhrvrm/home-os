@@ -1,6 +1,6 @@
 import { env, exports } from "cloudflare:workers";
 import { beforeEach, expect, it } from "vitest";
-import worker from "../src/index";
+import { app } from "../src/index";
 
 const origin = "https://home-os.test";
 const password = "cookie ordering original password";
@@ -52,7 +52,7 @@ it.each(["account switch", "password replacement"])("a held old inventory reques
     if (property === "prepare") return (sql: string) => sql.includes("SELECT m.id, m.household_id, m.display_name") ? pause(target.prepare(sql)) : target.prepare(sql);
     const value = Reflect.get(target, property, target); return typeof value === "function" ? value.bind(target) : value;
   } });
-  const oldRequest = worker.fetch(request("/items", undefined, oldCookie), { ...env, DB: database });
+  const oldRequest = app.fetch(request("/items", undefined, oldCookie), { ...env, DB: database });
   await admitted.promise;
   const changed = change === "password replacement"
     ? await exports.default.fetch(request("/auth/password", { currentPassword: password, newPassword: "cookie ordering replacement password" }, oldCookie)) : null;
@@ -79,7 +79,7 @@ it("a held logout deletes only the incoming grant without clearing a later login
     if (property === "prepare") return (sql: string) => sql === "DELETE FROM auth_sessions WHERE token_hash = ?" ? pause(target.prepare(sql)) : target.prepare(sql);
     const value = Reflect.get(target, property, target); return typeof value === "function" ? value.bind(target) : value;
   } });
-  const pending = worker.fetch(request("/auth/logout", {}, oldCookie), { ...env, DB: database });
+  const pending = app.fetch(request("/auth/logout", {}, oldCookie), { ...env, DB: database });
   await deleted.promise;
   const login = await exports.default.fetch(request("/auth/login", { email: "cookie-owner@example.com", password }, oldCookie));
   expect(login.status).toBe(200);
@@ -118,7 +118,7 @@ it("a current-session revoke finishing after a newer login cannot clear its cook
     if (property === "batch") return async (statements: D1PreparedStatement[]) => { const result = await target.batch(statements); deleted.resolve(); await resume.promise; return result; };
     const value = Reflect.get(target, property, target); return typeof value === "function" ? value.bind(target) : value;
   } });
-  const oldRequest = worker.fetch(request(`/auth/sessions/${sessions.data.sessions[0]!.id}/revoke`, {}, oldCookie), { ...env, DB: database });
+  const oldRequest = app.fetch(request(`/auth/sessions/${sessions.data.sessions[0]!.id}/revoke`, {}, oldCookie), { ...env, DB: database });
   await deleted.promise;
   const login = await exports.default.fetch(request("/auth/login", { email: "cookie-owner@example.com", password }, oldCookie));
   expect(login.status).toBe(200);

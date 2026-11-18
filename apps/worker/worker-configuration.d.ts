@@ -5,7 +5,8 @@ interface __BaseEnv_Env {
 	DB: D1Database;
 	ASSETS: Fetcher;
 	HOMEOS_DEFAULT_HOUSEHOLD_ID: "home";
-	HOMEOS_MCP_TOKEN: string;
+	OAUTH_KV: KVNamespace;
+	HOMEOS_MCP_RESOURCE: string;
 	HOMEOS_SETUP_TOKEN: string;
 	HOMEOS_PASSWORD_PEPPER: string;
 }
@@ -20,7 +21,7 @@ type StringifyValues<EnvType extends Record<string, unknown>> = {
 	[Binding in keyof EnvType]: EnvType[Binding] extends string ? EnvType[Binding] : string;
 };
 declare namespace NodeJS {
-	interface ProcessEnv extends StringifyValues<Pick<Cloudflare.Env, "HOMEOS_DEFAULT_HOUSEHOLD_ID" | "HOMEOS_MCP_TOKEN" | "HOMEOS_SETUP_TOKEN" | "HOMEOS_PASSWORD_PEPPER">> {}
+	interface ProcessEnv extends StringifyValues<Pick<Cloudflare.Env, "HOMEOS_DEFAULT_HOUSEHOLD_ID" | "HOMEOS_MCP_RESOURCE" | "HOMEOS_SETUP_TOKEN" | "HOMEOS_PASSWORD_PEPPER">> {}
 }
 
 // Begin runtime types

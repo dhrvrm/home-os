@@ -1,3 +1,4 @@
+import { AuthorizationError } from "@cloudflare/workers-oauth-provider";
 import { Hono } from "hono";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import type { Env } from "./env";
@@ -8,7 +9,8 @@ import { createInventoryRoutes } from "./http/inventory-routes";
 import { createMemberRoutes } from "./http/member-routes";
 import { ConflictError, HomeOSError, ValidationError } from "./platform/errors";
 import { createSyncRoutes } from "./sync/routes";
-import { createMcpRoutes } from "./mcp/routes";
+import { createOAuthFetch, oauthHelpers } from "./auth/oauth";
+import { startAuthorization } from "./auth/consent";
 import { createAuthRoutes } from "./auth/routes";
 import { protectHousehold } from "./auth/session";
 import { createMealRoutes } from "./meals/routes";
@@ -55,9 +57,24 @@ app.route("/api/v1", createMemberRoutes());
 app.route("/api/v1", createMealRoutes());
 app.route("/api/v1", createContactRoutes());
 app.route("/api/v1", createNotificationRoutes(mealReminderSource));
-app.route("/", createMcpRoutes());
+app.get("/api/oauth/authorize", context => startAuthorization(context, oauthHelpers(context.env)));
+
+for (const path of ["/api/app", "/api/oauth/consent"]) {
+  app.get(path, async (context) => {
+    const assets = await context.env.ASSETS.fetch(new Request(new URL("/index.html", context.req.url), { method: "GET" }));
+    const headers = new Headers(assets.headers);
+    headers.set("Cache-Control", "no-store");
+    headers.set("X-Frame-Options", "DENY");
+    headers.set("Content-Security-Policy", "frame-ancestors 'none'");
+    return new Response(assets.body, { status: assets.status, headers });
+  });
+}
 
 app.onError((error, context) => {
+  if (error instanceof AuthorizationError) {
+    context.header("Cache-Control", "no-store");
+    return error.redirectTo ? context.redirect(error.redirectTo, 302) : context.json({ error: error.code, error_description: error.description }, 400);
+  }
   if (error instanceof ValidationError) {
     return failure(context, { code: error.code, message: error.message, field: error.field }, 400);
   }
@@ -80,7 +97,7 @@ app.all("*", (context) => {
 
 export { app };
 export default {
-  fetch: app.fetch,
+  fetch: createOAuthFetch({ fetch: app.fetch }),
   async scheduled(_controller: ScheduledController, env: Env) {
     const summary = await runNotificationTick(env, mealReminderSource(env));
     console.log(JSON.stringify({ event: "meal_reminders", ...summary }));

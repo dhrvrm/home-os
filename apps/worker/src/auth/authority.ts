@@ -29,7 +29,7 @@ export function authorityDenied(): HomeOSError {
     403,
   );
 }
-/** U3 supplies delegated resolution; never consult connection tables before their migration. */
+/** Exact current proof is rechecked inside each acceptance transaction. */
 export function authorityPredicate(
   context: CommandContext,
   action: Action,
@@ -42,8 +42,7 @@ export function authorityPredicate(
   if (
     !authority ||
     authority.memberId !== context.actorId ||
-    authority.householdId !== context.householdId ||
-    authority.proof.kind !== "browser"
+    authority.householdId !== context.householdId
   )
     return { sql: "0", values: [] };
   const roles = ROLES.filter((role) =>
@@ -53,12 +52,23 @@ export function authorityPredicate(
         householdId: authority.householdId,
         role,
         kind: authority.proof.kind,
+        ceiling: authority.proof.kind === "delegated" ? authority.proof.ceiling : undefined,
       },
       action,
       subject,
     ),
   );
   if (!roles.length) return { sql: "0", values: [] };
+  if (authority.proof.kind === "delegated") {
+    return {
+      sql: `EXISTS (SELECT 1 FROM mcp_connections c JOIN members m ON m.id = c.member_id JOIN auth_accounts a ON a.member_id = m.id
+        WHERE c.id = ? AND c.member_id = ? AND c.household_id = ? AND m.household_id = c.household_id
+        AND m.archived_at IS NULL AND m.role IN (${roles.map(() => "?").join(",")})
+        AND c.status = 'active' AND c.provider_grant_id IS NOT NULL AND c.established_at IS NOT NULL
+        AND c.credential_version = a.credential_version AND c.credential_version = ? AND c.approved_role = ?)`,
+      values: [authority.proof.connectionId, authority.memberId, authority.householdId, ...roles, authority.proof.credentialVersion, authority.proof.ceiling],
+    };
+  }
   return {
     sql: `EXISTS (SELECT 1 FROM auth_sessions s JOIN members m ON m.id = s.member_id JOIN auth_accounts a ON a.member_id = m.id
     WHERE s.token_hash = ? AND m.id = ? AND m.household_id = ? AND m.archived_at IS NULL

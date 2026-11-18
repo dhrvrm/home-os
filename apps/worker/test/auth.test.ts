@@ -1,7 +1,7 @@
 import { env, exports } from "cloudflare:workers";
 import { beforeEach, describe, expect, it } from "vitest";
 import { digest, verifyPassword } from "../src/auth/crypto";
-import worker from "../src/index";
+import { app } from "../src/index";
 
 const origin = "https://home-os.test";
 const password = "correct horse battery staple";
@@ -111,9 +111,9 @@ describe("household email/password access", () => {
 
   it("fails closed when deployment authentication secrets are absent", async () => {
     const unconfigured = { ...env, HOMEOS_PASSWORD_PEPPER: undefined, HOMEOS_SETUP_TOKEN: undefined };
-    const status = await worker.fetch(new Request(`${origin}/api/v1/auth/status`), unconfigured);
+    const status = await app.fetch(new Request(`${origin}/api/v1/auth/status`), unconfigured);
     await expect(status.json()).resolves.toMatchObject({ data: { setupRequired: true, setupAvailable: false, session: null } });
-    const attemptedLogin = await worker.fetch(new Request(`${origin}/api/v1/auth/login`, {
+    const attemptedLogin = await app.fetch(new Request(`${origin}/api/v1/auth/login`, {
       method: "POST", headers: { "Content-Type": "application/json", Origin: origin },
       body: JSON.stringify({ email: "owner@example.com", password }),
     }), unconfigured);
