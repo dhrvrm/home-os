@@ -270,7 +270,7 @@ it("anonymous authorization creation rejects before more than sixty temporary in
   await expect(startOAuth(browser, { client })).rejects.toThrow("Authorize failed 429");
   expect((await env.DB.prepare("SELECT id FROM mcp_consent_intents").all()).results).toHaveLength(60);
   expect((await env.DB.prepare("SELECT flow FROM oauth_admission").all()).results).toHaveLength(2);
-});
+}, 15_000); // Sixty real authorize/consent-preview round trips, not one request.
 it("uncertain registration-persistence failure retains capacity and is recoverable via public cleanup", async () => {
   const failingDB = new Proxy(env.DB, { get(db, property) { if (property === "prepare") return (sql: string) => { if (sql.startsWith("UPDATE oauth_registrations SET client_id = ? WHERE id = ?")) throw new Error("D1 unavailable after provider write"); return db.prepare(sql); }; const value = Reflect.get(db, property); return typeof value === "function" ? value.bind(db) : value; } });
   await expect(registerClient(overriddenFetch({ DB: failingDB }))).rejects.toThrow("Registration failed 503");
