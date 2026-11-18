@@ -54,3 +54,14 @@ describe("remembered access evidence", () => {
   });
 
 });
+
+it("retains a valid public grant id while reading legacy snapshots compatibly", () => {
+  const modern = { ...session, expiresAt: null, sessionId: "a".repeat(32) };
+  saveSession(modern);
+  expect(readSavedSession()).toEqual(modern);
+});
+
+it.each(["", "A".repeat(32), "a".repeat(31), "../session", 123])("rejects malformed public session ids %s", sessionId => {
+  localStorage.setItem("home-os:session:v1", JSON.stringify({ ...session, expiresAt: null, sessionId }));
+  expect(readSavedSession()).toBeNull();
+});

@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, type FormEvent } from "react";
+import { readHouseholdLocation } from "@/lib/navigation";
 import { House } from "@phosphor-icons/react";
 import { login, setupOwner, type AuthSession } from "@/lib/auth";
 import { errorMessage, PasswordField } from "./auth-fields";
@@ -14,6 +15,7 @@ interface AuthScreenProps {
 }
 
 export function AuthScreen({ setupRequired, setupAvailable, message, onAuthenticated }: AuthScreenProps) {
+  const connecting = typeof window !== "undefined" && !!readHouseholdLocation(window.location.search).connect;
   const [signInInstead, setSignInInstead] = useState(false);
   const settingUp = setupRequired && !signInInstead;
   const [pending, setPending] = useState(false);
@@ -52,6 +54,7 @@ export function AuthScreen({ setupRequired, setupAvailable, message, onAuthentic
           <h1 id="auth-title">{settingUp ? "A place for everyone at home." : "Welcome home."}</h1>
           <p>{settingUp ? "Create the first owner account, then add the people you live with." : "Sign in to your household’s inventory and shared plans."}</p>
         </header>
+        {connecting && <p className="auth-notice">Sign in to review the assistant connection. Signing in does not approve access.</p>}
         {message && <p className="auth-notice" role="status">{message}</p>}
         {settingUp && !setupAvailable
           ? <p className="auth-notice" role="status">Home setup is not ready yet. Ask the person setting up Home OS to enable account setup, then reload this page.</p>

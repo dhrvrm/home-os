@@ -62,3 +62,29 @@
   .account-heading > .button, .members-heading > .button { min-height: 44px; }
 }
 @media (prefers-reduced-motion: reduce) { .auth-page *, .account-panel *, .members-panel * { scroll-behavior: auto; transition: none; } }
+.access-address { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; margin: 18px 0 12px; }
+.access-address code { flex: 1 1 15rem; min-width: 0; overflow-wrap: anywhere; font-size: 13px; color: var(--accent); user-select: all; }
+.access-roles, .consent-details { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 10px 18px; margin: 20px 0 0; font-size: 13px; }
+.access-roles dt, .consent-details dt { font-weight: 650; }
+.access-roles dd, .consent-details dd { margin: 0; color: var(--text-muted); overflow-wrap: anywhere; }
+.access-list { padding: 0; margin: 18px 0 0; list-style: none; }
+.access-row { display: flex; align-items: flex-start; flex-wrap: wrap; gap: 14px; padding: 18px 0; border-top: 1px solid var(--line); }
+.access-row__detail { flex: 1 1 15rem; min-width: 0; }
+.access-row__detail > strong { font-size: 14px; overflow-wrap: anywhere; }
+.access-row__detail > .members-status { margin-left: 10px; }
+.access-row__detail > p { margin-top: 7px; }
+.access-feedback, .access-empty { margin-top: 16px; }
+.access-feedback .button { margin-top: 12px; }
+.access-link { display: inline-block; color: var(--accent); margin-top: 14px; font-size: 13px; }
+.consent-panel { width: min(100%, 42rem); margin-inline: auto; }
+.consent-panel h2 { margin: 0 0 10px; font-size: 24px; letter-spacing: -.03em; }
+.consent-domain { color: var(--accent); font-size: 15px; overflow-wrap: anywhere; }
+.consent-details dd span { display: block; margin-top: 6px; font-size: 12px; }
+.consent-capabilities { padding-left: 20px; font-size: 13px; line-height: 1.7; }
+.consent-panel .auth-notice, .consent-panel .form-error { margin-top: 18px; }
+.consent-panel :focus-visible, .access-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
+@media (max-width: 390px) {
+  .access-roles, .consent-details { grid-template-columns: minmax(0, 1fr); gap: 5px; }
+  .access-roles dd, .consent-details dd { margin-bottom: 10px; }
+  .access-row > .button { width: 100%; }
+}

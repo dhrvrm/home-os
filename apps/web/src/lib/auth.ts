@@ -9,7 +9,7 @@ export interface AuthUser {
   email: string;
   role: "owner" | "member" | "viewer";
 }
-export interface AuthSession { user: AuthUser; expiresAt: string | null }
+export interface AuthSession { user: AuthUser; expiresAt: string | null; sessionId?: string }
 export interface AuthStatus { setupRequired: boolean; setupAvailable: boolean; session: AuthSession | null }
 export interface MemberAccount {
   id: string;
@@ -30,7 +30,10 @@ export function login(input: { email: string; password: string }): Promise<AuthS
 export function setupOwner(input: { name: string; email: string; password: string; setupToken: string }): Promise<AuthSession> {
   return withBrowserAuthHandshake(() => request("/api/v1/auth/setup", { method: "POST", body: JSON.stringify(input) }));
 }
-export async function logout(): Promise<void> { await request("/api/v1/auth/logout", { method: "POST", body: "{}" }); }
+export async function logout(input: { expectedSessionId: string }): Promise<void> {
+  if (!/^[a-f0-9]{32}$/.test(input.expectedSessionId)) throw new Error("Check your sign-in before signing out. Connect and retry.");
+  await request("/api/v1/auth/logout", { method: "POST", body: JSON.stringify(input) });
+}
 export function changePassword(input: { currentPassword: string; newPassword: string }): Promise<AuthSession> {
   return withBrowserAuthHandshake(() => request("/api/v1/auth/password", { method: "POST", body: JSON.stringify(input) }));
 }

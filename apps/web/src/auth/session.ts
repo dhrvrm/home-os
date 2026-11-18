@@ -22,7 +22,9 @@ function validatedSession(value: unknown): AuthSession | null {
   const fields = user as Record<string, unknown>;
   if (!["id", "householdId", "name", "email"].every((field) => typeof fields[field] === "string" && (fields[field] as string).length > 0 && (fields[field] as string).length <= 254)) return null;
   if (!["owner", "member", "viewer"].includes(String(fields.role))) return null;
+  if (candidate.sessionId !== undefined && (typeof candidate.sessionId !== "string" || !/^[a-f0-9]{32}$/.test(candidate.sessionId))) return null;
   return {
+    ...(candidate.sessionId !== undefined ? { sessionId: candidate.sessionId as string } : {}),
     expiresAt: candidate.expiresAt,
     user: { id: fields.id as string, householdId: fields.householdId as string, name: fields.name as string, email: fields.email as string, role: fields.role as AuthSession["user"]["role"] },
   };

@@ -1,3 +1,4 @@
+import Dexie from "dexie";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getAuthStatus, logout, type AuthSession } from "@/lib/auth";
@@ -9,8 +10,8 @@ import { AuthGate } from "./auth-gate";
 import { readSavedSession, saveSession, setDataOwner } from "./session";
 import { ACCESS_BOUNDARY_KEY, publishAccessBoundary, readAccessBoundary, resumeHouseholdWork, runHouseholdWork } from "./work";
 
-const alice: AuthSession = { user: { id: "alice", householdId: "home", name: "Alice", email: "alice@example.com", role: "member" }, expiresAt: null };
-const bob: AuthSession = { user: { id: "bob", householdId: "home", name: "Bob", email: "bob@example.com", role: "member" }, expiresAt: null };
+const alice: AuthSession = { sessionId: "a".repeat(32), user: { id: "alice", householdId: "home", name: "Alice", email: "alice@example.com", role: "member" }, expiresAt: null };
+const bob: AuthSession = { sessionId: "b".repeat(32), user: { id: "bob", householdId: "home", name: "Bob", email: "bob@example.com", role: "member" }, expiresAt: null };
 
 vi.mock("@/lib/auth", () => ({ getAuthStatus: vi.fn(), logout: vi.fn() }));
 vi.mock("@/components/inventory-app", () => ({ InventoryApp: ({ session, onLogout }: { session: AuthSession; onLogout: () => Promise<void> }) => <div>Open {session.user.name}<input aria-label="Unsaved note" defaultValue="" /><button onClick={() => void onLogout().catch(() => {})}>Sign out test</button></div> }));
@@ -67,6 +68,7 @@ describe("member access gate", () => {
     render(<AuthGate />);
     fireEvent.click(await screen.findByText("Sign in Bob"));
     await waitFor(() => expect(logout).toHaveBeenCalledOnce());
+    expect(logout).toHaveBeenCalledWith({ expectedSessionId: bob.sessionId });
     expect(screen.queryByText("Open Bob")).not.toBeInTheDocument();
     expect(await homeOSDatabase.outbox.count()).toBe(1);
     confirm.mockReturnValue(true);
@@ -246,6 +248,7 @@ describe("member access gate", () => {
     vi.mocked(getAuthStatus).mockResolvedValueOnce({ setupRequired: false, setupAvailable: true, session: short });
     render(<AuthGate />);
     expect(await screen.findByText("Open Alice")).toBeInTheDocument();
+    await waitFor(() => expect(timer.mock.calls.some(([, delay]) => delay === 60_000)).toBe(true));
     const queued = timer.mock.calls.find(([, delay]) => delay === 60_000);
     expect(queued).toBeDefined();
     vi.mocked(getAuthStatus).mockResolvedValue({ setupRequired: false, setupAvailable: true, session: alice });
@@ -271,4 +274,137 @@ describe("member access gate", () => {
     expect(logout).toHaveBeenCalledOnce();
     expect(readSavedSession()).toBeNull();
   });
+  it("binds logout to the originally admitted public grant", async () => {
+    vi.mocked(getAuthStatus).mockResolvedValue({ setupRequired: false, setupAvailable: true, session: alice });
+    render(<AuthGate />);
+    fireEvent.click(await screen.findByText("Sign out test"));
+    await waitFor(() => expect(logout).toHaveBeenCalledWith({ expectedSessionId: alice.sessionId }));
+  });
+
+  it("preserves a second gate's newly admitted data and queued work after delayed old logout", async () => {
+    vi.mocked(getAuthStatus).mockResolvedValue({ setupRequired: false, setupAvailable: true, session: alice });
+    let finish!: () => void;
+    vi.mocked(logout).mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    render(<AuthGate />);
+    fireEvent.click(await screen.findByText("Sign out test"));
+    await waitFor(() => expect(logout).toHaveBeenCalledOnce());
+    vi.mocked(getAuthStatus).mockResolvedValue({ setupRequired: false, setupAvailable: true, session: bob });
+    render(<AuthGate />);
+    expect(await screen.findByText("Open Bob")).toBeInTheDocument();
+    const item = await createLocalItem(homeOSDatabase, { name: "Bob queued rice" });
+    saveInventoryCache([item]);
+    const boundary = readAccessBoundary();
+    await act(async () => { finish(); });
+    expect(await homeOSDatabase.outbox.count()).toBe(1);
+    expect((await homeOSDatabase.items.get(item.id))?.name).toBe("Bob queued rice");
+    expect(loadInventoryCache()?.items[0]?.name).toBe("Bob queued rice");
+    expect(readSavedSession()?.user.id).toBe("bob");
+    expect(readAccessBoundary()).toBe(boundary);
+  });
+
+  it("requires validation before ending a retained legacy grant without a public id", async () => {
+    const legacy = { user: alice.user, expiresAt: alice.expiresAt };
+    saveSession(legacy); setDataOwner(alice.user); publishAccessBoundary("ready", alice.user);
+    vi.mocked(getAuthStatus).mockRejectedValue(new APIError("Offline", "offline"));
+    render(<AuthGate />);
+    fireEvent.click(await screen.findByText("Sign out test"));
+    await act(async () => { await Promise.resolve(); });
+    expect(logout).not.toHaveBeenCalled();
+    expect(readSavedSession()?.user.id).toBe("alice");
+  });
+
+  it("does not restore remembered access after an explicit changed-session logout rejection", async () => {
+    vi.mocked(getAuthStatus).mockResolvedValue({ setupRequired: false, setupAvailable: true, session: alice });
+    vi.mocked(logout).mockRejectedValueOnce(new APIError("Session changed", "session_changed"));
+    render(<AuthGate />);
+    expect(await screen.findByText("Open Alice")).toBeInTheDocument();
+    await queueAliceWork();
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    fireEvent.click(screen.getByText("Sign out test"));
+    expect(await screen.findByText("Sign in test")).toBeInTheDocument();
+    expect(readSavedSession()).toBeNull();
+    expect(await homeOSDatabase.outbox.count()).toBe(1);
+  });
+
+  it("rechecks the boundary inside a clearing transaction waiting for its database lock", async () => {
+    vi.mocked(getAuthStatus).mockResolvedValue({ setupRequired: false, setupAvailable: true, session: alice });
+    let finishLogout!: () => void;
+    vi.mocked(logout).mockImplementationOnce(() => new Promise(resolve => { finishLogout = resolve; }));
+    render(<AuthGate />);
+    fireEvent.click(await screen.findByText("Sign out test"));
+    await waitFor(() => expect(logout).toHaveBeenCalledOnce());
+    const item = await createLocalItem(homeOSDatabase, { name: "New grant queued item" });
+    saveInventoryCache([item]);
+    let release!: () => void;
+    const transaction = vi.spyOn(homeOSDatabase, "transaction");
+    const held = homeOSDatabase.transaction("rw", homeOSDatabase.tables, async () => {
+      await Dexie.waitFor(new Promise<void>(resolve => { release = resolve; }));
+    });
+    try {
+      await waitFor(() => expect(release).toBeTypeOf("function"));
+      act(() => finishLogout());
+      await waitFor(() => expect(transaction).toHaveBeenCalledTimes(2));
+      // The clearing call has been queued, but has not acquired its table locks.
+      setDataOwner(bob.user); saveSession(bob); publishAccessBoundary("ready", bob.user);
+      const boundary = readAccessBoundary();
+      await act(async () => { release(); await held; });
+      await waitFor(() => expect(transaction).toHaveBeenCalledTimes(2));
+      expect((await homeOSDatabase.items.get(item.id))?.name).toBe("New grant queued item");
+      expect(await homeOSDatabase.outbox.count()).toBe(1);
+      expect(loadInventoryCache()?.items[0]?.id).toBe(item.id);
+      expect(readSavedSession()?.user.id).toBe("bob");
+      expect(readAccessBoundary()).toBe(boundary);
+    } finally { release?.(); await held; }
+  });
+
+  it("admits a storage-event replacement while an older logout waits and preserves its new queue", async () => {
+    vi.mocked(getAuthStatus).mockResolvedValue({ setupRequired: false, setupAvailable: true, session: alice });
+    let finish!: () => void;
+    vi.mocked(logout).mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    render(<AuthGate />);
+    fireEvent.click(await screen.findByText("Sign out test"));
+    await waitFor(() => expect(logout).toHaveBeenCalledOnce());
+    vi.mocked(getAuthStatus).mockResolvedValue({ setupRequired: false, setupAvailable: true, session: bob });
+    publishAccessBoundary("ready", bob.user);
+    fireEvent(window, new StorageEvent("storage", { key: ACCESS_BOUNDARY_KEY, newValue: readAccessBoundary() }));
+    expect(await screen.findByText("Open Bob")).toBeInTheDocument();
+    const item = await createLocalItem(homeOSDatabase, { name: "Bob new work" });
+    const boundary = readAccessBoundary();
+    await act(async () => finish());
+    expect(screen.getByText("Open Bob")).toBeInTheDocument();
+    expect(await homeOSDatabase.outbox.count()).toBe(1);
+    expect(await homeOSDatabase.items.get(item.id)).toBeDefined();
+    expect(readAccessBoundary()).toBe(boundary);
+  });
+
+  it("preserves a captured null boundary when another tab publishes between comparison and admission", async () => {
+    const item = await createLocalItem(homeOSDatabase, { name: "Bob established inventory" });
+    await homeOSDatabase.outbox.clear();
+    saveInventoryCache([item]);
+    vi.mocked(getAuthStatus).mockResolvedValue({ setupRequired: false, setupAvailable: true, session: alice });
+    const originalGetItem = Storage.prototype.getItem;
+    let boundaryReads = 0;
+    let replacementBoundary: string | null = null;
+    let switched = false;
+    vi.spyOn(Storage.prototype, "getItem").mockImplementation(function (this: Storage, key: string) {
+      const observed = originalGetItem.call(this, key);
+      if (this === localStorage && key === ACCESS_BOUNDARY_KEY && !switched && ++boundaryReads === 3) {
+        // verifyAccess observed null before its status request and now compares it.
+        // Publish the other tab's admission after this read's value was captured.
+        switched = true;
+        setDataOwner(bob.user); saveSession(bob); publishAccessBoundary("ready", bob.user);
+        replacementBoundary = originalGetItem.call(localStorage, ACCESS_BOUNDARY_KEY);
+      }
+      return observed;
+    });
+    render(<AuthGate />);
+    await waitFor(() => expect(switched).toBe(true));
+    await waitFor(() => expect(screen.queryByText("Checking your sign-in…")).not.toBeInTheDocument());
+    expect(screen.queryByText("Open Alice")).not.toBeInTheDocument();
+    expect((await homeOSDatabase.items.get(item.id))?.name).toBe("Bob established inventory");
+    expect(loadInventoryCache()?.items[0]?.id).toBe(item.id);
+    expect(readSavedSession()?.user.id).toBe("bob");
+    expect(readAccessBoundary()).toBe(replacementBoundary);
+  });
+
 });

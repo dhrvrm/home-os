@@ -19,10 +19,13 @@ type GateState =
 
 class AccountSwitchRequired extends Error {}
 
-async function clearHouseholdState(): Promise<void> {
+async function clearHouseholdState(check: () => void): Promise<void> {
   await homeOSDatabase.transaction("rw", homeOSDatabase.tables, async () => {
+    check();
     await Promise.all(homeOSDatabase.tables.map((table) => table.clear()));
+    check();
   });
+  check();
   clearInventoryCache();
 }
 
@@ -34,7 +37,7 @@ export function AuthGate() {
   const [state, setState] = useState<GateState>({ kind: "checking" });
   const sequence = useRef(0);
   const sessionRef = useRef<AuthSession | null>(null);
-  const transition = useRef(false);
+  const transition = useRef<number | null>(null);
   const mounted = useRef(false);
 
   const showLogin = useCallback((message?: string, setupRequired = false, setupAvailable = true) => {
@@ -46,10 +49,12 @@ export function AuthGate() {
     if (!sessionIsCurrent(session)) {
       throw new Error("This sign-in has expired. Sign in again to continue.");
     }
+    if (expectedBoundary === undefined) expectedBoundary = readAccessBoundary();
     lockHouseholdWork();
     await drainHouseholdWork();
     if (!mounted.current || ticket !== sequence.current) return;
     const checkBoundary = () => {
+      if (!mounted.current || ticket !== sequence.current) throw new AccountSwitchRequired("Sign-in changed. Reopen Home OS to continue.");
       if (expectedBoundary !== undefined && expectedBoundary !== readAccessBoundary()) {
         throw new AccountSwitchRequired("Sign-in changed in another tab. Reopen Home OS to use its current account.");
       }
@@ -68,7 +73,10 @@ export function AuthGate() {
       if (queued > 0) {
         if (!interactive) throw new AccountSwitchRequired("Saved changes belong to another member. Sign in as that member to sync them, or sign in with another account and explicitly discard them.");
         if (!window.confirm("This device has unsynced changes from another member. Switching accounts will discard those changes and remove their saved household data. Switch accounts?")) {
-          await logout();
+          checkBoundary();
+          if (!session.sessionId) throw new Error("Check your sign-in before ending this account switch. Connect and retry.");
+          await logout({ expectedSessionId: session.sessionId });
+          checkBoundary();
           clearSavedSession();
           publishAccessBoundary("locked");
           showLogin("Account switch cancelled. Sign in as the original member to keep and synchronize their saved changes.");
@@ -79,10 +87,11 @@ export function AuthGate() {
       publishAccessBoundary("locked");
       // Continue checking the boundary published for this clearing operation.
       expectedBoundary = readAccessBoundary();
-      await clearHouseholdState();
+      await clearHouseholdState(checkBoundary);
     }
     if (!mounted.current || ticket !== sequence.current) return;
     // A browser close during a previous request must not strand an outbox row.
+    checkBoundary();
     await homeOSDatabase.outbox.where("state").equals("sending").modify({ state: "pending" });
     if (!mounted.current || ticket !== sequence.current) return;
     checkBoundary();
@@ -184,6 +193,8 @@ export function AuthGate() {
     const visible = () => { if (document.visibilityState === "visible" && navigator.onLine) void verifyAccess(); };
     const changedElsewhere = (event: StorageEvent) => {
       if (event.key !== ACCESS_BOUNDARY_KEY) return;
+      // A shared admission supersedes a local transition, including same-member grants.
+      transition.current = null;
       const readyMember = boundaryMember();
       const current = sessionRef.current;
       if (readyMember && current?.user.id === readyMember.id && current.user.householdId === readyMember.householdId) {
@@ -236,38 +247,51 @@ export function AuthGate() {
   }, [state, expireAccess, verifyAccess]);
 
   const authenticated = useCallback(async (session: AuthSession) => {
-    transition.current = true;
     const ticket = ++sequence.current;
+    transition.current = ticket;
     try { await admitSession(session, true, ticket); }
-    finally { transition.current = false; }
+    finally { if (transition.current === ticket) transition.current = null; }
   }, [admitSession]);
 
   const signOut = useCallback(async () => {
     if (navigator.onLine === false) throw new Error("Connect to the internet to sign out and revoke this device’s session.");
     const previous = sessionRef.current;
     if (!previous) return;
-    transition.current = true;
-    sequence.current++;
-    const boundaryBefore = readAccessBoundary();
+    if (!previous.sessionId) {
+      throw new Error("Check your sign-in before signing out. Connect, refresh your sign-in, then retry.");
+    }
+    const ticket = ++sequence.current;
+    transition.current = ticket;
+    let expectedBoundary = readAccessBoundary();
+    const current = () => mounted.current && ticket === sequence.current && sessionRef.current === previous
+      && sessionRef.current.sessionId === previous.sessionId && readAccessBoundary() === expectedBoundary;
+    const check = () => { if (!current()) throw new AccountSwitchRequired("Sign-in changed in another tab. This older sign-out was stopped."); };
     lockHouseholdWork();
     let revoked = false;
     try {
       await drainHouseholdWork();
+      check();
       const queued = await homeOSDatabase.outbox.count();
+      check();
       if (queued > 0 && !window.confirm("You have unsynced changes on this device. Signing out will discard them. Sign out anyway?")) {
         throw new Error("Sign-out cancelled. Sync your changes before signing out to keep them.");
       }
-      await logout();
+      check();
+      await logout({ expectedSessionId: previous.sessionId });
       revoked = true;
-      if (!mounted.current) return;
+      check();
       publishAccessBoundary("locked");
+      expectedBoundary = readAccessBoundary();
       setState({ kind: "checking" });
-      await clearHouseholdState();
+      await clearHouseholdState(check);
+      check();
       clearSavedSession();
       clearDataOwner();
       publishAccessBoundary("signed-out");
       showLogin("You are signed out. Saved household data was removed from this device.");
     } catch (error) {
+      // A newer tab/grant owns storage now. Never restore or clear its state.
+      if (!current()) return;
       if (revoked) {
         clearSavedSession();
         publishAccessBoundary("signed-out");
@@ -275,20 +299,19 @@ export function AuthGate() {
         setState({ kind: "error", message: "You are signed out, but saved device data could not be cleared. Close other Home OS tabs and retry before sharing this device." });
         throw error;
       }
-      if (readAccessBoundary() === boundaryBefore) {
-        saveSession(previous);
-        setActiveMemberId(previous.user.id);
-        resumeHouseholdWork();
-        sessionRef.current = previous;
-        setState({ kind: "ready", session: previous });
-      } else {
-        sessionRef.current = null;
-        setState({ kind: "checking" });
-        queueMicrotask(() => { void verifyAccess(); });
+      if (error instanceof APIError && ["session_changed", "unauthorized"].includes(error.code)) {
+        clearSavedSession();
+        publishAccessBoundary("locked");
+        showLogin("Your sign-in changed. Sign in again to continue. Your saved changes are kept for the same member.");
+        throw error;
       }
+      saveSession(previous);
+      setActiveMemberId(previous.user.id);
+      resumeHouseholdWork();
+      setState({ kind: "ready", session: previous });
       throw error;
-    } finally { transition.current = false; }
-  }, [showLogin, verifyAccess]);
+    } finally { if (transition.current === ticket) transition.current = null; }
+  }, [showLogin]);
 
   if (state.kind === "ready") {
     return <InventoryApp key={`${state.session.user.householdId}:${state.session.user.id}:${state.session.user.role}`} session={state.session} onLogout={signOut} onSessionChange={(session) => {

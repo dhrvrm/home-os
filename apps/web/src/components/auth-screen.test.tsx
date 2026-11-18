@@ -5,7 +5,7 @@ import { login, setupOwner } from "@/lib/auth";
 import { AuthScreen } from "./auth-screen";
 
 vi.mock("@/lib/auth", () => ({ login: vi.fn(), setupOwner: vi.fn() }));
-const session = { user: { id: "owner", householdId: "home", name: "Asha", email: "asha@example.com", role: "owner" as const }, expiresAt: "2027-01-01T00:00:00Z" };
+const session = { sessionId: "a".repeat(32), user: { id: "owner", householdId: "home", name: "Asha", email: "asha@example.com", role: "owner" as const }, expiresAt: "2027-01-01T00:00:00Z" };
 
 beforeEach(() => { vi.clearAllMocks(); vi.mocked(login).mockResolvedValue(session); vi.mocked(setupOwner).mockResolvedValue(session); });
 afterEach(cleanup);
@@ -92,4 +92,21 @@ describe("AuthScreen", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("Finish saving local changes first.");
     expect(screen.getByLabelText("Password", { exact: true })).toHaveValue("my-long-password");
   });
+});
+
+it("preserves only the opaque allowlisted consent intent across sign-in", async () => {
+  const intent = "c".repeat(32);
+  window.history.replaceState(null, "", `/api/oauth/consent?connect=${intent}&redirect=https://evil.example`);
+  try {
+    const accepted = vi.fn();
+    render(<AuthScreen setupRequired={false} setupAvailable onAuthenticated={accepted} />);
+    expect(screen.getByText(/Signing in does not approve access/)).toBeInTheDocument();
+    await userEvent.type(screen.getByLabelText("Email"), "asha@example.com");
+    await userEvent.type(screen.getByLabelText("Password", { exact: true }), "my-long-password");
+    await userEvent.click(screen.getByRole("button", { name: "Sign in" }));
+    expect(accepted).toHaveBeenCalledWith(session);
+    expect(window.location.pathname).toBe("/api/oauth/consent");
+    expect(new URLSearchParams(window.location.search).get("connect")).toBe(intent);
+    expect(login).toHaveBeenCalledWith({ email: "asha@example.com", password: "my-long-password" });
+  } finally { window.history.replaceState(null, "", "/"); }
 });

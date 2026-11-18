@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { request } from "./api";
-import { revokeBrowserSession } from "./auth";
+import { logout, revokeBrowserSession } from "./auth";
 import { publishAccessBoundary, resumeHouseholdWork, setActiveMemberId } from "@/auth/work";
 
 vi.mock("./api", () => ({ request: vi.fn() }));
@@ -44,4 +44,13 @@ it("does not lock a new account when an older grant's revoke response arrives la
     await response;
     expect(event).not.toHaveBeenCalled();
   } finally { window.removeEventListener("home-os:session-expired", event); }
+});
+
+it("sends the original public session id for logout and refuses missing/invalid intent", async () => {
+  vi.mocked(request).mockResolvedValue({ signedOut: true });
+  await logout({ expectedSessionId: "a".repeat(32) });
+  expect(request).toHaveBeenCalledWith("/api/v1/auth/logout", { method: "POST", body: JSON.stringify({ expectedSessionId: "a".repeat(32) }) });
+  vi.mocked(request).mockClear();
+  await expect(logout({ expectedSessionId: "" })).rejects.toThrow("Check your sign-in");
+  expect(request).not.toHaveBeenCalled();
 });

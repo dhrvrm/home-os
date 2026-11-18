@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
 import type { AuthSession } from "@/lib/auth";
+import { ConnectionConsent } from "@/auth/connection-consent";
 import { AccountPanel } from "./account-panel";
 import { MembersView } from "./members-view";
 import { MoreNavigation } from "./more-navigation";
@@ -296,9 +297,9 @@ export function InventoryApp({ session, onLogout, onSessionChange }: {
       case "expenses":
         return <ExpensesView readOnly={readOnly} />;
       case "members":
-        return session ? <MembersView currentUser={session.user} /> : null;
+        return session ? <MembersView key={`${navigation.action}:${navigation.memberId}`} currentUser={session.user} action={navigation.action} memberId={navigation.memberId} /> : null;
       case "account":
-        return session && onLogout && onSessionChange ? <AccountPanel session={session} onLogout={onLogout} onSessionChange={onSessionChange} hasPendingChanges={pendingCount > 0} /> : null;
+        return session && navigation.connect ? <ConnectionConsent key={`${navigation.connect}:${session.sessionId}:${session.user.role}`} intentId={navigation.connect} session={session} online={inventory.syncStatus !== "offline" && (typeof navigator === "undefined" || navigator.onLine)} /> : session && onLogout && onSessionChange ? <AccountPanel key={navigation.action} openPassword={navigation.action === "password"} session={session} onLogout={onLogout} onSessionChange={onSessionChange} hasPendingChanges={pendingCount > 0} /> : null;
       case "menu":
         return session ? <MenuView currentUser={session.user} focusedMealId={navigation.mealId} prefillRecipeId={navigation.recipeId} /> : null;
       case "recipes":
@@ -306,7 +307,7 @@ export function InventoryApp({ session, onLogout, onSessionChange }: {
       case "contacts":
         return session ? <ContactsView currentUser={session.user} /> : null;
       case "notifications":
-        return session ? <NotificationsView currentUser={session.user} onOpenMeal={(mealId) => setView("menu", { mealId })} /> : null;
+        return session ? <NotificationsView enableRequested={navigation.action === "enable"} currentUser={session.user} onOpenMeal={(mealId) => setView("menu", { mealId })} /> : null;
       default:
         return null;
     }
