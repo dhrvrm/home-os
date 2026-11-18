@@ -3,6 +3,7 @@ import type { CommandContext } from "../platform/context";
 import { HomeOSError } from "../platform/errors";
 import {
   permits,
+  ROLES,
   type Action,
   type ActionSubject,
   type Role,
@@ -45,7 +46,7 @@ export function authorityPredicate(
     authority.proof.kind !== "browser"
   )
     return { sql: "0", values: [] };
-  const roles = (["owner", "member", "viewer"] as const).filter((role) =>
+  const roles = ROLES.filter((role) =>
     permits(
       {
         memberId: authority.memberId,
@@ -121,11 +122,12 @@ export async function authorizedBatch(
   subject?: ActionSubject,
 ): Promise<D1Result[]> {
   try {
-    return await database.batch([
+    const results = await database.batch([
       authorityGuard(database, context, action, subject),
       ...statements,
       releaseAuthorityGuard(database, context),
     ]);
+    return results.slice(1, -1);
   } catch (error) {
     await assertAuthority(database, context, action, subject);
     throw error;

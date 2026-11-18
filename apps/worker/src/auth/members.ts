@@ -1,3 +1,5 @@
+import { validate } from "../platform/validation";
+import { ROLES } from "./permissions";
 import { revokeMemberGrants } from "./session-policy";
 import { z } from "zod";
 import type { CommandContext } from "../platform/context";
@@ -10,7 +12,6 @@ import { createId } from "../platform/ids";
 import {
   HomeOSError,
   NotFoundError,
-  ValidationError,
 } from "../platform/errors";
 import { digest, hashPassword } from "./crypto";
 import { emailSchema, nameSchema, passwordSchema } from "./support";
@@ -18,31 +19,17 @@ export const createMemberSchema = z.object({
   name: nameSchema,
   email: emailSchema,
   password: passwordSchema,
-  role: z.enum(["owner", "member", "viewer"]).default("member"),
+  role: z.enum(ROLES).default("member"),
 });
 export const updateMemberSchema = z
   .object({
     name: nameSchema.optional(),
     email: emailSchema.optional(),
-    role: z.enum(["owner", "member", "viewer"]).optional(),
+    role: z.enum(ROLES).optional(),
     active: z.boolean().optional(),
   })
   .strict();
 export const resetMemberPasswordSchema = z.object({ password: passwordSchema });
-function parseMemberInput<T extends z.ZodType>(
-  schema: T,
-  value: unknown,
-): z.infer<T> {
-  const parsed = schema.safeParse(value);
-  if (!parsed.success) {
-    const issue = parsed.error.issues[0];
-    throw new ValidationError(
-      issue?.path.join(".") || "body",
-      issue?.message ?? "is invalid",
-    );
-  }
-  return parsed.data;
-}
 interface MemberRow {
   id: string;
   display_name: string;
@@ -95,7 +82,7 @@ export class MemberService {
     value: z.input<typeof createMemberSchema>,
     pepper: string,
   ) {
-    const input = parseMemberInput(createMemberSchema, value);
+    const input = validate(createMemberSchema, value);
     // Key the secret portion so a receipt never becomes an unpeppered password oracle.
     const command = await beginCommand(
       this.database,
@@ -161,7 +148,7 @@ export class MemberService {
     id: string,
     value: z.input<typeof updateMemberSchema>,
   ) {
-    const input = parseMemberInput(updateMemberSchema, value);
+    const input = validate(updateMemberSchema, value);
     const action =
       input.active === false
         ? "member.deactivated"
@@ -268,7 +255,7 @@ export class MemberService {
         "invalid_request",
         400,
       );
-    const input = parseMemberInput(resetMemberPasswordSchema, value);
+    const input = validate(resetMemberPasswordSchema, value);
     const command = await beginCommand(
       this.database,
       context,

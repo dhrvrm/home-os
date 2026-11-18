@@ -23,7 +23,7 @@ export interface HouseholdCommand {
   entityId?: string;
   action: string;
   requestHash: string;
-  policyAction?: Action;
+  policyAction: Action;
   changes?: unknown[];
 }
 
@@ -97,7 +97,7 @@ export async function replayCommand<T>(
   const { context } = command;
   const predicate = authorityPredicate(
     context,
-    command.policyAction ?? commandAction(command.entityType, command.action),
+    command.policyAction,
   );
   const row = await database
     .prepare(
@@ -186,7 +186,7 @@ export async function commitCommand<T>(
   const actorGuard = authorityGuard(
     database,
     context,
-    command.policyAction ?? commandAction(command.entityType, command.action),
+    command.policyAction,
   );
   const release = (operationId: string) =>
     database
@@ -262,7 +262,7 @@ export async function commitCommand<T>(
     await assertAuthority(
       database,
       context,
-      command.policyAction ?? commandAction(command.entityType, command.action),
+      command.policyAction,
     );
     await onConflict();
     throw error;

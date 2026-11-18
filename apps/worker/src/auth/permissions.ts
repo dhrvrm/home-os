@@ -1,10 +1,11 @@
-export type Role = "owner" | "member" | "viewer";
+export const ROLES = ["owner", "member", "viewer"] as const;
+export type Role = (typeof ROLES)[number];
 type Rule = {
   roles: readonly Role[];
   subject?: "self" | "self_or_owner";
   browserOnly?: boolean;
 };
-const everyone = ["owner", "member", "viewer"] as const;
+const everyone = ROLES;
 const writers = ["owner", "member"] as const;
 const read: Rule = { roles: everyone };
 const write: Rule = { roles: writers };

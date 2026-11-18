@@ -40,12 +40,6 @@ export function currentMember(context: AuthContext): AuthUser {
   return member;
 }
 
-export function requireOwner(context: AuthContext): AuthUser {
-  const member = currentMember(context);
-  if (member.role !== "owner") throw new HomeOSError("Only a home owner can manage members.", "forbidden", 403);
-  return member;
-}
-
 export function currentAuthority(context: AuthContext): VerifiedAuthority {
   const member = currentMember(context);
   const grant = currentDeviceGrant(context);

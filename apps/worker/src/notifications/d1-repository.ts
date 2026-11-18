@@ -299,7 +299,7 @@ export class NotificationRepository {
         },
       },
     };
-    const result = await this.personalWrite(
+    const [, registration] = await this.personalWrite(
       memberId,
       "notification_device_setup",
       [
@@ -351,7 +351,7 @@ export class NotificationRepository {
       ],
       authority,
     );
-    if (result[2]!.meta.changes !== 1)
+    if (registration!.meta.changes !== 1)
       throw new HomeOSError(
         "Your session has ended. Sign in again.",
         "unauthorized",

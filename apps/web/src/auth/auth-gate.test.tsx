@@ -111,6 +111,7 @@ describe("member access gate", () => {
     render(<AuthGate />);
     expect(await screen.findByText("Open Alice")).toBeInTheDocument();
     vi.spyOn(navigator, "onLine", "get").mockReturnValue(false);
+    await waitFor(() => expect(timer.mock.calls.some(([, delay]) => delay === 60_000)).toBe(true));
     const scheduled = timer.mock.calls.find(([, delay]) => delay === 60_000);
     expect(scheduled).toBeDefined();
     vi.setSystemTime(new Date(start.getTime() + 60_001));

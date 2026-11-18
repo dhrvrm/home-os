@@ -182,10 +182,15 @@ async function performSyncPage(
       [database.items, database.stockEvents, database.outbox, database.activity, database.syncState],
       async () => {
         lease.check();
+        const acknowledged = new Set(data.results.map(result => result.operationId));
+        const outstanding = data.items.length
+          ? await database.outbox.where("entityId").anyOf(data.items.map(item => item.id)).toArray()
+          : [];
+        lease.check();
+        const optimisticItems = new Set(outstanding.filter(operation => !acknowledged.has(operation.operationId)).map(operation => operation.entityId));
         for (const item of data.items) {
           // Later pages still own their optimistic state, including after a partial reconnect.
-          const outstanding = await database.outbox.where("entityId").equals(item.id).toArray();
-          if (outstanding.some(operation => !accepted.has(operation.operationId) && !conflicts.some(result => result.operationId === operation.operationId))) continue;
+          if (optimisticItems.has(item.id)) continue;
           const conflict = conflicts.some((result) => result.item?.id === item.id || operations.find(
             (operation) => operation.operationId === result.operationId,
           )?.entityId === item.id);
