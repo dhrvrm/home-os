@@ -15,6 +15,7 @@ import { NotificationRepository } from "../src/notifications/d1-repository";
 import { runNotificationTick } from "../src/notifications/scheduled";
 import type { PushFetch } from "../src/notifications/push";
 import {
+  notificationAuthority,
   pushFixture,
   resetNotifications,
   seedNotificationMeal,
@@ -56,6 +57,7 @@ async function enabledPush() {
     "local-owner",
     { mealReminders: true, pushEnabled: true },
     now,
+    await notificationAuthority("local-owner"),
   );
   await repo.registerSubscription(
     "local-owner",
@@ -110,7 +112,8 @@ describe("bounded notification scheduling", () => {
         member,
         { mealReminders: true, pushEnabled: true },
         now,
-      );
+    await notificationAuthority(member),
+  );
       const subscription = {
         ...fixture.subscription,
         endpoint: `${fixture.subscription.endpoint}-${index}`,
@@ -522,7 +525,8 @@ describe("bounded notification scheduling", () => {
           "local-owner",
           { mealReminders: false, pushEnabled: false },
           now,
-        );
+    await notificationAuthority("local-owner"),
+  );
       if (changed === "cancelled" || changed === "answered") eligible = false;
       await runNotificationTick(
         fixture.settings,
@@ -598,7 +602,8 @@ describe("bounded notification scheduling", () => {
       "local-owner",
       { mealReminders: false, pushEnabled: true },
       now,
-    );
+    await notificationAuthority("local-owner"),
+  );
     await runNotificationTick(fixture.settings, source, now, {
       fetcher: async () => {
         throw new Error("not eligible");
@@ -609,7 +614,8 @@ describe("bounded notification scheduling", () => {
       "local-owner",
       { mealReminders: true, pushEnabled: true },
       now,
-    );
+    await notificationAuthority("local-owner"),
+  );
     await env.DB.prepare(
       "UPDATE notification_subscriptions SET auth = 'invalid'",
     ).run();
@@ -636,7 +642,8 @@ describe("bounded notification scheduling", () => {
         memberId,
         { mealReminders: true, pushEnabled: true },
         now,
-      );
+    await notificationAuthority(memberId),
+  );
       const native = {
         ...fixture.subscription,
         endpoint: `https://fcm.googleapis.com/fcm/send/fixture-${index}`,

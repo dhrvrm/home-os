@@ -1,16 +1,35 @@
+import {
+  authorityPredicate,
+  authorityDenied,
+  assertAuthority,
+  authorityGuard,
+  releaseAuthorityGuard,
+} from "../auth/authority";
+import { commandAction, type Action } from "../auth/permissions";
 import type { CommandContext } from "./context";
-import { ConflictError, HomeOSError, ValidationError } from "./errors";
+import { ConflictError, ValidationError } from "./errors";
 import { createId } from "./ids";
 
 export interface HouseholdCommand {
   context: CommandContext;
-  entityType: "recipe" | "meal" | "meal_attendance" | "contact";
+  entityType:
+    | "recipe"
+    | "meal"
+    | "meal_attendance"
+    | "contact"
+    | "inventory_item"
+    | "expense_rule"
+    | "member";
   entityId?: string;
   action: string;
   requestHash: string;
+  policyAction?: Action;
+  changes?: unknown[];
 }
 
 interface Receipt {
+  operation_id: string | null;
+  authority_admitted: number;
   actor_id: string;
   entity_type: string;
   entity_id: string;
@@ -43,6 +62,7 @@ export async function beginCommand(
   action: string,
   entityId: string | undefined,
   input: unknown,
+  policyAction: Action = commandAction(entityType, action),
 ): Promise<HouseholdCommand> {
   if (!context.operationId || context.operationId.length > 128) {
     throw new ValidationError(
@@ -50,7 +70,7 @@ export async function beginCommand(
       "provide an operation ID of 1 to 128 characters",
     );
   }
-  await assertWriter(database, context);
+  await assertAuthority(database, context, policyAction);
   const fingerprint = JSON.stringify(
     canonical({ input, expectedVersion: context.expectedVersion }),
   );
@@ -63,29 +83,11 @@ export async function beginCommand(
     entityType,
     entityId,
     action,
+    policyAction,
     requestHash: Array.from(new Uint8Array(bytes), (byte) =>
       byte.toString(16).padStart(2, "0"),
     ).join(""),
   };
-}
-
-export async function assertWriter(
-  database: D1Database,
-  context: CommandContext,
-): Promise<void> {
-  const member = await database
-    .prepare(
-      "SELECT role FROM members WHERE household_id = ? AND id = ? AND archived_at IS NULL",
-    )
-    .bind(context.householdId, context.actorId)
-    .first<{ role: string }>();
-  if (!member || !["owner", "member"].includes(member.role)) {
-    throw new HomeOSError(
-      "Your account cannot change household plans.",
-      "forbidden",
-      403,
-    );
-  }
 }
 
 export async function replayCommand<T>(
@@ -93,14 +95,19 @@ export async function replayCommand<T>(
   command: HouseholdCommand,
 ): Promise<T | null> {
   const { context } = command;
+  const predicate = authorityPredicate(
+    context,
+    command.policyAction ?? commandAction(command.entityType, command.action),
+  );
   const row = await database
     .prepare(
-      `SELECT actor_id, entity_type, entity_id, action, request_hash, result_json
-       FROM household_command_receipts WHERE household_id = ? AND operation_id = ?`,
+      `SELECT (${predicate.sql}) AS authority_admitted, r.operation_id, r.actor_id, r.entity_type, r.entity_id, r.action, r.request_hash, r.result_json
+       FROM (SELECT 1) LEFT JOIN household_command_receipts r ON r.household_id = ? AND r.operation_id = ?`,
     )
-    .bind(context.householdId, context.operationId)
+    .bind(...predicate.values, context.householdId, context.operationId)
     .first<Receipt>();
-  if (row) {
+  if (!row?.authority_admitted) throw authorityDenied();
+  if (row.operation_id !== null) {
     if (
       row.actor_id !== context.actorId ||
       row.entity_type !== command.entityType ||
@@ -149,6 +156,7 @@ export function commandGuard(
 }
 
 function auditChanges(command: HouseholdCommand, result: unknown): unknown[] {
+  if (command.changes) return command.changes;
   const state = result as Record<string, unknown>;
   if (command.entityType === "meal_attendance") {
     // Retain the accepted answer when the current attendance row is replaced.
@@ -172,21 +180,14 @@ export async function commitCommand<T>(
   now: string,
   statements: D1PreparedStatement[],
   onConflict: () => Promise<void>,
+  acceptedResult?: { query: string; values: (string | number | null)[] },
 ): Promise<T> {
   const { context } = command;
-  // Admission and the mutation share a transaction so a departed or demoted actor cannot race it.
-  const actorGuard = database
-    .prepare(
-      `INSERT INTO mutation_guards (household_id, operation_id, expected_version, actual_version)
-     VALUES (?, ?, 1, (SELECT count(*) FROM members WHERE household_id = ? AND id = ?
-                      AND archived_at IS NULL AND role IN ('owner', 'member')))`,
-    )
-    .bind(
-      context.householdId,
-      `${context.operationId}:actor`,
-      context.householdId,
-      context.actorId,
-    );
+  const actorGuard = authorityGuard(
+    database,
+    context,
+    command.policyAction ?? commandAction(command.entityType, command.action),
+  );
   const release = (operationId: string) =>
     database
       .prepare(
@@ -194,14 +195,14 @@ export async function commitCommand<T>(
       )
       .bind(context.householdId, operationId);
   try {
-    await database.batch([
+    const accepted = await database.batch([
       actorGuard,
       ...statements,
       database
         .prepare(
           `INSERT INTO household_command_receipts
          (household_id, operation_id, actor_id, entity_type, entity_id, action, request_hash, result_json, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ${acceptedResult ? `(${acceptedResult.query})` : "?"}, ?)`,
         )
         .bind(
           context.householdId,
@@ -211,7 +212,9 @@ export async function commitCommand<T>(
           entityId,
           command.action,
           command.requestHash,
-          JSON.stringify(result),
+          ...(acceptedResult
+            ? acceptedResult.values
+            : [JSON.stringify(result)]),
           now,
         ),
       database
@@ -239,13 +242,28 @@ export async function commitCommand<T>(
           context.mcpTool ?? null,
         ),
       release(context.operationId),
-      release(`${context.operationId}:actor`),
+      releaseAuthorityGuard(database, context),
+      ...(acceptedResult
+        ? [
+            database
+              .prepare(`SELECT (${acceptedResult.query}) AS result_json`)
+              .bind(...acceptedResult.values),
+          ]
+        : []),
     ]);
-    return structuredClone(result);
+    return acceptedResult
+      ? (JSON.parse(
+          (accepted.at(-1)!.results[0] as { result_json: string }).result_json,
+        ) as T)
+      : structuredClone(result);
   } catch (error) {
     const replay = await replayCommand<T>(database, command);
     if (replay !== null) return replay;
-    await assertWriter(database, context);
+    await assertAuthority(
+      database,
+      context,
+      command.policyAction ?? commandAction(command.entityType, command.action),
+    );
     await onConflict();
     throw error;
   }

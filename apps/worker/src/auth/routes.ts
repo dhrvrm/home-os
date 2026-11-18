@@ -1,3 +1,5 @@
+import { authorityGuard, releaseAuthorityGuard } from "./authority";
+import { commandContext } from "../http/request-context";
 import { Hono } from "hono";
 import { z } from "zod";
 import type { Env } from "../env";
@@ -109,13 +111,19 @@ export function createAuthRoutes(): Hono<{ Bindings: Env }> {
       throw new HomeOSError("Your current password is incorrect.", "invalid_credentials", 400);
     }
     const hash = await hashPassword(input.newPassword, pepper);
+    const command = commandContext(context);
     const results = await context.env.DB.batch([
+      authorityGuard(context.env.DB, command, "account_password_change"),
       context.env.DB.prepare("UPDATE auth_accounts SET password_hash = ?, credential_version = credential_version + 1, updated_at = ? WHERE member_id = ? AND credential_version = ?")
         .bind(hash, new Date().toISOString(), member.id, account.credential_version),
       context.env.DB.prepare("DELETE FROM auth_sessions WHERE member_id = ? AND credential_version <= ?").bind(member.id, account.credential_version),
-      accessAudit(context, member.id, member.id, "member.password_changed", hash),
-    ]);
-    if (results[0]!.meta.changes !== 1) throw new HomeOSError("Your password changed elsewhere. Sign in again.", "unauthorized", 401);
+      accessAudit(context, member.id, member.id, "member.password_changed", hash, command),
+      releaseAuthorityGuard(context.env.DB, command),
+    ]).catch(error => {
+      if (String(error).includes("expected_version = actual_version")) throw new HomeOSError("Your access changed. Sign in again.", "unauthorized", 401);
+      throw error;
+    });
+    if (results[1]!.meta.changes !== 1) throw new HomeOSError("Your password changed elsewhere. Sign in again.", "unauthorized", 401);
     return success(context, await createSession(context, member, false, account.credential_version + 1));
   });
 

@@ -1,3 +1,4 @@
+import { commandContext } from "../http/request-context";
 import { Hono } from "hono";
 import { z } from "zod";
 import { currentDeviceGrant, currentMember } from "../auth/session";
@@ -22,6 +23,7 @@ export function createNotificationRoutes(
       context.env,
       member.householdId,
       sourceFor(context.env),
+      commandContext(context),
     );
     return success(
       context,
@@ -34,6 +36,7 @@ export function createNotificationRoutes(
       context.env,
       member.householdId,
       sourceFor(context.env),
+      commandContext(context),
     );
     return success(context, {
       preferences: await service.repository.preferences(member.id),
@@ -45,6 +48,7 @@ export function createNotificationRoutes(
       context.env,
       member.householdId,
       sourceFor(context.env),
+      commandContext(context),
     );
     return success(context, {
       preferences: await service.repository.setPreferences(
@@ -63,6 +67,7 @@ export function createNotificationRoutes(
       context.env,
       member.householdId,
       sourceFor(context.env),
+      commandContext(context),
     );
     return success(context, {
       subscription: await service.repository.currentSubscription(
@@ -78,6 +83,7 @@ export function createNotificationRoutes(
       context.env,
       member.householdId,
       sourceFor(context.env),
+      commandContext(context),
     );
     return success(context, {
       subscription: await service.register(
@@ -94,6 +100,7 @@ export function createNotificationRoutes(
       context.env,
       member.householdId,
       sourceFor(context.env),
+      commandContext(context),
     );
     await service.repository.deleteCurrentSubscription(
       member.id,
@@ -113,6 +120,7 @@ export function createNotificationRoutes(
       context.env,
       member.householdId,
       sourceFor(context.env),
+      commandContext(context),
     );
     return success(context, {
       notification: await service.deliveryCheck(
@@ -130,6 +138,7 @@ export function createNotificationRoutes(
       context.env,
       member.householdId,
       sourceFor(context.env),
+      commandContext(context),
     );
     const notice = await service.repository.markRead(
       member.id,

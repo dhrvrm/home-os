@@ -1,3 +1,4 @@
+import type { HouseholdCommand } from "../platform/household-command";
 import type { CommandContext } from "../platform/context";
 import type { InventoryFilter, InventoryItem, StockEvent } from "./model";
 
@@ -9,6 +10,7 @@ export interface AuditChange {
 }
 
 export interface InventoryMutation {
+  command?: HouseholdCommand;
   context: CommandContext;
   action: string;
   expectedVersion: number;
@@ -16,6 +18,9 @@ export interface InventoryMutation {
 }
 
 export interface InventoryRepository {
+  listHouseholdEvents?(householdId: string, since: string): Promise<StockEvent[]>;
+  latestRestocks?(householdId: string): Promise<Map<string, string>>;
+  beginMutation?(context: CommandContext, action: string, entityId: string | undefined, input: unknown): Promise<{ command: HouseholdCommand; replay: InventoryItem | null }>;
   listItems(householdId: string, filter: InventoryFilter): Promise<InventoryItem[]>;
   getItem(householdId: string, itemId: string): Promise<InventoryItem>;
   createItem(item: InventoryItem, mutation: InventoryMutation): Promise<InventoryItem>;

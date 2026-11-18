@@ -1,3 +1,5 @@
+import type { VerifiedAuthority } from "./authority";
+import { capabilities, permits, httpAction, type Action } from "./permissions";
 import { getCookie, setCookie } from "hono/cookie";
 import type { Context, MiddlewareHandler } from "hono";
 import type { Env } from "../env";
@@ -13,7 +15,7 @@ export interface AuthUser {
   role: "owner" | "member" | "viewer";
 }
 
-export interface AuthSession { user: AuthUser; expiresAt: string }
+export interface AuthSession { user: AuthUser; expiresAt: string; capabilities: Action[] }
 export interface DeviceGrant { tokenHash: string; expiresAt: string; credentialVersion: number }
 export type AuthContext = Context<{ Bindings: Env }>;
 
@@ -44,6 +46,12 @@ export function requireOwner(context: AuthContext): AuthUser {
   return member;
 }
 
+export function currentAuthority(context: AuthContext): VerifiedAuthority {
+  const member = currentMember(context);
+  const grant = currentDeviceGrant(context);
+  return { memberId: member.id, householdId: member.householdId, role: member.role, proof: { kind: "browser", tokenHash: grant.tokenHash, credentialVersion: grant.credentialVersion } };
+}
+
 export function currentDeviceGrant(context: AuthContext): DeviceGrant {
   const grant = context.get("deviceGrant");
   if (!grant) throw new HomeOSError("Sign in to enable device reminders.", "unauthorized", 401);
@@ -72,13 +80,13 @@ async function readSessionWithGrant(context: AuthContext): Promise<(AuthSession 
   ).bind(tokenHash, new Date().toISOString(), context.env.HOMEOS_DEFAULT_HOUSEHOLD_ID)
     .first<{ id: string; household_id: string; display_name: string; email: string; role: AuthUser["role"]; expires_at: string; credential_version: number }>();
   if (!row) return null;
-  return { user: { id: row.id, householdId: row.household_id, name: row.display_name, email: row.email, role: row.role }, expiresAt: row.expires_at,
+  return { capabilities: capabilities({ memberId: row.id, householdId: row.household_id, role: row.role, kind: "browser" }), user: { id: row.id, householdId: row.household_id, name: row.display_name, email: row.email, role: row.role }, expiresAt: row.expires_at,
     grant: { tokenHash, expiresAt: row.expires_at, credentialVersion: row.credential_version } };
 }
 
 export async function readSession(context: AuthContext): Promise<AuthSession | null> {
   const session = await readSessionWithGrant(context);
-  return session ? { user: session.user, expiresAt: session.expiresAt } : null;
+  return session ? { user: session.user, expiresAt: session.expiresAt, capabilities: session.capabilities } : null;
 }
 
 export async function createSession(context: AuthContext, user: AuthUser, remember: boolean, credentialVersion: number): Promise<AuthSession> {
@@ -92,7 +100,7 @@ export async function createSession(context: AuthContext, user: AuthUser, rememb
       .bind(await digest(token), user.id, credentialVersion, expiresAt, now.toISOString()),
   ]);
   setCookie(context, COOKIE, token, { path: "/", httpOnly: true, sameSite: "Strict", secure: new URL(context.req.url).protocol === "https:", ...(remember ? { maxAge: seconds } : {}) });
-  return { user, expiresAt };
+  return { user, expiresAt, capabilities: capabilities({ memberId: user.id, householdId: user.householdId, role: user.role, kind: "browser" }) };
 }
 
 export async function revokeCurrentSession(context: AuthContext): Promise<void> {
@@ -124,14 +132,9 @@ export const protectHousehold: MiddlewareHandler<{ Bindings: Env }> = async (con
   }
   context.set("member", session.user);
   context.set("deviceGrant", session.grant);
-  if (session.user.role === "viewer" && context.req.path !== "/api/v1/auth/password" && !personalNotificationWrite(context.req.method, context.req.path) && !["GET", "HEAD", "OPTIONS"].includes(context.req.method)) {
-    return failure(context, { code: "forbidden", message: "Your account has read-only access." }, 403);
+  const action = httpAction(context.req.method, context.req.path);
+  if (action && !permits({ memberId: session.user.id, householdId: session.user.householdId, role: session.user.role, kind: "browser" }, action, { householdId: session.user.householdId, memberId: session.user.id })) {
+    return failure(context, { code: "forbidden", message: "Your account cannot perform this action." }, 403);
   }
   return next();
 };
-
-function personalNotificationWrite(method: string, path: string): boolean {
-  if (method === "PUT" && path === "/api/v1/notifications/preferences") return true;
-  if (["PUT", "DELETE"].includes(method) && path === "/api/v1/notifications/subscriptions/current") return true;
-  return method === "PATCH" && /^\/api\/v1\/notifications\/[A-Za-z0-9_-]{1,128}$/.test(path);
-}

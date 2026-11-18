@@ -1,5 +1,5 @@
+import { beginCommand, replayCommand, commitCommand } from "../platform/household-command";
 import { ConflictError, NotFoundError } from "../platform/errors";
-import { createId } from "../platform/ids";
 import type { InventoryFilter, InventoryItem, StockEvent } from "./model";
 import type { InventoryMutation, InventoryRepository } from "./repository";
 
@@ -43,12 +43,15 @@ interface EventRow {
   created_at: string;
 }
 
-interface ProcessedRow {
-  result_json: string;
-}
 
 export class D1InventoryRepository implements InventoryRepository {
   constructor(private readonly database: D1Database) {}
+
+  async beginMutation(context: import("../platform/context").CommandContext, action: string, entityId: string | undefined, input: unknown) {
+    const command = await beginCommand(this.database, context, "inventory_item", action, entityId, input);
+    return { command, replay: await replayCommand<InventoryItem>(this.database, command) };
+  }
+
 
   async listItems(householdId: string, filter: InventoryFilter): Promise<InventoryItem[]> {
     const result = await this.database
@@ -62,7 +65,21 @@ export class D1InventoryRepository implements InventoryRepository {
       )
       .bind(householdId)
       .all<ItemRow>();
-    const items = await Promise.all(result.results.map((row) => this.hydrateItem(row)));
+    const [names, categories] = await this.database.batch([
+      this.database.prepare(`SELECT n.item_id, n.name FROM inventory_alternative_names n JOIN inventory_items i ON i.id = n.item_id WHERE i.household_id = ? ORDER BY n.position`).bind(householdId),
+      this.database.prepare(`SELECT ic.item_id, c.name FROM inventory_item_categories ic JOIN categories c ON c.id = ic.category_id JOIN inventory_items i ON i.id = ic.item_id WHERE i.household_id = ? ORDER BY ic.position`).bind(householdId),
+    ]);
+    const group = (rows: unknown[]) => {
+      const map = new Map<string, { name: string }[]>();
+      for (const row of rows as { item_id: string; name: string }[]) {
+        const entries = map.get(row.item_id) ?? [];
+        entries.push(row);
+        map.set(row.item_id, entries);
+      }
+      return map;
+    };
+    const namesByItem = group(names.results), categoriesByItem = group(categories.results);
+    const items = result.results.map(row => this.mapItem(row, namesByItem.get(row.id) ?? [], categoriesByItem.get(row.id) ?? []));
     const query = filter.query?.trim().toLocaleLowerCase();
     const category = filter.category?.trim().toLocaleLowerCase();
     return items.filter((item) => {
@@ -96,9 +113,6 @@ export class D1InventoryRepository implements InventoryRepository {
   }
 
   async createItem(item: InventoryItem, mutation: InventoryMutation): Promise<InventoryItem> {
-    const replay = await this.replayedItem(mutation);
-    if (replay) return replay;
-
     const statements: D1PreparedStatement[] = [
       this.database
         .prepare(
@@ -127,15 +141,11 @@ export class D1InventoryRepository implements InventoryRepository {
           item.archivedAt,
         ),
       ...(await this.nameAndCategoryStatements(item, false)),
-      this.processedStatement(item, mutation),
-      this.auditStatement(item, mutation),
     ];
     return this.executeMutation(statements, item, mutation);
   }
 
   async updateItem(item: InventoryItem, mutation: InventoryMutation): Promise<InventoryItem> {
-    const replay = await this.replayedItem(mutation);
-    if (replay) return replay;
     const statements: D1PreparedStatement[] = [
       this.guardStatement(item, mutation),
       this.database
@@ -159,16 +169,12 @@ export class D1InventoryRepository implements InventoryRepository {
           mutation.expectedVersion,
         ),
       ...(await this.nameAndCategoryStatements(item, true)),
-      this.processedStatement(item, mutation),
-      this.auditStatement(item, mutation),
       this.releaseGuardStatement(item, mutation),
     ];
     return this.executeMutation(statements, item, mutation);
   }
 
   async setArchived(item: InventoryItem, mutation: InventoryMutation): Promise<InventoryItem> {
-    const replay = await this.replayedItem(mutation);
-    if (replay) return replay;
     return this.executeMutation(
       [
         this.guardStatement(item, mutation),
@@ -186,9 +192,7 @@ export class D1InventoryRepository implements InventoryRepository {
             item.id,
             mutation.expectedVersion,
           ),
-        this.processedStatement(item, mutation),
-        this.auditStatement(item, mutation),
-        this.releaseGuardStatement(item, mutation),
+            this.releaseGuardStatement(item, mutation),
       ],
       item,
       mutation,
@@ -200,8 +204,6 @@ export class D1InventoryRepository implements InventoryRepository {
     event: StockEvent,
     mutation: InventoryMutation,
   ): Promise<InventoryItem> {
-    const replay = await this.replayedItem(mutation);
-    if (replay) return replay;
     return this.executeMutation(
       [
         this.guardStatement(item, mutation),
@@ -241,9 +243,7 @@ export class D1InventoryRepository implements InventoryRepository {
             event.occurredAt,
             event.createdAt,
           ),
-        this.processedStatement(item, mutation),
-        this.auditStatement(item, mutation),
-        this.releaseGuardStatement(item, mutation),
+            this.releaseGuardStatement(item, mutation),
       ],
       item,
       mutation,
@@ -276,6 +276,16 @@ export class D1InventoryRepository implements InventoryRepository {
     }));
   }
 
+  async listHouseholdEvents(householdId: string, since: string): Promise<StockEvent[]> {
+    const rows = await this.database.prepare(`SELECT id, household_id, item_id, event_type, quantity, stock_level, level_percent, note, actor_id, occurred_at, created_at FROM inventory_stock_events WHERE household_id = ? AND occurred_at >= ? ORDER BY occurred_at ASC, id ASC`).bind(householdId, since).all<EventRow>();
+    return rows.results.map(row => ({ id: row.id, householdId: row.household_id, itemId: row.item_id, type: row.event_type, quantity: row.quantity, stockLevel: row.stock_level, levelPercent: row.level_percent, note: row.note, actorId: row.actor_id, occurredAt: row.occurred_at, createdAt: row.created_at }));
+  }
+
+  async latestRestocks(householdId: string): Promise<Map<string, string>> {
+    const rows = await this.database.prepare(`SELECT item_id, MAX(occurred_at) AS occurred_at FROM inventory_stock_events WHERE household_id = ? AND event_type = 'restock' GROUP BY item_id`).bind(householdId).all<{ item_id: string; occurred_at: string }>();
+    return new Map(rows.results.map(row => [row.item_id, row.occurred_at]));
+  }
+
   async latestRestockAt(householdId: string, itemId: string): Promise<string | null> {
     const row = await this.database
       .prepare(
@@ -305,8 +315,12 @@ export class D1InventoryRepository implements InventoryRepository {
         )
         .bind(row.id),
     ]);
-    const alternativeNames = (names.results as unknown as NameRow[]).map((value) => value.name);
-    const categoryValues = (categories.results as unknown as CategoryRow[]).map((value) => value.name);
+    return this.mapItem(row, names.results as unknown as NameRow[], categories.results as unknown as CategoryRow[]);
+  }
+
+  private mapItem(row: ItemRow, names: NameRow[], categories: CategoryRow[]): InventoryItem {
+    const alternativeNames = names.map((value) => value.name);
+    const categoryValues = categories.map((value) => value.name);
     const safeCategories = categoryValues.length ? categoryValues : ["Other"];
     return {
       id: row.id,
@@ -393,81 +407,20 @@ export class D1InventoryRepository implements InventoryRepository {
       .bind(item.householdId, mutation.context.operationId);
   }
 
-  private processedStatement(item: InventoryItem, mutation: InventoryMutation): D1PreparedStatement {
-    return this.database
-      .prepare(
-        `INSERT INTO processed_operations (
-           household_id, operation_id, entity_type, entity_id, result_json, processed_at
-         ) VALUES (?, ?, 'inventory_item', ?, ?, ?)`,
-      )
-      .bind(
-        item.householdId,
-        mutation.context.operationId,
-        item.id,
-        JSON.stringify(durableItem(item)),
-        item.updatedAt,
-      );
-  }
-
-  private auditStatement(item: InventoryItem, mutation: InventoryMutation): D1PreparedStatement {
-    const context = mutation.context;
-    return this.database
-      .prepare(
-        `INSERT INTO audit_events (
-           id, household_id, entity_type, entity_id, action, actor_id, actor_type,
-           source, device_id, operation_id, client_time, server_time, changes_json,
-           mcp_client_id, mcp_tool
-         ) VALUES (?, ?, 'inventory_item', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .bind(
-        createId(),
-        item.householdId,
-        item.id,
-        mutation.action,
-        context.actorId,
-        context.actorType,
-        context.source,
-        context.deviceId ?? null,
-        context.operationId,
-        context.clientTime ?? null,
-        item.updatedAt,
-        JSON.stringify(mutation.changes),
-        context.mcpClientId ?? null,
-        context.mcpTool ?? null,
-      );
-  }
-
-  private async replayedItem(mutation: InventoryMutation): Promise<InventoryItem | null> {
-    const row = await this.database
-      .prepare("SELECT result_json FROM processed_operations WHERE household_id = ? AND operation_id = ?")
-      .bind(mutation.context.householdId, mutation.context.operationId)
-      .first<ProcessedRow>();
-    return row ? (JSON.parse(row.result_json) as InventoryItem) : null;
-  }
-
   private async executeMutation(
     statements: D1PreparedStatement[],
     item: InventoryItem,
     mutation: InventoryMutation,
   ): Promise<InventoryItem> {
-    try {
-      await this.database.batch(statements);
-      return structuredClone(item);
-    } catch (error) {
-      const replay = await this.replayedItem(mutation);
-      if (replay) return replay;
-      const current = await this.database
-        .prepare("SELECT version FROM inventory_items WHERE household_id = ? AND id = ?")
-        .bind(item.householdId, item.id)
-        .first<{ version: number }>();
+    if (!mutation.command) throw new Error("Mutation requires verified command admission");
+    mutation.command.changes = mutation.changes;
+    return commitCommand(this.database, mutation.command, durableItem(item), item.id, item.updatedAt, statements, async () => {
+      const current = await this.database.prepare("SELECT version FROM inventory_items WHERE household_id = ? AND id = ?").bind(item.householdId, item.id).first<{ version: number }>();
       if (mutation.expectedVersion > 0) {
         if (!current) throw new NotFoundError("inventory_item", item.id);
-        if (current.version !== mutation.expectedVersion) {
-          throw new ConflictError("inventory_item", item.id, mutation.expectedVersion, current.version);
-        }
+        if (current.version !== mutation.expectedVersion) throw new ConflictError("inventory_item", item.id, mutation.expectedVersion, current.version);
       }
-      throw error;
-    }
+    });
   }
 }
 

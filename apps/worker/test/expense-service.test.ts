@@ -1,5 +1,6 @@
+import { digest } from "../src/auth/crypto";
 import { env } from "cloudflare:workers";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { D1ExpenseRepository } from "../src/expenses/catalog/d1-repository";
 import { ExpenseService } from "../src/expenses/catalog/service";
 import type { CreateExpenseInput } from "../src/expenses/catalog/model";
@@ -9,6 +10,13 @@ import { ConflictError, ValidationError } from "../src/platform/errors";
 const HOUSEHOLD_ID = "home";
 const database = (env as unknown as { DB: D1Database }).DB;
 
+const proofHash = await digest("a".repeat(64));
+beforeEach(async () => {
+  await database.batch([
+    database.prepare("INSERT OR IGNORE INTO auth_accounts (member_id, email, password_hash, updated_at) VALUES ('local-owner', 'expense-owner@example.test', 'fixture-verifier', CURRENT_TIMESTAMP)"),
+    database.prepare("INSERT OR IGNORE INTO auth_sessions (token_hash, member_id, credential_version, expires_at, created_at) VALUES (?, 'local-owner', 1, '2099-01-01T00:00:00.000Z', CURRENT_TIMESTAMP)").bind(proofHash),
+  ]);
+});
 function service(): ExpenseService {
   return new ExpenseService(new D1ExpenseRepository(database));
 }
@@ -17,6 +25,7 @@ function context(operationId: string, expectedVersion?: number): CommandContext 
   return {
     householdId: HOUSEHOLD_ID,
     actorId: "local-owner",
+    authority: { householdId: "home", memberId: "local-owner", role: "owner", proof: { kind: "browser", tokenHash: proofHash, credentialVersion: 1 } },
     actorType: "member",
     source: "pwa",
     operationId,

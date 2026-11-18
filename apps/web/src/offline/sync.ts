@@ -112,7 +112,20 @@ export async function markDirectConflict(
   });
 }
 
-async function performSync(
+const SYNC_PAGE_SIZE = 2;
+async function performSync(database: HomeOSDatabase, options: SyncOptions, lease: WorkLease): Promise<{ accepted: number; conflicts: number; cursor: number }> {
+  let accepted = 0, conflicts = 0, cursor = 0;
+  do {
+    lease.check();
+    const page = await performSyncPage(database, options, lease);
+    accepted += page.accepted;
+    conflicts += page.conflicts;
+    cursor = page.cursor;
+  } while (await database.outbox.where("state").equals("pending").count() > 0);
+  return { accepted, conflicts, cursor };
+}
+
+async function performSyncPage(
   database: HomeOSDatabase,
   options: SyncOptions,
   lease: WorkLease,
@@ -120,7 +133,7 @@ async function performSync(
   const householdId = options.householdId ?? "home";
   const fetcher = options.fetcher ?? fetch;
   const syncState = (await database.syncState.get(householdId)) ?? emptySyncState(householdId);
-  const operations = await database.outbox.where("state").equals("pending").sortBy("order");
+  const operations = (await database.outbox.where("state").equals("pending").sortBy("order")).slice(0, SYNC_PAGE_SIZE);
   const operationIds = operations.map((operation) => operation.operationId);
   lease.check();
   await markOutbox(database, operationIds, "sending");
@@ -150,6 +163,7 @@ async function performSync(
       throw new APIError(envelope.error?.message ?? "Home OS could not synchronize.", envelope.error?.code);
     }
     lease.check();
+    if (operationIds.some(id => !envelope.data!.results.some(result => result.operationId === id))) throw new APIError("The server did not acknowledge every change. Your changes remain queued.", "invalid_response");
   } catch (error) {
     await markOutbox(database, operationIds, "pending");
     throw error;
@@ -169,6 +183,9 @@ async function performSync(
       async () => {
         lease.check();
         for (const item of data.items) {
+          // Later pages still own their optimistic state, including after a partial reconnect.
+          const outstanding = await database.outbox.where("entityId").equals(item.id).toArray();
+          if (outstanding.some(operation => !accepted.has(operation.operationId) && !conflicts.some(result => result.operationId === operation.operationId))) continue;
           const conflict = conflicts.some((result) => result.item?.id === item.id || operations.find(
             (operation) => operation.operationId === result.operationId,
           )?.entityId === item.id);

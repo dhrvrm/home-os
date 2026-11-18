@@ -1,3 +1,6 @@
+import { authorizedBatch, authorityDenied } from "../auth/authority";
+import type { Action } from "../auth/permissions";
+import type { CommandContext } from "../platform/context";
 import type { DeviceGrant } from "../auth/session";
 import { HomeOSError } from "../platform/errors";
 import type { MealReminderCandidate } from "../meals/model";
@@ -73,7 +76,26 @@ export class NotificationRepository {
   constructor(
     readonly db: D1Database,
     readonly householdId: string,
+    readonly context?: CommandContext,
   ) {}
+
+  private async personalWrite(
+    memberId: string,
+    action: Action,
+    statements: D1PreparedStatement[],
+    context = this.context,
+  ) {
+    if (
+      !context ||
+      context.actorId !== memberId ||
+      context.householdId !== this.householdId
+    )
+      throw authorityDenied();
+    return authorizedBatch(this.db, context, action, statements, {
+      householdId: this.householdId,
+      memberId,
+    });
+  }
 
   async scanCursor(): Promise<string | undefined> {
     const row = await this.db
@@ -112,21 +134,28 @@ export class NotificationRepository {
     memberId: string,
     preferences: NotificationPreferences,
     now: string,
+    authority?: CommandContext,
   ): Promise<NotificationPreferences> {
-    await this.db
-      .prepare(
-        `INSERT INTO notification_preferences (household_id, member_id, meal_reminders, push_enabled, updated_at)
+    await this.personalWrite(
+      memberId,
+      "notification_preferences_set",
+      [
+        this.db
+          .prepare(
+            `INSERT INTO notification_preferences (household_id, member_id, meal_reminders, push_enabled, updated_at)
       VALUES (?, ?, ?, ?, ?) ON CONFLICT(member_id) DO UPDATE SET meal_reminders = excluded.meal_reminders,
       push_enabled = excluded.push_enabled, updated_at = excluded.updated_at WHERE household_id = excluded.household_id`,
-      )
-      .bind(
-        this.householdId,
-        memberId,
-        Number(preferences.mealReminders),
-        Number(preferences.pushEnabled),
-        now,
-      )
-      .run();
+          )
+          .bind(
+            this.householdId,
+            memberId,
+            Number(preferences.mealReminders),
+            Number(preferences.pushEnabled),
+            now,
+          ),
+      ],
+      authority,
+    );
     return this.preferences(memberId);
   }
 
@@ -170,12 +199,13 @@ export class NotificationRepository {
     id: string,
     now: string,
   ): Promise<HouseholdNotification | null> {
-    await this.db
-      .prepare(
-        "UPDATE notifications SET read_at = COALESCE(read_at, ?) WHERE household_id = ? AND member_id = ? AND id = ?",
-      )
-      .bind(now, this.householdId, memberId, id)
-      .run();
+    await this.personalWrite(memberId, "notifications_mark_read", [
+      this.db
+        .prepare(
+          "UPDATE notifications SET read_at = COALESCE(read_at, ?) WHERE household_id = ? AND member_id = ? AND id = ?",
+        )
+        .bind(now, this.householdId, memberId, id),
+    ]);
     return this.notification(memberId, id, now);
   }
 
@@ -248,20 +278,40 @@ export class NotificationRepository {
     const id = own?.id ?? crypto.randomUUID();
     // A matching browser permission may move to the newly admitted account/session.
     // The conditional delete prevents an unrelated endpoint registration taking it over.
-    const result = await this.db.batch([
-      this.db
-        .prepare(
-          `DELETE FROM notification_subscriptions WHERE endpoint_hash = ? AND session_hash != ? AND p256dh = ? AND auth = ?`,
-        )
-        .bind(
-          endpointHash,
-          grant.tokenHash,
-          native.keys.p256dh,
-          native.keys.auth,
-        ),
-      this.db
-        .prepare(
-          `INSERT INTO notification_subscriptions
+    const authority: CommandContext = this.context ?? {
+      householdId: this.householdId,
+      actorId: memberId,
+      actorType: "member",
+      source: "pwa",
+      operationId: crypto.randomUUID(),
+      authority: {
+        householdId: this.householdId,
+        memberId,
+        role: "viewer",
+        proof: {
+          kind: "browser",
+          tokenHash: grant.tokenHash,
+          credentialVersion: grant.credentialVersion,
+        },
+      },
+    };
+    const result = await this.personalWrite(
+      memberId,
+      "notification_device_setup",
+      [
+        this.db
+          .prepare(
+            `DELETE FROM notification_subscriptions WHERE endpoint_hash = ? AND session_hash != ? AND p256dh = ? AND auth = ?`,
+          )
+          .bind(
+            endpointHash,
+            grant.tokenHash,
+            native.keys.p256dh,
+            native.keys.auth,
+          ),
+        this.db
+          .prepare(
+            `INSERT INTO notification_subscriptions
         (id, household_id, member_id, session_hash, endpoint_hash, endpoint, p256dh, auth, expiration_time, created_at, updated_at)
         SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE EXISTS
           (SELECT 1 FROM auth_sessions s JOIN members m ON m.id = s.member_id JOIN auth_accounts a ON a.member_id = m.id
@@ -269,39 +319,40 @@ export class NotificationRepository {
         ON CONFLICT(session_hash) DO UPDATE SET endpoint_hash = excluded.endpoint_hash, endpoint = excluded.endpoint,
           p256dh = excluded.p256dh, auth = excluded.auth, expiration_time = excluded.expiration_time, updated_at = excluded.updated_at
         WHERE household_id = excluded.household_id AND member_id = excluded.member_id`,
-        )
-        .bind(
-          id,
-          this.householdId,
-          memberId,
-          grant.tokenHash,
-          endpointHash,
-          native.endpoint,
-          native.keys.p256dh,
-          native.keys.auth,
-          native.expirationTime ?? null,
-          now,
-          now,
-          grant.tokenHash,
-          memberId,
-          this.householdId,
-          now,
-        ),
-    ]);
-    if (result[1]!.meta.changes !== 1)
+          )
+          .bind(
+            id,
+            this.householdId,
+            memberId,
+            grant.tokenHash,
+            endpointHash,
+            native.endpoint,
+            native.keys.p256dh,
+            native.keys.auth,
+            native.expirationTime ?? null,
+            now,
+            now,
+            grant.tokenHash,
+            memberId,
+            this.householdId,
+            now,
+          ),
+        // Keep registration and its per-person device cap in the same admitted transaction.
+        this.db
+          .prepare(
+            `DELETE FROM notification_subscriptions WHERE household_id = ? AND member_id = ? AND id IN
+        (SELECT id FROM notification_subscriptions WHERE household_id = ? AND member_id = ? ORDER BY updated_at DESC, id DESC LIMIT -1 OFFSET 8)`,
+          )
+          .bind(this.householdId, memberId, this.householdId, memberId),
+      ],
+      authority,
+    );
+    if (result[2]!.meta.changes !== 1)
       throw new HomeOSError(
         "Your session has ended. Sign in again.",
         "unauthorized",
         401,
       );
-    // Retain at most eight device registrations per person. Sessions themselves remain intact.
-    await this.db
-      .prepare(
-        `DELETE FROM notification_subscriptions WHERE household_id = ? AND member_id = ? AND id IN
-      (SELECT id FROM notification_subscriptions WHERE household_id = ? AND member_id = ? ORDER BY updated_at DESC, id DESC LIMIT -1 OFFSET 8)`,
-      )
-      .bind(this.householdId, memberId, this.householdId, memberId)
-      .run();
     return this.currentSubscription(memberId, grant, now);
   }
 
@@ -309,12 +360,13 @@ export class NotificationRepository {
     memberId: string,
     tokenHash: string,
   ): Promise<void> {
-    await this.db
-      .prepare(
-        "DELETE FROM notification_subscriptions WHERE household_id = ? AND member_id = ? AND session_hash = ?",
-      )
-      .bind(this.householdId, memberId, tokenHash)
-      .run();
+    await this.personalWrite(memberId, "notification_device_setup", [
+      this.db
+        .prepare(
+          "DELETE FROM notification_subscriptions WHERE household_id = ? AND member_id = ? AND session_hash = ?",
+        )
+        .bind(this.householdId, memberId, tokenHash),
+    ]);
   }
 
   async createReminder(
