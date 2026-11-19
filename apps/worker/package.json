@@ -9,6 +9,7 @@
     "deploy": "wrangler deploy",
     "dev": "wrangler dev",
     "lint": "tsc --noEmit",
+    "pretest": "npm run build --workspace @home-os/web",
     "test": "vitest run"
   },
   "dependencies": {
