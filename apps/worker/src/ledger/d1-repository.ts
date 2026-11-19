@@ -5,7 +5,7 @@ import { ConflictError, NotFoundError, ValidationError } from '../platform/error
 import { beginCommand, commandGuard, commitCommand, replayCommand } from '../platform/household-command';
 import type { LedgerEffect, LedgerEntry, StoredLedgerRevision } from './model';
 import type { LedgerAcceptance, LedgerRepository } from './repository';
-import { effects } from './service';
+import { effects } from './allocation';
 /** All write guards and retained money are submitted in one D1 transactional batch. */
 export class D1LedgerRepository implements LedgerRepository {
     constructor(private readonly database: D1Database) { }

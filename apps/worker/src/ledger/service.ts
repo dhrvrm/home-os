@@ -1,8 +1,8 @@
 import type { CommandContext } from '../platform/context';
 import { ConflictError, ValidationError } from '../platform/errors';
 import { createId } from '../platform/ids';
-import { resolveExpense } from './allocation';
-import type { ExpenseInput, LedgerCommand, LedgerEffect, LedgerEntry, LedgerRevision } from './model';
+import { effects, resolveExpense } from './allocation';
+import type { ExpenseInput, LedgerCommand, LedgerEntry, LedgerRevision } from './model';
 import type { LedgerRepository } from './repository';
 import { expenseInput, ledgerCommandInput } from './validation';
 export class LedgerService {
@@ -105,13 +105,4 @@ export class LedgerService {
             },
         });
     }
-}
-/** Combine paid and allocated sides once; zero effects retain named participants. */
-export function effects(entry: LedgerEntry, direction: 1 | -1 = 1): LedgerEffect[] {
-    const net = new Map<string, number>();
-    for (const p of entry.payers)
-        net.set(p.memberId, (net.get(p.memberId) ?? 0) + p.amountMinor);
-    for (const p of entry.shares)
-        net.set(p.memberId, (net.get(p.memberId) ?? 0) - p.amountMinor);
-    return [...net].map(([memberId, amountMinor]) => ({ entryId: entry.id, version: entry.version, memberId, currency: entry.intent.currency, amountMinor: amountMinor * direction }));
 }

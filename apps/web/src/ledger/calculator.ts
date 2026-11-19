@@ -2,7 +2,7 @@ import { addRational, decimalMoney, divideRational, LedgerMoneyError, multiplyRa
 
 export type CalculatorResult = { ok: true; amountMinor: number; display: string } | { ok: false; error: string };
 type Value = { value: Rational; percent: boolean };
-const ZERO = BigInt(0), ONE = BigInt(1), HUNDRED = BigInt(100);
+const HUNDRED = BigInt(100);
 function invalid(message: string): never { throw new LedgerMoneyError("invalid_calculation", message); }
 
 /** Recursive-descent arithmetic only: no executable expression evaluation. */
@@ -65,8 +65,7 @@ export function evaluateExpression(expression: string): Rational {
   }
   const result = addition(0);
   if (position !== tokens.length) invalid("Check the calculation operators");
-  // Normalize zero as well: consumers receive only the exact rational, never parser metadata.
-  return result.value.numerator === ZERO ? rational(ZERO, ONE) : result.value;
+  return result.value;
 }
 
 /** Applying only produces input text; the receiving amount field enforces its own domain. */

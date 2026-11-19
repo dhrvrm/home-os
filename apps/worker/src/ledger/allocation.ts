@@ -1,5 +1,5 @@
 import { assertInteger, assertMemberId, LedgerMoneyError, MAX_ENTRY_MINOR, MAX_PARTICIPANTS, resolveAllocation, resolveItemizedBill, type Share } from "../../../../shared/ledger-money";
-import type { ExpenseInput, RefundInput, ResolvedExpense } from "./model";
+import type { ExpenseInput, LedgerEffect, LedgerEntry, RefundInput, ResolvedExpense } from "./model";
 
 export function assertContributions(shares: Share[], totalMinor: number): void {
   assertInteger(totalMinor, 1, MAX_ENTRY_MINOR, "totalMinor");
@@ -26,4 +26,14 @@ export function validateRefundAllocation(input: RefundInput): void {
   assertContributions(input.payers, input.totalMinor);
   assertContributions(input.shares, input.totalMinor);
   assertParticipantUnion(input.payers, input.shares);
+}
+
+/** Combine paid and allocated sides once; zero effects retain named participants. */
+export function effects(entry: LedgerEntry, direction: 1 | -1 = 1): LedgerEffect[] {
+    const net = new Map<string, number>();
+    for (const p of entry.payers)
+        net.set(p.memberId, (net.get(p.memberId) ?? 0) + p.amountMinor);
+    for (const p of entry.shares)
+        net.set(p.memberId, (net.get(p.memberId) ?? 0) - p.amountMinor);
+    return [...net].map(([memberId, amountMinor]) => ({ entryId: entry.id, version: entry.version, memberId, currency: entry.intent.currency, amountMinor: amountMinor * direction }));
 }
