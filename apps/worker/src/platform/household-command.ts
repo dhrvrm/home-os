@@ -19,6 +19,8 @@ export interface HouseholdCommand {
     | "contact"
     | "inventory_item"
     | "expense_rule"
+    | "ledger_entry"
+    | "ledger_comment"
     | "member"
     | "notification_preferences"
     | "notification";
@@ -126,18 +128,22 @@ export async function replayCommand<T>(
   }
   const used = await database
     .prepare(
-      `SELECT operation_id FROM audit_events WHERE household_id = ? AND operation_id = ?
-     UNION ALL
-     SELECT operation_id FROM processed_operations WHERE household_id = ? AND operation_id = ? LIMIT 1`,
+      `SELECT (${predicate.sql}) AS authority_admitted, EXISTS (
+       SELECT operation_id FROM audit_events WHERE household_id = ? AND operation_id = ?
+       UNION ALL
+       SELECT operation_id FROM processed_operations WHERE household_id = ? AND operation_id = ?
+     ) AS used`,
     )
     .bind(
+      ...predicate.values,
       context.householdId,
       context.operationId,
       context.householdId,
       context.operationId,
     )
-    .first();
-  if (used) throw operationConflict(command);
+    .first<{ authority_admitted: number; used: number }>();
+  if (!used?.authority_admitted) throw authorityDenied();
+  if (used.used) throw operationConflict(command);
   return null;
 }
 

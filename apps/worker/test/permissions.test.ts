@@ -7,6 +7,7 @@ import {
   type Role,
 } from "../src/auth/permissions";
 const reads = [
+  "ledger_list", "ledger_get", "ledger_history", "ledger_balances", "ledger_statements", "ledger_export",
   "inventory_list",
   "inventory_attention",
   "inventory_get",

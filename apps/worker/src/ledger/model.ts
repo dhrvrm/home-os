@@ -65,8 +65,15 @@ export interface RecurringPostingSource {
 export interface LedgerEntry {
   id: string; householdId: string; version: number; lifecycle: LedgerLifecycle;
   intent: FinancialInput; payers: Share[]; shares: Share[];
+  itemized?: ItemizedResult;
   source?: RecurringPostingSource; createdAt: string; updatedAt: string;
 }
 /** Signed effects are authoritative-accounting proposals, never a second direct-debt store. */
 export interface LedgerEffect { entryId: string; version: number; memberId: string; currency: Currency; amountMinor: number }
 export interface LedgerPage<T> { items: T[]; nextCursor: string | null; revision: number }
+
+/** Immutable accepted raw + resolved snapshot; transitions never replace current effects. */
+export interface StoredLedgerRevision extends LedgerRevision {
+  snapshot: LedgerEntry;
+  transitions: Array<LedgerEffect & { effectKind: "reversal" | "replacement" }>;
+}

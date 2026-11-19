@@ -26,6 +26,18 @@ export const ACTIONS = {
   inventory_archive: write,
   inventory_restore: write,
   activity_list: read,
+  ledger_list: read,
+  ledger_get: read,
+  ledger_history: read,
+  ledger_balances: read,
+  ledger_statements: read,
+  ledger_export: read,
+  ledger_create: write,
+  ledger_correct: write,
+  ledger_void: write,
+  ledger_restore: write,
+  ledger_comment: write,
+  ledger_post: write,
   expenses_list: read,
   expenses_get: read,
   expenses_create: write,
@@ -198,6 +210,12 @@ export function httpAction(method: string, path: string): Action | undefined {
   return undefined;
 }
 export function commandAction(entityType: string, action: string): Action {
+  if (entityType === "ledger_comment") return "ledger_comment";
+  if (entityType === "ledger_entry") {
+    const verb = action.split(".").at(-1)!;
+    const actionMap: Record<string, Action> = { created: "ledger_create", corrected: "ledger_correct", voided: "ledger_void", restored: "ledger_restore", posted: "ledger_post" };
+    return actionMap[verb] ?? ("unknown" as Action);
+  }
   const verb = action.split(".").at(-1)!;
   const suffix = (
     {
