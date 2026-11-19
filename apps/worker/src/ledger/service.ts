@@ -37,21 +37,31 @@ export class LedgerService {
     async addComment(context: CommandContext, entryId: string, text: string): Promise<LedgerComment> {
         const parsed = ledgerCommandInput.safeParse({ operationId: context.operationId, action: 'comment', entryId, expectedVersion: context.expectedVersion, text });
         if (!parsed.success || parsed.data.action !== 'comment') throw new ValidationError('comment', parsed.success ? 'Invalid comment' : parsed.error.issues[0]!.message);
-        const admission = await this.repository.beginComment(context, entryId, parsed.data.text);
+        const commentText = parsed.data.text;
+        const begin = () => this.repository.beginComment(context, entryId, commentText);
+        const admission = await begin();
         if (admission.replay) return admission.replay;
-        const entry = await this.readForWrite(context, entryId, 'ledger_comment');
-        if (entry.version !== context.expectedVersion) throw new ConflictError('ledger_entry', entryId, context.expectedVersion!, entry.version, entry);
-        const comment: LedgerComment = { id: createId(), entryId, observedVersion: context.expectedVersion!, authorId: context.actorId, text: parsed.data.text, acceptedAt: new Date().toISOString() };
+        try {
+            const entry = await this.readForWrite(context, entryId, 'ledger_comment');
+            if (entry.version !== context.expectedVersion) throw new ConflictError('ledger_entry', entryId, context.expectedVersion!, entry.version, entry);
+        } catch (error) {
+            const { replay } = await begin();
+            if (replay) return replay;
+            throw error;
+        }
+        const comment: LedgerComment = { id: createId(), entryId, observedVersion: context.expectedVersion!, authorId: context.actorId, text: commentText, acceptedAt: new Date().toISOString() };
         return this.repository.acceptComment(admission.command, comment, context.expectedVersion!);
     }
     private async postRule(context: CommandContext, input: Extract<LedgerCommand, { action: 'post' }>): Promise<LedgerEntry> {
-        const admission = await this.repository.begin(context, 'ledger.entry.posted', undefined, input);
+        const begin = () => this.repository.begin(context, 'ledger.entry.posted', undefined, input);
+        const admission = await begin();
         if (admission.replay) return admission.replay;
         let source: RecurringPostingSource;
         try {
             source = await this.repository.postingBasis(context.householdId, input.ruleId, input.expectedRuleVersion, input.period);
         } catch (error) {
-            await this.repository.authorize(context, 'ledger_post');
+            const { replay } = await begin();
+            if (replay) return replay;
             throw error;
         }
         await this.repository.authorize(context, 'ledger_post');
@@ -72,14 +82,23 @@ export class LedgerService {
         const intent = parsed?.success ? parsed.data as FinancialInput : undefined;
         if (action !== 'create' && (!Number.isSafeInteger(context.expectedVersion) || (context.expectedVersion ?? 0) < 1)) throw new ValidationError('expectedVersion', 'Provide the version you last read');
         const event = { create: 'created', correct: 'corrected', void: 'voided', restore: 'restored', post: 'posted' }[action];
-        const admission = await this.repository.begin(context, `ledger.entry.${event}`, entryId, { action, entryId, entry: intent });
+        const begin = () => this.repository.begin(context, `ledger.entry.${event}`, entryId, { action, entryId, entry: intent });
+        const admission = await begin();
         if (admission.replay) return admission.replay;
-        const before = entryId ? await this.readForWrite(context, entryId, admission.command.policyAction) : null;
-        await this.repository.authorize(context, admission.command.policyAction);
-        if (before && before.version !== context.expectedVersion) throw new ConflictError('ledger_entry', before.id, context.expectedVersion!, before.version, before);
-        if (before && intent && (before.intent.kind !== intent.kind || (before.intent.kind === 'refund' && intent.kind === 'refund' && before.intent.expenseId !== intent.expenseId))) throw new ValidationError('entry', 'Correction must retain entry kind and original expense');
-        if (before && ((action === 'restore' && before.lifecycle !== 'void') || (action !== 'restore' && before.lifecycle !== 'effective'))) throw new ValidationError('lifecycle', 'This transition is not available for the current lifecycle');
-        if (before && before.version >= Number.MAX_SAFE_INTEGER) throw new ValidationError('version', 'The financial version limit has been reached');
+        let before: LedgerEntry | null;
+        try {
+            before = entryId ? await this.readForWrite(context, entryId, admission.command.policyAction) : null;
+            await this.repository.authorize(context, admission.command.policyAction);
+            if (before && before.version !== context.expectedVersion) throw new ConflictError('ledger_entry', before.id, context.expectedVersion!, before.version, before);
+            if (before && intent && (before.intent.kind !== intent.kind || (before.intent.kind === 'refund' && intent.kind === 'refund' && before.intent.expenseId !== intent.expenseId))) throw new ValidationError('entry', 'Correction must retain entry kind and original expense');
+            if (before && ((action === 'restore' && before.lifecycle !== 'void') || (action !== 'restore' && before.lifecycle !== 'effective'))) throw new ValidationError('lifecycle', 'This transition is not available for the current lifecycle');
+            if (before && before.version >= Number.MAX_SAFE_INTEGER) throw new ValidationError('version', 'The financial version limit has been reached');
+        } catch (error) {
+            // Another identical attempt may have committed since the first lookup.
+            const { replay } = await begin();
+            if (replay) return replay;
+            throw error;
+        }
         return this.accept(context, admission.command, action, before, intent, before?.source);
     }
     private async readForWrite(context: CommandContext, entryId: string, action: import('../auth/permissions').Action): Promise<LedgerEntry> {
