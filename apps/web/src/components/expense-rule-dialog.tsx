@@ -2,6 +2,8 @@
 
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { X } from "@phosphor-icons/react";
+import { AmountField } from "@/ledger/amount-field";
+import type { Currency } from "@/ledger/types";
 import {
   CURRENCY_MINOR_UNITS,
   DEFAULT_CURRENCY,
@@ -64,6 +66,7 @@ export function ExpenseRuleDialog({ rule, members, pending, error, onClose, onSu
   const [cadenceInterval, setCadenceInterval] = useState(String(rule?.cadence.interval ?? 1));
   const [anchorDate, setAnchorDate] = useState(rule?.cadence.anchorDate ?? todayISODate());
   const [rows, setRows] = useState<ParticipantRow[]>(() => initialRows(rule));
+  const [precisionReview, setPrecisionReview] = useState(false);
   const dialogRef = useRef<HTMLElement>(null);
   const returnFocusRef = useRef<HTMLElement | null>(document.activeElement instanceof HTMLElement ? document.activeElement : null);
 
@@ -110,7 +113,7 @@ export function ExpenseRuleDialog({ rule, members, pending, error, onClose, onSu
     : resolveShares({ totalMinor, minorUnit: minorUnitOf(currency), participants: splitParticipants as SplitParticipant[] });
   const interval = Number(cadenceInterval);
   const validCadence = Number.isSafeInteger(interval) && interval >= 1 && anchorDate !== "";
-  const submittable = name.trim() !== "" && totalMinor !== null && validCadence && preview?.ok === true;
+  const submittable = name.trim() !== "" && totalMinor !== null && validCadence && preview?.ok === true && !precisionReview;
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -142,16 +145,14 @@ export function ExpenseRuleDialog({ rule, members, pending, error, onClose, onSu
             <span>Expense name</span>
             <input value={name} onChange={(event) => setName(event.target.value)} autoFocus required maxLength={120} />
           </label>
-          <label className="field">
-            <span>Amount</span>
-            <input value={amountText} inputMode="decimal" onChange={(event) => setAmountText(event.target.value)} placeholder="0.00" />
-          </label>
+          <AmountField label="Amount" value={amountText} currency={currency as Currency} onChange={setAmountText} />
           <label className="field">
             <span>Currency</span>
-            <select value={currency} onChange={(event) => setCurrency(event.target.value)}>
+            <select value={currency} onChange={(event) => { setCurrency(event.target.value); setPrecisionReview(true); }}>
               {Object.keys(CURRENCY_MINOR_UNITS).map((code) => <option key={code} value={code}>{code}</option>)}
             </select>
           </label>
+          {precisionReview && <div className="field--wide" role="status">Currency changed. Amounts keep their entered major-unit values; no exchange conversion is performed. Review their precision.<button type="button" className="button button--quiet" onClick={() => setPrecisionReview(false)}>I reviewed the amounts</button></div>}
           <label className="field">
             <span>Repeat every</span>
             <input type="number" min="1" step="1" value={cadenceInterval} onChange={(event) => setCadenceInterval(event.target.value)} />
@@ -229,10 +230,7 @@ function SplitControls({ memberName: label, row, currency, onChange }: {
           {SPLIT_MODES.map((mode) => <option key={mode.value} value={mode.value}>{mode.label}</option>)}
         </select>
       </label>
-      {row.mode === "fixed" && <label className="field">
-        <span>Fixed amount for {label}</span>
-        <input value={row.fixedText} inputMode="decimal" onChange={(event) => onChange({ fixedText: event.target.value })} placeholder={currency} />
-      </label>}
+      {row.mode === "fixed" && <AmountField label={`Fixed amount for ${label}`} value={row.fixedText} currency={currency as Currency} onChange={(fixedText) => onChange({ fixedText })} allowZero />}
       {row.mode === "percent" && <label className="field">
         <span>Percentage for {label}</span>
         <input value={row.percentText} inputMode="decimal" onChange={(event) => onChange({ percentText: event.target.value })} placeholder="%" />
