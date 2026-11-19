@@ -1,3 +1,4 @@
+import { pageLimit, readCursor, writeCursor, type PageInput } from "../inventory/validation";
 import {
   ConflictError,
   NotFoundError,
@@ -151,6 +152,34 @@ export class D1MealRepository {
     });
   }
 
+  async listRecipesPage(householdId: string, filter: RecipeFilter, page: PageInput) {
+    const limit = pageLimit(page), cursor = readCursor(page.cursor);
+    if (cursor.length > 1) throw new ValidationError("cursor", "is invalid");
+    const lifecycle = filter.archived === "include" ? "1" : filter.archived === "only" ? "archived_at IS NOT NULL" : "archived_at IS NULL";
+    const rows = await this.database.prepare(`SELECT * FROM recipes WHERE household_id = ? AND id > ? AND ${lifecycle} ORDER BY id LIMIT ?`)
+      .bind(householdId, cursor[0] ?? "", limit + 1).all<RecipeRow>();
+    const scanned = rows.results.slice(0, limit), query = filter.search?.trim().toLocaleLowerCase();
+    const recipes = scanned.map(recipeRow).filter(recipe => !query || [recipe.name, recipe.description, ...recipe.labels, ...recipe.ingredients.map(i => i.name)].join(" ").toLocaleLowerCase().includes(query));
+    return { recipes, limit, nextCursor: rows.results.length > limit ? writeCursor(scanned.at(-1)!.id) : null };
+  }
+
+  async selectedRecipes(householdId: string, ids: string[]): Promise<StoredRecipe[]> {
+    const rows = await this.database.prepare(`SELECT * FROM recipes WHERE household_id = ? AND id IN (SELECT value FROM json_each(?))`)
+      .bind(householdId, JSON.stringify(ids)).all<RecipeRow>();
+    const found = new Map(rows.results.map(row => [row.id, recipeRow(row)]));
+    return ids.map(id => { const recipe = found.get(id); if (!recipe) throw new NotFoundError("recipe", id); return recipe; });
+  }
+
+  async listMealsPage(householdId: string, from: string, to: string, includeCancelled: boolean, page: PageInput) {
+    const limit = pageLimit(page), cursor = readCursor(page.cursor);
+    if (cursor.length !== 0 && cursor.length !== 2) throw new ValidationError("cursor", "is invalid");
+    const rows = await this.database.prepare(`SELECT * FROM meals WHERE household_id = ? AND cooking_at >= ? AND cooking_at < ?
+      AND (? = 1 OR status = 'scheduled') AND (cooking_at > ? OR (cooking_at = ? AND id > ?)) ORDER BY cooking_at, id LIMIT ?`)
+      .bind(householdId, from, to, Number(includeCancelled), cursor[0] ?? "", cursor[0] ?? "", cursor[1] ?? "", limit + 1).all<MealRow>();
+    const meals = rows.results.slice(0, limit).map(mealRow), last = meals.at(-1);
+    return { meals, limit, nextCursor: rows.results.length > limit ? writeCursor(last!.cookingAt, last!.id) : null };
+  }
+
   async validateLinks(
     householdId: string,
     ingredients: RecipeIngredient[],
@@ -176,12 +205,13 @@ export class D1MealRepository {
 
   async inventoryStock(
     householdId: string,
+    ids?: string[],
   ): Promise<Map<string, InventoryRow>> {
     const rows = await this.database
       .prepare(
-        "SELECT id, unit, tracking_mode, quantity, stock_level, archived_at FROM inventory_items WHERE household_id = ?",
+        `SELECT id, unit, tracking_mode, quantity, stock_level, archived_at FROM inventory_items WHERE household_id = ?${ids ? " AND id IN (SELECT value FROM json_each(?))" : ""}`,
       )
-      .bind(householdId)
+      .bind(householdId, ...(ids ? [JSON.stringify(ids)] : []))
       .all<InventoryRow>();
     return new Map(rows.results.map((row) => [row.id, row]));
   }
@@ -190,7 +220,7 @@ export class D1MealRepository {
     recipe: StoredRecipe,
     inventory?: ReadonlyMap<string, InventoryRow>,
   ): Promise<Recipe> {
-    const stock = inventory ?? (await this.inventoryStock(recipe.householdId));
+    const stock = inventory ?? (await this.inventoryStock(recipe.householdId, recipe.ingredients.flatMap(i => i.inventoryItemId ? [i.inventoryItemId] : [])));
     const demand = new Map<string, { quantity: number; terms: number }>();
     for (const ingredient of recipe.ingredients) {
       const item = ingredient.inventoryItemId
@@ -406,12 +436,15 @@ export class D1MealRepository {
     memberId: string,
   ): Promise<Meal[]> {
     if (!meals.length) return [];
-    const rows = await this.database.batch<AttendanceRow>(
-      meals.map((meal) => this.attendanceStatement(meal)),
-    );
-    return meals.map((meal, index) =>
-      this.attendanceProjection(meal, memberId, rows[index]!.results),
-    );
+    const rows = await this.database.prepare(`SELECT selected.value AS meal_id, m.id AS member_id, m.display_name,
+      a.response, a.announcement_version, a.response_version, a.updated_at
+      FROM json_each(?) selected CROSS JOIN members m LEFT JOIN meal_attendance a
+        ON a.meal_id = selected.value AND a.member_id = m.id AND a.household_id = m.household_id
+      WHERE m.household_id = ? AND m.archived_at IS NULL AND m.role IN ('owner','member') ORDER BY m.display_name, m.id`)
+      .bind(JSON.stringify(meals.map(meal => meal.id)), meals[0]!.householdId).all<AttendanceRow & { meal_id: string }>();
+    const byMeal = new Map<string, AttendanceRow[]>();
+    for (const row of rows.results) { const group = byMeal.get(row.meal_id) ?? []; group.push(row); byMeal.set(row.meal_id, group); }
+    return meals.map(meal => this.attendanceProjection(meal, memberId, byMeal.get(meal.id) ?? []));
   }
 
   async withAttendance(

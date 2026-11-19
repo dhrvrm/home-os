@@ -54,8 +54,14 @@ describe("personally authorized MCP server", () => {
       "activity_list",
       "expenses_archive", "expenses_create", "expenses_get", "expenses_list", "expenses_restore", "expenses_update",
       "inventory_archive", "inventory_attention", "inventory_create", "inventory_events", "inventory_export", "inventory_get", "inventory_list", "inventory_restore", "inventory_stock", "inventory_update",
+      "home_context", "recipes_list", "recipes_get", "recipes_create", "recipes_update", "recipes_archive", "recipes_restore",
+      "meals_list", "meals_get", "meals_create", "meals_update", "meals_cancel", "meal_attendance_set",
+      "contacts_list", "contacts_get", "contacts_create", "contacts_update", "contacts_archive", "contacts_restore",
+      "notifications_list", "notifications_mark_read", "notification_preferences_get", "notification_preferences_set", "notification_device_setup",
+      "members_list", "members_update", "member_access_setup", "member_password_reset", "account_password_change",
+      "connections_list", "connections_revoke", "sessions_list", "sessions_revoke",
     ].sort());
-    expect(body.result.tools.filter(tool => ["activity_list", "inventory_list", "inventory_attention", "inventory_get", "inventory_events", "inventory_export", "expenses_get", "expenses_list"].includes(tool.name)).every(tool => tool.annotations.readOnlyHint)).toBe(true);
+    expect(body.result.tools.filter(tool => ["activity_list", "inventory_list", "inventory_attention", "inventory_get", "inventory_events", "inventory_export", "expenses_get", "expenses_list", "home_context", "recipes_list", "recipes_get", "meals_list", "meals_get", "contacts_list", "contacts_get", "notifications_list", "notification_preferences_get", "members_list", "connections_list", "sessions_list"].includes(tool.name)).every(tool => tool.annotations.readOnlyHint)).toBe(true);
     expect(body.result.tools.filter(tool => tool.name.endsWith("_create")).every(tool => !tool.annotations.readOnlyHint)).toBe(true);
   });
 
@@ -93,7 +99,12 @@ it("connects and reads the existing MCP surface using the official 2.4 client tr
   const client = new Client({ name: "official-client-integration", version: "1.0.0" });
   try {
     await client.connect(transport);
-    expect((await client.listTools()).tools.map(tool => tool.name).sort()).toEqual(["activity_list", "expenses_get", "expenses_list", "inventory_attention", "inventory_events", "inventory_export", "inventory_get", "inventory_list"]);
+    expect((await client.listTools()).tools.map(tool => tool.name).sort()).toEqual([
+      "activity_list", "expenses_get", "expenses_list", "inventory_attention", "inventory_events", "inventory_export", "inventory_get", "inventory_list",
+      "home_context", "recipes_list", "recipes_get", "meals_list", "meals_get", "contacts_list", "contacts_get",
+      "notifications_list", "notifications_mark_read", "notification_preferences_get", "notification_preferences_set", "notification_device_setup",
+      "members_list", "connections_list", "connections_revoke", "sessions_list", "sessions_revoke", "account_password_change",
+    ].sort());
     expect(await client.callTool({ name: "inventory_list", arguments: {} })).toMatchObject({ structuredContent: { items: expect.any(Array) } });
     expect((await client.readResource({ uri: "home-os://inventory/catalog" })).contents).toHaveLength(1);
   } finally { await client.close(); }

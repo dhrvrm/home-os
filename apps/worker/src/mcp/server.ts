@@ -1,3 +1,5 @@
+import { registerHouseholdTools } from './household-tools';
+import { registerAccessTools } from './access-tools';
 import { McpServer } from '@modelcontextprotocol/server';
 import type { VerifiedAuthority } from '../auth/authority';
 import type { Env } from '../env';
@@ -8,5 +10,7 @@ export function createHomeOSMcpServer(env: Env, authority: VerifiedAuthority, cl
   const context = { env, authority, clientId };
   registerInventoryTools(server, context);
   registerExpenseTools(server, context);
+  registerHouseholdTools(server, context);
+  registerAccessTools(server, context);
   return server;
 }

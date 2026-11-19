@@ -109,7 +109,7 @@ export function registerTool<T extends z.ZodRawShape>(
     inputSchema: schema.strict(),
     annotations: readOnly ? readOnlyAnnotations : {
       readOnlyHint: false,
-      destructiveHint: /_(update|stock|archive)$/.test(action),
+      destructiveHint: /_(update|stock|archive|cancel|revoke)$/.test(action),
       idempotentHint: true,
       openWorldHint: false,
     },
@@ -118,7 +118,9 @@ export function registerTool<T extends z.ZodRawShape>(
     const command = commandContext(context, action, values);
     try {
       await assertAuthority(context.env.DB, command, action);
-      return result(await execute(input, command));
+      const data = await execute(input, command);
+      if (readOnly) await assertAuthority(context.env.DB, command, action);
+      return result(data);
     } catch (error) {
       // A changed authority cannot inspect even a stale version or previous receipt outcome.
       try {

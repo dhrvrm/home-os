@@ -1,3 +1,4 @@
+import { beginCommand, replayCommand, commitCommand, commandGuard } from "../platform/household-command";
 import { sessionLifetimeSQL } from "../auth/session-policy";
 import { authorizedBatch, authorityDenied } from "../auth/authority";
 import type { Action } from "../auth/permissions";
@@ -137,27 +138,19 @@ export class NotificationRepository {
     now: string,
     authority?: CommandContext,
   ): Promise<NotificationPreferences> {
-    await this.personalWrite(
-      memberId,
-      "notification_preferences_set",
-      [
-        this.db
-          .prepare(
-            `INSERT INTO notification_preferences (household_id, member_id, meal_reminders, push_enabled, updated_at)
-      VALUES (?, ?, ?, ?, ?) ON CONFLICT(member_id) DO UPDATE SET meal_reminders = excluded.meal_reminders,
-      push_enabled = excluded.push_enabled, updated_at = excluded.updated_at WHERE household_id = excluded.household_id`,
-          )
-          .bind(
-            this.householdId,
-            memberId,
-            Number(preferences.mealReminders),
-            Number(preferences.pushEnabled),
-            now,
-          ),
-      ],
-      authority,
-    );
-    return this.preferences(memberId);
+    const context = authority ?? this.context;
+    if (!context || context.actorId !== memberId || context.householdId !== this.householdId) throw authorityDenied();
+    const command = await beginCommand(this.db, context, "notification_preferences", "notification.preferences.updated", memberId, preferences, "notification_preferences_set", "private");
+    const replay = await replayCommand<NotificationPreferences>(this.db, command);
+    if (replay) return replay;
+    // Private durable identity prevents A -> B -> retry A from reapplying A.
+    // Only the acknowledgement is retained; household activity contains no personal state.
+    return commitCommand(this.db, command, preferences, memberId, now, [
+      this.db.prepare(`INSERT INTO notification_preferences (household_id, member_id, meal_reminders, push_enabled, updated_at)
+        VALUES (?, ?, ?, ?, ?) ON CONFLICT(member_id) DO UPDATE SET meal_reminders = excluded.meal_reminders,
+        push_enabled = excluded.push_enabled, updated_at = excluded.updated_at WHERE household_id = excluded.household_id`)
+        .bind(this.householdId, memberId, Number(preferences.mealReminders), Number(preferences.pushEnabled), now),
+    ], async () => {});
   }
 
   async list(
@@ -195,18 +188,24 @@ export class NotificationRepository {
     return row ? publicNotification(row) : null;
   }
 
-  async markRead(
-    memberId: string,
-    id: string,
-    now: string,
-  ): Promise<HouseholdNotification | null> {
-    await this.personalWrite(memberId, "notifications_mark_read", [
-      this.db
-        .prepare(
-          "UPDATE notifications SET read_at = COALESCE(read_at, ?) WHERE household_id = ? AND member_id = ? AND id = ?",
-        )
+  async acknowledgeRead(memberId: string, id: string, now: string): Promise<{ id: string; read: true }> {
+    const context = this.context;
+    if (!context || context.actorId !== memberId || context.householdId !== this.householdId) throw authorityDenied();
+    const command = await beginCommand(this.db, context, "notification", "notification.read", id, { read: true }, "notifications_mark_read", "private");
+    const replay = await replayCommand<{ id: string; read: true }>(this.db, command);
+    if (replay) return replay;
+    if (!await this.notification(memberId, id, now)) throw new HomeOSError("Notification not found.", "not_found", 404);
+    return commitCommand(this.db, command, { id, read: true as const }, id, now, [
+      commandGuard(this.db, command, 1, "SELECT 1 FROM notifications WHERE household_id = ? AND member_id = ? AND id = ? AND created_at > ?", [this.householdId, memberId, id, new Date(Date.parse(now) - 14 * 86400000).toISOString()]),
+      this.db.prepare("UPDATE notifications SET read_at = COALESCE(read_at, ?) WHERE household_id = ? AND member_id = ? AND id = ?")
         .bind(now, this.householdId, memberId, id),
-    ]);
+    ], async () => {
+      if (!await this.notification(memberId, id, now)) throw new HomeOSError("Notification not found.", "not_found", 404);
+    });
+  }
+
+  async markRead(memberId: string, id: string, now: string): Promise<HouseholdNotification | null> {
+    await this.acknowledgeRead(memberId, id, now);
     return this.notification(memberId, id, now);
   }
 

@@ -1,3 +1,4 @@
+import { pageLimit, readCursor, writeCursor, type PageInput } from "../inventory/validation";
 import { validate } from "../platform/validation";
 import { ROLES } from "./permissions";
 import { revokeMemberGrants } from "./session-policy";
@@ -12,6 +13,7 @@ import { createId } from "../platform/ids";
 import {
   HomeOSError,
   NotFoundError,
+  ValidationError,
 } from "../platform/errors";
 import { digest, hashPassword } from "./crypto";
 import { emailSchema, nameSchema, passwordSchema } from "./support";
@@ -77,6 +79,22 @@ export class MemberService {
       .all<MemberRow>();
     return rows.results.map(mapMember);
   }
+  async listMembersPage(householdId: string, page: PageInput) {
+    const limit = pageLimit(page), cursor = readCursor(page.cursor);
+    if (cursor.length > 1) throw new ValidationError("cursor", "is invalid");
+    const rows = await this.database.prepare(`SELECT m.id, m.display_name, m.email, m.role, m.archived_at,
+      EXISTS (SELECT 1 FROM auth_accounts a WHERE a.member_id = m.id) AS has_login FROM members m
+      WHERE m.household_id = ? AND m.id > ? ORDER BY m.id LIMIT ?`).bind(householdId, cursor[0] ?? "", limit + 1).all<MemberRow>();
+    const members = rows.results.slice(0, limit).map(mapMember);
+    return { members, limit, nextCursor: rows.results.length > limit ? writeCursor(members.at(-1)!.id) : null };
+  }
+
+  async getMember(householdId: string, id: string) {
+    const row = await this.database.prepare(memberSelect).bind(id, householdId).first<MemberRow>();
+    if (!row) throw new NotFoundError("member", id);
+    return mapMember(row);
+  }
+
   async createMember(
     context: CommandContext,
     value: z.input<typeof createMemberSchema>,

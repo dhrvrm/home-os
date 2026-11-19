@@ -19,12 +19,15 @@ export interface HouseholdCommand {
     | "contact"
     | "inventory_item"
     | "expense_rule"
-    | "member";
+    | "member"
+    | "notification_preferences"
+    | "notification";
   entityId?: string;
   action: string;
   requestHash: string;
   policyAction: Action;
   changes?: unknown[];
+  visibility: "household" | "private";
 }
 
 interface Receipt {
@@ -63,6 +66,7 @@ export async function beginCommand(
   entityId: string | undefined,
   input: unknown,
   policyAction: Action = commandAction(entityType, action),
+  visibility: "household" | "private" = "household",
 ): Promise<HouseholdCommand> {
   if (!context.operationId || context.operationId.length > 128) {
     throw new ValidationError(
@@ -72,7 +76,7 @@ export async function beginCommand(
   }
   await assertAuthority(database, context, policyAction);
   const fingerprint = JSON.stringify(
-    canonical({ input, expectedVersion: context.expectedVersion }),
+    canonical({ input, expectedVersion: context.expectedVersion, ...(visibility === "private" ? { source: context.source, mcpClientId: context.mcpClientId, mcpTool: context.mcpTool } : {}) }),
   );
   const bytes = await crypto.subtle.digest(
     "SHA-256",
@@ -84,6 +88,7 @@ export async function beginCommand(
     entityId,
     action,
     policyAction,
+    visibility,
     requestHash: Array.from(new Uint8Array(bytes), (byte) =>
       byte.toString(16).padStart(2, "0"),
     ).join(""),
@@ -116,7 +121,8 @@ export async function replayCommand<T>(
       (command.entityId !== undefined && row.entity_id !== command.entityId)
     )
       throw operationConflict(command);
-    return JSON.parse(row.result_json) as T;
+    const stored = JSON.parse(row.result_json);
+    return (command.visibility === "private" ? stored.acknowledgement : stored) as T;
   }
   const used = await database
     .prepare(
@@ -214,10 +220,10 @@ export async function commitCommand<T>(
           command.requestHash,
           ...(acceptedResult
             ? acceptedResult.values
-            : [JSON.stringify(result)]),
+            : [JSON.stringify(command.visibility === "private" ? { acknowledgement: result, provenance: { source: context.source, clientId: context.mcpClientId ?? null, tool: context.mcpTool ?? null } } : result)]),
           now,
         ),
-      database
+      ...(command.visibility === "private" ? [] : [database
         .prepare(
           `INSERT INTO audit_events
          (id, household_id, entity_type, entity_id, action, actor_id, actor_type, source, device_id,
@@ -240,7 +246,7 @@ export async function commitCommand<T>(
           JSON.stringify(auditChanges(command, result)),
           context.mcpClientId ?? null,
           context.mcpTool ?? null,
-        ),
+        )]),
       release(context.operationId),
       releaseAuthorityGuard(database, context),
       ...(acceptedResult

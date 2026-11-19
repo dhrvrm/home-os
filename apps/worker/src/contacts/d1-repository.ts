@@ -1,5 +1,6 @@
+import { pageLimit, readCursor, writeCursor, type PageInput } from "../inventory/validation";
 import type { Contact, ContactFilter } from "./model";
-import { ConflictError, NotFoundError } from "../platform/errors";
+import { ConflictError, NotFoundError, ValidationError } from "../platform/errors";
 import {
   commandGuard,
   commitCommand,
@@ -78,6 +79,17 @@ export class D1ContactRepository {
         (!search || text.join(" ").toLocaleLowerCase().includes(search))
       );
     });
+  }
+
+  async listPage(householdId: string, filter: ContactFilter, page: PageInput) {
+    const limit = pageLimit(page), cursor = readCursor(page.cursor);
+    if (cursor.length > 1) throw new ValidationError("cursor", "is invalid");
+    const lifecycle = filter.archived === "include" ? "1" : filter.archived === "only" ? "archived_at IS NOT NULL" : "archived_at IS NULL";
+    const rows = await this.database.prepare(`SELECT * FROM contacts WHERE household_id = ? AND id > ? AND ${lifecycle} ORDER BY id LIMIT ?`)
+      .bind(householdId, cursor[0] ?? "", limit + 1).all<Row>();
+    const scanned = rows.results.slice(0, limit), search = filter.search?.trim().toLocaleLowerCase();
+    const contacts = scanned.map(map).filter(c => !search || [c.name,c.role,c.phone,c.email,c.address,...c.labels,c.notes].join(" ").toLocaleLowerCase().includes(search));
+    return { contacts, limit, nextCursor: rows.results.length > limit ? writeCursor(scanned.at(-1)!.id) : null };
   }
 
   async save(

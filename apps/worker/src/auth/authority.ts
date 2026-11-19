@@ -3,6 +3,7 @@ import type { CommandContext } from "../platform/context";
 import { HomeOSError } from "../platform/errors";
 import {
   permits,
+  permitsHandoff,
   ROLES,
   type Action,
   type ActionSubject,
@@ -37,6 +38,7 @@ export function authorityPredicate(
     householdId: context.householdId,
     memberId: context.actorId,
   },
+  mode?: "handoff",
 ): { sql: string; values: (string | number)[] } {
   const authority = context.authority;
   if (
@@ -46,7 +48,7 @@ export function authorityPredicate(
   )
     return { sql: "0", values: [] };
   const roles = ROLES.filter((role) =>
-    permits(
+    (mode === "handoff" ? permitsHandoff : permits)(
       {
         memberId: authority.memberId,
         householdId: authority.householdId,
@@ -89,8 +91,9 @@ export async function assertAuthority(
   context: CommandContext,
   action: Action,
   subject?: ActionSubject,
+  mode?: "handoff",
 ): Promise<void> {
-  const predicate = authorityPredicate(context, action, subject);
+  const predicate = authorityPredicate(context, action, subject, mode);
   const row = await database
     .prepare(`SELECT ${predicate.sql} AS admitted`)
     .bind(...predicate.values)

@@ -1,0 +1,39 @@
+import { z } from 'zod';
+import type { McpServer } from '@modelcontextprotocol/server';
+import { D1MealRepository } from '../meals/d1-repository';
+import { MealService } from '../meals/service';
+import { attendanceSchema, mealSchema, mealUpdateSchema, recipeSchema, recipeUpdateSchema } from '../meals/validation';
+import { D1ContactRepository } from '../contacts/d1-repository';
+import { ContactService } from '../contacts/service';
+import { contactSchema, contactUpdateSchema } from '../contacts/validation';
+import { pageInput } from '../inventory/validation';
+import { NotificationRepository } from '../notifications/d1-repository';
+import { parsePreferences, notificationId } from '../notifications/validation';
+import { mutationInput, registerTool, subjectId, versionInput, type ToolContext } from './results';
+
+const catalogPage = pageInput.extend({ search: z.string().trim().max(256).optional(), archived: z.enum(['exclude','only','include']).default('exclude') });
+const date = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
+export function registerHouseholdTools(server: McpServer, context: ToolContext) {
+  const household = context.authority.householdId, member = context.authority.memberId;
+  const meals = new MealService(new D1MealRepository(context.env.DB)), contacts = new ContactService(new D1ContactRepository(context.env.DB));
+  registerTool(server, context, 'recipes_list', 'Page reusable dishes with ingredient availability hints. Follow nextCursor, including after empty filtered pages. Scheduling does not reserve or consume stock.', catalogPage, true, async input => meals.listRecipesPage(household, input, input));
+  registerTool(server, context, 'recipes_get', 'Read a recipe and qualified ingredient stock availability.', z.object({recipeId:subjectId}), true, async input => ({recipe:await meals.getRecipe(household,input.recipeId)}));
+  registerTool(server, context, 'recipes_create', 'Create a reusable recipe with optional household inventory ingredient links.', recipeSchema.extend(mutationInput.shape), false, async ({operationId:_,...input},command)=>({status:'accepted',recipe:await meals.createRecipe(command,input)}));
+  registerTool(server, context, 'recipes_update', 'Revise a recipe at its observed version; announced meal snapshots retain their content.', recipeUpdateSchema.extend(versionInput.shape).extend({recipeId:subjectId}), false, async ({recipeId,operationId:_,expectedVersion:__,...input},command)=>({status:'accepted',recipe:await meals.updateRecipe(command,recipeId,input)}));
+  for(const action of ['recipes_archive','recipes_restore'] as const) registerTool(server,context,action,'Archive or restore a reusable recipe at its observed version.',versionInput.extend({recipeId:subjectId}),false,async(input,command)=>({status:'accepted',recipe:await (action==='recipes_archive'?meals.archiveRecipe(command,input.recipeId):meals.restoreRecipe(command,input.recipeId))}));
+  registerTool(server,context,'meals_list','Page meals from an inclusive household-local date from up to an exclusive local date to. Use home_context timezone and localDate to resolve tomorrow or seven days; follow nextCursor.',pageInput.extend({from:date,to:date,includeCancelled:z.boolean().default(false)}),true,async input=>meals.listMealsPage(household,member,input,input));
+  registerTool(server,context,'meals_get','Get announced dish snapshots, personal attendance and current headcounts.',z.object({mealId:subjectId}),true,async input=>({meal:await meals.getMeal(household,input.mealId,member)}));
+  registerTool(server,context,'meals_create','Announce a future meal using real recipe IDs and explicit household-local cooking time or offset instant. No stock is consumed.',mealSchema.extend(mutationInput.shape),false,async({operationId:_,...input},command)=>({status:'accepted',meal:await meals.createMeal(command,input)}));
+  registerTool(server,context,'meals_update','Revise an announcement at the observed version. Changing dishes or cooking time requires attendance reconfirmation.',mealUpdateSchema.extend(versionInput.shape).extend({mealId:subjectId}),false,async({mealId,operationId:_,expectedVersion:__,...input},command)=>({status:'accepted',meal:await meals.updateMeal(command,mealId,input)}));
+  registerTool(server,context,'meals_cancel','Cancel a meal announcement at the observed version.',versionInput.extend({mealId:subjectId}),false,async(input,command)=>({status:'accepted',meal:await meals.cancelMeal(command,input.mealId)}));
+  registerTool(server,context,'meal_attendance_set','Answer yes, no or pending only for yourself, with the announcement and response versions you observed.',attendanceSchema.extend(mutationInput.shape).extend({mealId:subjectId}),false,async({mealId,operationId:_,...input},command)=>({status:'accepted',meal:await meals.respond(command,mealId,input)}));
+  registerTool(server,context,'contacts_list','Page household reference contacts. Search covers purpose, channels, labels and notes; follow continuation even after an empty search page.',catalogPage,true,async input=>contacts.listContactsPage(household,input,input));
+  registerTool(server,context,'contacts_get','Get a shared reference contact; contacts never grant household access.',z.object({contactId:subjectId}),true,async input=>({contact:await contacts.getContact(household,input.contactId)}));
+  registerTool(server,context,'contacts_create','Create a shared household contact.',contactSchema.extend(mutationInput.shape),false,async({operationId:_,...input},command)=>({status:'accepted',contact:await contacts.createContact(command,input)}));
+  registerTool(server,context,'contacts_update','Revise a shared contact at its observed version.',contactUpdateSchema.extend(versionInput.shape).extend({contactId:subjectId}),false,async({contactId,operationId:_,expectedVersion:__,...input},command)=>({status:'accepted',contact:await contacts.updateContact(command,contactId,input)}));
+  for(const action of ['contacts_archive','contacts_restore'] as const) registerTool(server,context,action,'Archive or restore a shared contact at its observed version.',versionInput.extend({contactId:subjectId}),false,async(input,command)=>({status:'accepted',contact:await(action==='contacts_archive'?contacts.archiveContact(command,input.contactId):contacts.restoreContact(command,input.contactId))}));
+  registerTool(server,context,'notifications_list','Read your own retained inbox: at most fifty reminders from the past fourteen days. This is the complete retained inbox, with no further pages.',z.object({}),true,async(_,command)=>({...await new NotificationRepository(context.env.DB,household,command).list(member,new Date().toISOString()),limit:50,nextCursor:null}));
+  registerTool(server,context,'notification_preferences_get','Read only your reminder preferences. Device registration and native permission require direct browser action.',z.object({}),true,async(_,command)=>({preferences:await new NotificationRepository(context.env.DB,household,command).preferences(member)}));
+  registerTool(server,context,'notification_preferences_set','Change only your reminder preferences; this does not enroll a receiving device or grant native permission.',mutationInput.extend({mealReminders:z.boolean(),pushEnabled:z.boolean()}),false,async({operationId:_,...input},command)=>({status:'accepted',preferences:await new NotificationRepository(context.env.DB,household,command).setPreferences(member,parsePreferences(input),new Date().toISOString())}));
+  registerTool(server,context,'notifications_mark_read','Acknowledge only your own retained reminder.',mutationInput.extend({notificationId:subjectId}),false,async(input,command)=>({status:'accepted',notification:await new NotificationRepository(context.env.DB,household,command).acknowledgeRead(member,notificationId(input.notificationId),new Date().toISOString())}));
+}
