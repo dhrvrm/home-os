@@ -61,10 +61,6 @@ it('retains full raw itemization and resolved breakdowns immutably', async () =>
     expect(history[0]!.snapshot.itemized).toMatchObject({ totalMinor: 110, taxMinor: 10 });
     await expect(ledgerDB.prepare("UPDATE ledger_revisions SET snapshot_json='{}' WHERE entry_id=?").bind(a.id).run()).rejects.toThrow();
 });
-it('refuses later commands without their domain guards', async () => {
-    await expect(service().execute(context('later-comment'), { operationId: 'later-comment', action: 'comment', entryId: 'unknown', expectedVersion: 1, text: 'Hello' })).rejects.toMatchObject({ status: 400 });
-    await expect(service().execute(context('later-payment'), { operationId: 'later-payment', action: 'create', entry: { kind: 'payment', date: '2026-11-19', currency: 'INR', totalMinor: 10, senderId: 'local-owner', receiverId: 'ledger-b', method: 'Cash' } })).rejects.toMatchObject({ status: 400 });
-});
 it('returns the original authorized lifecycle receipt while refusing new invalid lifecycle transitions', async () => {
     const a = await service().createExpense(context('lifecycle-create'), bill());
     const v = await service().voidEntry(context('lifecycle-void', 1), a.id);

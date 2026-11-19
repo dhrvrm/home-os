@@ -52,7 +52,7 @@ export interface LedgerRevision {
   entryId: string; version: number; actorId: string; origin: LedgerOrigin; operationId: string;
   action: "create" | "correct" | "void" | "restore" | "post"; acceptedAt: string;
 }
-export interface LedgerComment { id: string; entryId: string; authorId: string; text: string; acceptedAt: string }
+export interface LedgerComment { id: string; entryId: string; observedVersion: number; authorId: string; text: string; acceptedAt: string }
 export interface RecurringPostingSource {
   ruleId: string; ruleVersion: number; period: number;
   periodStart: string; periodEnd: string;
