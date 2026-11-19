@@ -82,15 +82,19 @@ Browsers cap cookie retention at 400 days; Home OS renews the cookie during coor
 
 ## Verify
 
+The HTTPS browser checks require Node.js 22.23.5 or newer Node.js 22.
+
 ```bash
 npm test
 npm run lint
 npm run build
 npm run smoke
 npm run smoke:browser
+npm run smoke:mcp
+npm run smoke:upgrade
 ```
 
-The HTTP smoke test creates isolated D1 state and exercises authentication, inventory, owners, recipe snapshots, meals, attendance, contacts, and reminder deduplication. The browser smoke uses isolated local state and a persistent Chromium profile; it requires Chrome locally, or Playwright Chromium with `HOMEOS_BROWSER_CHANNEL=chromium`.
+The HTTP smoke test creates isolated D1 state and exercises authentication, inventory, owners, recipe snapshots, meals, attendance, contacts, and reminder deduplication. Browser checks require Chrome locally, or Playwright Chromium with `HOMEOS_BROWSER_CHANNEL=chromium`; set `HOMEOS_SKIP_BUILD=1` after building to reuse the current static output. The MCP check uses the official client SDK and browser consent, checks role restrictions and shared domain state, and tests refresh, revocation, logout and cookie ordering. The upgrade check builds the prior release in a disposable archive, installs its real service worker, queues an offline change, then migrates the same isolated D1 and browser profile to the current app and applies an explicit PWA update. It needs Git history (`git fetch --unshallow` for a shallow clone), OpenSSL and network access to install the prior lockfile. Both HTTPS checks trust only their temporary local certificate and remove their temporary servers, profiles, keys and databases when finished.
 
 ## Deploy
 
