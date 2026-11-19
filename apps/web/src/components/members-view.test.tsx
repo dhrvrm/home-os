@@ -1,4 +1,4 @@
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createMember, getMembers, resetMemberPassword, updateMember } from "@/lib/auth";
@@ -95,7 +95,7 @@ it("does not treat an accountless owner as replacement for the last usable owner
 it("opens a member password handoff without changing credentials", async () => {
   render(<MembersView currentUser={owner} action="reset-password" memberId="ravi" />);
   const password = await screen.findByLabelText("New password for Ravi");
-  expect(password).toHaveFocus();
+  await waitFor(() => expect(password).toHaveFocus());
   expect(resetMemberPassword).not.toHaveBeenCalled();
 });
 it("opens an owner member-creation handoff without creating anyone", async () => {
