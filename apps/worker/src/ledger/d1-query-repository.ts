@@ -99,20 +99,47 @@ export class D1LedgerQueryRepository implements LedgerQueryRepository {
       ${filter.currency ? 'WHERE d.currency=?' : ''} ORDER BY d.currency,d.memberId,c.memberId LIMIT ? OFFSET ?`, [...bindings, limit + 1, offset]));
     } else if (kind === 'statement' || kind === 'export') {
       aggregate = 'statementTotals';
-      const cte = `, movements AS (
-        SELECT f.id AS entryId,f.version,f.date,f.kind,f.description,f.currency,e.amount_minor AS amountMinor
-        FROM facts f JOIN ledger_effects e ON e.household_id=f.household_id AND e.entry_id=f.id AND e.version=f.version AND e.effect_kind='snapshot'
-        WHERE f.lifecycle='effective' AND e.member_id=? AND f.currency=?
-      ), totals AS (SELECT
-        COALESCE(SUM(CASE WHEN ? IS NOT NULL AND date<? THEN amountMinor ELSE 0 END),0) AS openingMinor,
-        COALESCE(SUM(CASE WHEN (? IS NULL OR date>=?) AND (? IS NULL OR date<=?) THEN amountMinor ELSE 0 END),0) AS movementMinor,
-        COALESCE(SUM(CASE WHEN ? IS NULL OR date<=? THEN amountMinor ELSE 0 END),0) AS closingMinor,
-        COUNT(CASE WHEN (? IS NULL OR date>=?) AND (? IS NULL OR date<=?) THEN 1 END) AS movementCount FROM movements
-      )`;
-      const values = [filter.memberId!, filter.currency!, filter.from ?? null, filter.from ?? null, filter.from ?? null, filter.from ?? null, filter.to ?? null, filter.to ?? null, filter.to ?? null, filter.to ?? null, filter.from ?? null, filter.from ?? null, filter.to ?? null, filter.to ?? null];
-      const statement = (sql: string, extra: (string | number | null)[] = []) => prepare(`${FACTS}${cte}${sql}`, [context.householdId, ...values, ...extra] as Binding[]);
-      statements.push(statement(' SELECT * FROM totals'));
-      statements.push(statement(` SELECT *, (SELECT openingMinor FROM totals)+SUM(amountMinor) OVER(ORDER BY date,entryId ROWS UNBOUNDED PRECEDING) AS runningMinor FROM movements WHERE (? IS NULL OR date>=?) AND (? IS NULL OR date<=?) ORDER BY date,entryId LIMIT ? OFFSET ?`, [filter.from ?? null, filter.from ?? null, filter.to ?? null, filter.to ?? null, limit + 1, offset]));
+      if (!request.statement) {
+        statements.push(prepare(`SELECT
+          COALESCE(SUM(CASE WHEN ? IS NOT NULL AND json_extract(r.snapshot_json,'$.intent.date')<? THEN e.amount_minor ELSE 0 END),0) AS openingMinor,
+          COALESCE(SUM(CASE WHEN (? IS NULL OR json_extract(r.snapshot_json,'$.intent.date')>=?) AND (? IS NULL OR json_extract(r.snapshot_json,'$.intent.date')<=?) THEN e.amount_minor ELSE 0 END),0) AS movementMinor,
+          COALESCE(SUM(CASE WHEN ? IS NULL OR json_extract(r.snapshot_json,'$.intent.date')<=? THEN e.amount_minor ELSE 0 END),0) AS closingMinor,
+          COUNT(CASE WHEN (? IS NULL OR json_extract(r.snapshot_json,'$.intent.date')>=?) AND (? IS NULL OR json_extract(r.snapshot_json,'$.intent.date')<=?) THEN 1 END) AS movementCount
+          FROM ledger_entries h
+          JOIN ledger_revisions r ON r.household_id=h.household_id AND r.entry_id=h.id AND r.version=h.version
+          JOIN ledger_effects e ON e.household_id=h.household_id AND e.entry_id=h.id AND e.version=h.version AND e.effect_kind='snapshot'
+          WHERE h.household_id=? AND h.lifecycle='effective' AND h.currency=? AND e.member_id=?`, [
+          filter.from ?? null, filter.from ?? null, filter.from ?? null, filter.from ?? null, filter.to ?? null, filter.to ?? null,
+          filter.to ?? null, filter.to ?? null, filter.from ?? null, filter.from ?? null, filter.to ?? null, filter.to ?? null,
+          context.householdId, filter.currency!, filter.memberId!,
+        ]));
+      }
+      const terms = ["r.household_id=?", "json_extract(r.snapshot_json,'$.intent.currency')=?",
+        "h.household_id=r.household_id", "h.id=(r.entry_id COLLATE BINARY)", "h.version=r.version", "h.lifecycle='effective'", "h.currency=?",
+        "e.household_id=h.household_id", "e.entry_id=h.id", "e.version=h.version", "e.effect_kind='snapshot'", "e.member_id=?", "e.currency=h.currency"];
+      const values: Binding[] = [context.householdId, filter.currency!, filter.currency!, filter.memberId!];
+      if (filter.from !== undefined) { terms.push("json_extract(r.snapshot_json,'$.intent.date')>=?"); values.push(filter.from); }
+      if (filter.to !== undefined) { terms.push("json_extract(r.snapshot_json,'$.intent.date')<=?"); values.push(filter.to); }
+      if (request.statement) {
+        terms.push("basis.household_id=? AND basis.revision=?");
+        values.push(context.householdId, request.statement.revision);
+      }
+      // CROSS JOIN checks a continuation revision before entering its ordered
+      // range, and keeps that range as the head/effect seek driver. Two
+      // bounded ranges let SQLite seek the entry key even across same-day ties.
+      // Explicit BINARY equality keeps the head lookup a point query rather
+      // than propagating the entry lower bound into a second range scan.
+      const select = `SELECT h.id AS entryId,h.version,json_extract(r.snapshot_json,'$.intent.date') AS date,h.kind,
+        COALESCE(json_extract(r.snapshot_json,'$.intent.description'),json_extract(r.snapshot_json,'$.intent.method'),'') AS description,
+        h.currency,e.amount_minor AS amountMinor
+        FROM ${request.statement ? 'ledger_financial_revisions basis CROSS JOIN ' : ''}ledger_revisions r INDEXED BY ledger_revisions_statement_order
+        CROSS JOIN ledger_entries h CROSS JOIN ledger_effects e WHERE ${terms.join(' AND ')}`;
+      const order = "ORDER BY json_extract(r.snapshot_json,'$.intent.date'),r.entry_id LIMIT ?";
+      if (request.statement) {
+        const [date, id] = request.statement.after;
+        statements.push(prepare(`${select} AND json_extract(r.snapshot_json,'$.intent.date')=? AND r.entry_id>? ORDER BY r.entry_id LIMIT ?`, [...values, date, id, limit + 1]));
+        statements.push(prepare(`${select} AND json_extract(r.snapshot_json,'$.intent.date')>? ${order}`, [...values, date, limit + 1]));
+      } else statements.push(prepare(`${select} ${order}`, [...values, limit + 1]));
     } else if (kind === 'detail') {
       const capacity = `, source AS (SELECT f.* FROM facts f WHERE f.kind='expense' AND f.id=(SELECT COALESCE(expense_id,id) FROM facts WHERE id=?)),
         credits AS (SELECT f.* FROM facts f JOIN source s ON f.expense_id=s.id WHERE f.lifecycle='effective' AND f.kind='refund')`;
@@ -137,7 +164,13 @@ export class D1LedgerQueryRepository implements LedgerQueryRepository {
     const results = await this.database.batch<Record<string, unknown>>(statements);
     const header = results[0]!.results[0] as { admitted: number; revision: number; subjectExists: number };
     if (!header.admitted) throw authorityDenied();
-    const rawRows = results.at(-1)!.results;
+    const statementTotals = aggregate === 'statementTotals'
+      ? request.statement ? header.revision === request.statement.revision ? request.statement.totals : undefined
+        : results[1]!.results[0] as unknown as StatementTotals
+      : undefined;
+    const rawRows = request.statement && (kind === 'statement' || kind === 'export')
+      ? [...results[1]!.results, ...results[2]!.results].slice(0, limit + 1)
+      : results.at(-1)!.results;
     let items: QueryItem[];
     if (kind === 'entries' || kind === 'detail') items = rawRows.map(row => JSON.parse(row.snapshot_json as string) as LedgerEntry);
     else if (kind === 'history') items = rawRows.map(row => ({
@@ -146,7 +179,16 @@ export class D1LedgerQueryRepository implements LedgerQueryRepository {
     } as StoredLedgerRevision));
     else if (kind === 'balances') items = rawRows.map(row => ({ ...row, active: Boolean(row.active) })) as unknown as QueryItem[];
     else if (kind === 'operation') items = rawRows.map(row => ({ status: 'accepted', entryId: row.entryId, version: row.version, action: row.action, ...(row.commentId ? { commentId: row.commentId } : {}) })) as QueryItem[];
-    else items = rawRows as unknown as QueryItem[];
+    else if (statementTotals) {
+      let running = BigInt(request.statement?.runningMinor ?? statementTotals.openingMinor);
+      items = rawRows.map(row => {
+        if (!Number.isSafeInteger(row.amountMinor)) throw new Error('Unsafe statement movement');
+        running += BigInt(row.amountMinor as number);
+        const runningMinor = Number(running);
+        if (!Number.isSafeInteger(runningMinor)) throw new Error('Unsafe statement balance');
+        return { ...row, runningMinor } as unknown as QueryItem;
+      });
+    } else items = rawRows as unknown as QueryItem[];
     const capacity = kind === 'detail' ? results[1]!.results[0] : undefined;
     const capacities = kind === 'detail' ? results[2]!.results : [];
     const people = (side: string) => capacities.filter(row => row.side === side).map(({ side: _side, ...row }) => row as unknown as RefundPersonCapacity);
@@ -154,7 +196,7 @@ export class D1LedgerQueryRepository implements LedgerQueryRepository {
       revision: header.revision, subjectExists: Boolean(header.subjectExists), items,
       ...(aggregate === 'spendingTotals' ? { spendingTotals: results[1]!.results as unknown as SpendingTotal[] } : {}),
       ...(aggregate === 'balanceTotals' ? { balanceTotals: results[1]!.results as unknown as BalanceTotal[] } : {}),
-      ...(aggregate === 'statementTotals' ? { statementTotals: results[1]!.results[0] as unknown as StatementTotals } : {}),
+      ...(statementTotals ? { statementTotals } : {}),
       ...(capacity ? { refundCapacity: { ...capacity, available: Boolean(capacity.available), payers: people('payer'), shares: people('share') } as unknown as RefundCapacity } : {}),
     };
   }

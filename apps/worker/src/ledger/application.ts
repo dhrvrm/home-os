@@ -8,10 +8,10 @@ import { D1LedgerQueryRepository } from './d1-query-repository';
 import { LedgerQueries } from './queries';
 import { parseQuery } from './query-validation';
 import { LedgerService } from './service';
-import { expenseInput, ledgerCommandInput, ledgerId } from './validation';
+import { expenseInput, postCommandInput } from './validation';
 
-const postingFields = ledgerCommandInput.options[5].shape;
-const rulePreviewInput = z.object({ kind: z.literal('rule-posting'), ruleId: ledgerId, expectedRuleVersion: postingFields.expectedRuleVersion, period: postingFields.period }).strict();
+const postingFields = postCommandInput.shape;
+const rulePreviewInput = z.object({ kind: z.literal('rule-posting'), ruleId: postingFields.ruleId, expectedRuleVersion: postingFields.expectedRuleVersion, period: postingFields.period }).strict();
 export const ledgerPreviewInput = z.union([expenseInput, rulePreviewInput]);
 /** Both transports use current read admission around calculation/current recurring lookup. */
 export async function previewLedger(env: Env, command: CommandContext, raw: unknown) {

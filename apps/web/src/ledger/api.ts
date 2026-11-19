@@ -32,11 +32,16 @@ export async function dispatchCommand(command: LedgerCommand): Promise<CommandRe
     let response: Response;
     try { response = await fetch(`${(process.env.NEXT_PUBLIC_API_URL ?? "").replace(/\/$/, "")}/api/v1/ledger${spec.path}`, { method: spec.method, credentials: "same-origin", signal: controller.signal, headers: { "Content-Type": "application/json", ...(proof.memberId ? { "X-HomeOS-Member": proof.memberId } : {}), "X-Operation-ID": command.operationId, ...(spec.version === undefined ? {} : { "If-Match": String(spec.version) }) }, body: JSON.stringify(spec.body) }); }
     catch { throw new APIError("Save outcome unknown. This may already have been recorded.", controller.signal.aborted ? "timeout" : "network_error"); }
-    let envelope: { data?: unknown; error?: { code?: string; message?: string; field?: string; details?: unknown } | null };
+    let envelope: unknown;
     try { envelope = await response.json(); }
     catch { throw new LedgerRequestError("The server returned an unreadable response.", "invalid_response", response.status); }
-    if (!response.ok || envelope?.error) throw new LedgerRequestError(envelope?.error?.message ?? "The save could not be confirmed.", envelope?.error?.code ?? "request_failed", response.status, envelope?.error?.field, [401, 403].includes(response.status) || ["unauthorized", "forbidden", "session_changed"].includes(envelope?.error?.code ?? "") ? undefined : envelope?.error?.details);
-    if (!validCommandResult(envelope?.data, command)) throw new LedgerRequestError("The server returned an unreadable save result.", "invalid_response", response.status);
+    if (!object(envelope)) throw new LedgerRequestError("The server returned an unreadable response.", "invalid_response", response.status);
+    if (!response.ok || envelope.error !== null) {
+      const error = envelope.error;
+      if (envelope.data !== null || !object(error) || typeof error.code !== "string" || !error.code.trim() || typeof error.message !== "string" || !error.message.trim() || error.field !== undefined && typeof error.field !== "string") throw new LedgerRequestError("The server returned an unreadable refusal.", "invalid_response", response.status);
+      throw new LedgerRequestError(error.message, error.code, response.status, error.field, [401, 403].includes(response.status) || ["unauthorized", "forbidden", "session_changed"].includes(error.code) ? undefined : error.details);
+    }
+    if (!validCommandResult(envelope.data, command)) throw new LedgerRequestError("The server returned an unreadable save result.", "invalid_response", response.status);
     return envelope.data;
   } finally { window.clearTimeout(timer); }
 }
@@ -83,15 +88,21 @@ export async function ledgerRead<T>(user: AuthUser, path: string, valid: (value:
       const value: unknown = await request(path);
       requireIdentity(user, lease);
       if (!valid(value) || !ownsData(value, user)) throw new APIError("The server returned unreadable financial information.", "invalid_response");
-      const copy = await writeCopy(user, domain, value, lease);
-      await homeOSDatabase.transaction("rw", homeOSDatabase.householdCache, async () => {
+      const copy = await homeOSDatabase.transaction("rw", homeOSDatabase.householdCache, async () => {
         requireIdentity(user, lease);
+        const previous = await readCopy(user, domain, (data): data is T => valid(data) && ownsData(data, user), lease);
+        const previousRevision = financialRevision(previous?.data);
+        const incomingRevision = financialRevision(value);
+        // Keep the original freshness evidence when a delayed response is older.
+        const chosen = previous && previousRevision !== null && incomingRevision !== null && previousRevision > incomingRevision ? previous : await writeCopy(user, domain, value, lease);
         const prefix = `ledger:read:${kind}:`;
         const rows = (await homeOSDatabase.householdCache.where("memberId").equals(user.id).toArray()).filter(row => row.householdId === user.householdId && (() => { try { return String(JSON.parse(row.key)[2]).startsWith(prefix); } catch { return false; } })()).sort((a, b) => b.savedAt.localeCompare(a.savedAt) || a.key.localeCompare(b.key));
         const keep = kind === "detail" ? 10 : 20;
         if (rows.length > keep) await homeOSDatabase.householdCache.bulkDelete(rows.slice(keep).map(row => row.key));
         requireIdentity(user, lease);
+        return chosen;
       });
+      requireIdentity(user, lease);
       return copy;
     } catch (error) {
       requireIdentity(user, lease);
@@ -102,6 +113,7 @@ export async function ledgerRead<T>(user: AuthUser, path: string, valid: (value:
     }
   });
 }
+function financialRevision(value: unknown): number | null { return object(value) && typeof value.revision === "number" && Number.isSafeInteger(value.revision) && value.revision >= 0 ? value.revision : null; }
 function ownsData(value: unknown, user: AuthUser): boolean { if (!value || typeof value !== "object") return true; if (Array.isArray(value)) return value.every(child => ownsData(child, user)); const row = value as Record<string, unknown>; return (typeof row.householdId !== "string" || row.householdId === user.householdId) && Object.values(row).every(child => ownsData(child, user)); }
 export async function previewExpense(user: AuthUser, input: ExpenseInput): Promise<{ allocation: ResolvedExpense }> { return runHouseholdWork(async lease => { requireIdentity(user, lease); if (!online()) throw new APIError("Connect to check the authoritative preview.", "offline"); const result = await request<{ allocation: ResolvedExpense }>(ledgerQuery("/preview"), { method: "POST", body: JSON.stringify(input) }); requireIdentity(user, lease); return result; }); }
 export async function previewPosting(user: AuthUser, input: { ruleId: string; expectedRuleVersion: number; period: number }): Promise<{ source: RecurringPostingSource }> { return runHouseholdWork(async lease => { requireIdentity(user, lease); if (!online()) throw new APIError("Connect to inspect this recurring period.", "offline"); const result = await request<{ source: RecurringPostingSource }>(ledgerQuery("/preview"), { method: "POST", body: JSON.stringify({ kind: "rule-posting", ...input }) }); requireIdentity(user, lease); return result; }); }

@@ -1,6 +1,6 @@
 "use client";
 import { memberLabel } from "./item-editor";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useLayoutEffect, useEffect, useRef, useState, type ReactNode } from "react";
 import type { AuthUser } from "@/lib/auth";
 import type { Member } from "@/lib/expenses";
 import { Modal, useOnline } from "@/household/ui";
@@ -9,6 +9,7 @@ import { decimalMoney, formatMoney, parseMoney } from "./allocation-preview";
 import { AttemptRecovery, todayLedgerDate, useFinancialAttempt, type OnLedgerAccepted } from "./entry-dialog";
 import type { LedgerCommandDraft, LedgerEntry, RepaymentSuggestion, Currency, PaymentInput } from "./types";
 import { validDate } from "./validation";
+import { useMoneyGuard } from "./money-lifetime";
 export interface FinancialDialogProps {
     user: AuthUser;
     members: Member[];
@@ -23,16 +24,18 @@ export function FinancialDialog({ title, user, members, onAccepted, onClose, onD
     children: ReactNode;
     problem?: string;
     saveLabel?: string;
-    refusalContent?: (error: Error) => ReactNode;
+    refusalContent?: (error: Error, releaseOwnGuard: () => void) => ReactNode;
 }) {
     const [discard, setDiscard] = useState(false);
     const connected = useOnline();
-    const save = useFinancialAttempt(user, (reference, result) => { onDirtyChange?.(false); return onAccepted(reference, result); });
+    const releaseCurrentGuard = useRef<(() => void) | null>(null);
+    const save = useFinancialAttempt(user, (reference, result) => { releaseCurrentGuard.current?.(); return onAccepted(reference, result); });
     const errorSummary = useRef<HTMLParagraphElement>(null);
     useEffect(() => { if (save.error)
         errorSummary.current?.focus(); }, [save.error]);
     const guarded = !save.accepted && (dirty || save.pending || !!save.attempt);
-    useEffect(() => { onDirtyChange?.(guarded); return () => onDirtyChange?.(false); }, [onDirtyChange, guarded]);
+    const releaseGuard = useMoneyGuard(guarded, onDirtyChange);
+    useLayoutEffect(() => { releaseCurrentGuard.current = releaseGuard; return () => { releaseCurrentGuard.current = null; }; }, [releaseGuard]);
     useEffect(() => { const prevent = (event: BeforeUnloadEvent) => { if (guarded) {
         event.preventDefault();
         event.returnValue = "";
@@ -43,7 +46,7 @@ export function FinancialDialog({ title, user, members, onAccepted, onClose, onD
     else
         setDiscard(true); };
     return <Modal title={title} pending={save.pending} onClose={close}>
-    <div className="ledger-composer">{save.error && <p ref={errorSummary} className="form-error" role="alert" tabIndex={-1}>{save.error}</p>}{save.refusalError && refusalContent?.(save.refusalError)}{!save.loaded ? <p role="status">Checking retained save…</p> : save.accepted ? <>
+    <div className="ledger-composer">{save.error && <p ref={errorSummary} className="form-error" role="alert" tabIndex={-1}>{save.error}</p>}{save.refusalError && !save.attempt && !save.pending && refusalContent?.(save.refusalError, releaseGuard)}{!save.loaded ? <p role="status">Checking retained save…</p> : save.accepted ? <>
         <p role="status">Recorded. The accepted entry is available from Expenses.</p>
         <button type="button" onClick={onClose}>Close</button>
         </> : save.attempt ? <>
@@ -114,4 +117,3 @@ export function PaymentDialog({ suggestion, entry, defaultCurrency = "INR", ...p
         <p>Sender net increases by {formatMoney(totalMinor, currency)}; receiver net decreases by the same amount.</p>
         </section>}</FinancialDialog>;
 }
-export { validDate } from "./validation";

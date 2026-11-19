@@ -22,7 +22,13 @@ export interface QueryFilter {
   entryId?: string; operationId?: string; format?: 'csv' | 'json';
 }
 /** Internal bounded read request. Each result is obtained from one database snapshot. */
-export interface LedgerRead { kind: QueryKind; filter: QueryFilter; limit: number; offset: number; afterComment?: [string, string] }
+export interface StatementContinuation {
+  revision: number;
+  after: [string, string];
+  runningMinor: number;
+  totals: StatementTotals;
+}
+export interface LedgerRead { kind: QueryKind; filter: QueryFilter; limit: number; offset: number; afterComment?: [string, string]; statement?: StatementContinuation }
 export type QueryItem = LedgerEntry | LedgerComment | StoredLedgerRevision | MemberBalance | RepaymentSuggestion | SpendingGroup | StatementMovement | OperationStatus;
 export interface QuerySnapshot {
   revision: number; subjectExists: boolean; items: QueryItem[];

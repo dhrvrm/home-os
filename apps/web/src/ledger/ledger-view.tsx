@@ -1,4 +1,6 @@
 "use client";
+import { useMoneyLifetime } from "./money-lifetime";
+import { object, integer, validPage, validDate } from "./validation";
 import { memberLabel } from "./item-editor";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { AuthUser } from "@/lib/auth";
@@ -8,10 +10,10 @@ import { ResourceState, useHouseholdTask, useOnline, useResource } from "@/house
 import { ExpensesView } from "@/components/expenses-view";
 import { AmountField } from "./amount-field";
 import { ledgerQuery, LedgerRequestError, previewPosting, validLedgerEntry } from "./api";
-import { BalancesView, balanceWords, integer, object, PageControls, useLedgerRead, validBalance, validPage } from "./balances-view";
+import { BalancesView, balanceWords, PageControls, useLedgerRead, validBalance } from "./balances-view";
 import { EntryDetail, entryLabel } from "./entry-detail";
 import { AttemptRecovery, EntryDialog, todayLedgerDate, useFinancialAttempt, type OnLedgerAccepted } from "./entry-dialog";
-import { FinancialDialog, PaymentDialog, validDate } from "./payment-dialog";
+import { FinancialDialog, PaymentDialog } from "./payment-dialog";
 import { StatementView } from "./statement-view";
 import { MAX_PARTICIPANTS, decimalMoney, formatMoney, parseMoney } from "./allocation-preview";
 import type { Currency, LedgerPage, LedgerEntry, RepaymentSuggestion, RecurringPostingSource, LedgerCommandDraft, SpendingTotal, SpendingGroup, AcceptedReference } from "./types";
@@ -56,7 +58,9 @@ export function LedgerView({ user, location, onNavigate, onDirtyChange, accepted
     const [search, setSearch] = useState(location.search ?? "");
     const [category, setCategory] = useState(location.category ?? "");
     const personal = useLedgerRead(user, ledgerQuery("/balances", { currency, memberId: user.id, limit: 25 }), personalPage);
-    const accepted: OnLedgerAccepted = useCallback(async (reference) => { setEditor(undefined); setRule(undefined); onDirtyChange?.(false); setNotice("Recorded. Accepted money is saved; refresh to inspect the latest balances."); onRecorded?.(reference); onNavigate({ ...location, entryId: reference.entryId }); }, [onNavigate, onDirtyChange, onRecorded, location]);
+    const refreshPersonal = personal.refresh;
+    const lifetime = useMoneyLifetime();
+    const accepted: OnLedgerAccepted = useCallback(async (reference) => { setEditor(undefined); setRule(undefined); onDirtyChange?.(false); setNotice("Recorded. Accepted money is saved; refresh to inspect the latest balances."); onRecorded?.(reference); onNavigate({ ...location, entryId: reference.entryId }); if (!lifetime) void refreshPersonal(); }, [onNavigate, onDirtyChange, onRecorded, location, refreshPersonal, lifetime]);
     const save = useFinancialAttempt(user, accepted);
     const close = () => { setEditor(undefined); setRule(undefined); onDirtyChange?.(false); void save.refresh(); };
     const navigate = (patch: LedgerLocation) => onNavigate({ ...location, ...patch });
@@ -208,9 +212,9 @@ function PostingDialog({ rule, onExisting, ...props }: Parameters<typeof Payment
     const draftSnapshot = JSON.stringify({ period, date, payers });
     const [initialDraft] = useState(draftSnapshot);
     const command: LedgerCommandDraft = { action: "post", ruleId: observed.id, expectedRuleVersion: observed.version, period: Number(period), date, payers: contributions.map(p => ({ memberId: p.memberId, amountMinor: p.amountMinor ?? 0 })) };
-    return <FinancialDialog {...props} title="Post recurring period" dirty={draftSnapshot !== initialDraft} command={command} problem={problem} saveLabel="Record period expense" refusalContent={failure => {
+    return <FinancialDialog {...props} title="Post recurring period" dirty={draftSnapshot !== initialDraft} command={command} problem={problem} saveLabel="Record period expense" refusalContent={(failure, releaseOwnGuard) => {
             const existing = failure instanceof LedgerRequestError ? failure.details : undefined;
-            return validLedgerEntry(existing) && existing.householdId === props.user.householdId && existing.intent.kind === "expense" && existing.source?.ruleId === observed.id && source && existing.source.periodStart === source.periodStart ? <p>This period already has an original{existing.lifecycle === "void" ? " (voided)" : ""}.<button type="button" className="button button--quiet" onClick={() => onExisting(existing.id)}>Open existing original</button>
+            return validLedgerEntry(existing) && existing.householdId === props.user.householdId && existing.intent.kind === "expense" && existing.source?.ruleId === observed.id && source && existing.source.periodStart === source.periodStart ? <p>This period already has an original{existing.lifecycle === "void" ? " (voided)" : ""}.<button type="button" className="button button--quiet" onClick={() => { releaseOwnGuard(); onExisting(existing.id); }}>Open existing original</button>
             </p> : null;
         }}>
     <p>{observed.name} · observed rule version {observed.version}. A recurring rule is a template until you record its period.</p>

@@ -3,7 +3,8 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react
 import type { AuthUser } from "@/lib/auth";
 import type { Member } from "@/lib/expenses";
 import { Modal, useHouseholdTask, useOnline } from "@/household/ui";
-import { errorMessage } from "@/household/api";
+import { errorMessage, requireIdentity } from "@/household/api";
+import { useMoneyGuard, useMoneyLifetime } from "./money-lifetime";
 import { AmountField } from "./amount-field";
 import { checkAttempt, readAttempt, replayAttempt, submitAttempt, type AttemptOutcome, type RetainedAttempt } from "./attempt-state";
 import { MAX_PARTICIPANTS, decimalMoney, formatMoney, parseMoney, previewAllocation, previewItemizedBill } from "./allocation-preview";
@@ -22,22 +23,40 @@ export function useFinancialAttempt(user: AuthUser, onAccepted: OnLedgerAccepted
   const patch = useCallback((change: Partial<AttemptView>) => setState(previous => currentIdentity.current !== identity ? previous : ({ ...(previous.identity === identity ? previous : { identity, attempt: null, pending: false, loaded: false }), ...change, identity })), [identity]);
   const task = useHouseholdTask(user); const callback = useRef(onAccepted);
   useLayoutEffect(() => { callback.current = onAccepted; }, [onAccepted]);
-  const inFlight = useRef({ identity, active: false });
+  const lifetime = useMoneyLifetime();
+  const inFlight = useRef<{ identity: string; token: symbol } | null>(null);
   const refresh = useCallback(async () => { await task(() => readAttempt(user), value => patch({ attempt: value, loaded: true }), failure => patch({ error: errorMessage(failure), loaded: true })); }, [task, user, patch]);
-  useEffect(() => { let active = true; queueMicrotask(() => { if (active) void refresh(); }); const check = () => { if (inFlight.current.identity !== identity || !inFlight.current.active) void refresh(); }; window.addEventListener("focus", check); window.addEventListener("online", check); return () => { active = false; window.removeEventListener("focus", check); window.removeEventListener("online", check); }; }, [refresh, identity]);
+  useEffect(() => { let active = true; queueMicrotask(() => { if (active) void refresh(); }); const check = () => { if (inFlight.current?.identity !== identity) void refresh(); }; window.addEventListener("focus", check); window.addEventListener("online", check); return () => { active = false; window.removeEventListener("focus", check); window.removeEventListener("online", check); }; }, [refresh, identity]);
   async function perform(action: () => Promise<AttemptOutcome>) {
-    if (inFlight.current.identity === identity && inFlight.current.active) return; inFlight.current = { identity, active: true }; patch({ pending: true, error: undefined, refusalError: undefined });
-    await task(action, outcome => {
-      patch({ pending: false }); if (inFlight.current.identity === identity) inFlight.current.active = false;
-      if (outcome.kind === "accepted") {
-        patch({ attempt: null, accepted: outcome.reference });
-        // Acceptance is final even if navigation or a later balance refresh fails.
-        try { void Promise.resolve(callback.current(outcome.reference, outcome.result)).catch(() => patch({ error: "Saved. The latest view could not refresh. Open the recorded entry to check it." })); }
-        catch { patch({ error: "Saved. The latest view could not refresh. Open the recorded entry to check it." }); }
-      } else if (outcome.kind === "unknown" || outcome.kind === "locked") patch({ attempt: outcome.attempt });
-      else if (outcome.kind === "refused") patch({ attempt: null, error: outcome.error.message, refusalError: outcome.error });
-      else patch({ attempt: null });
-    }, failure => { if (inFlight.current.identity === identity) inFlight.current.active = false; patch({ pending: false, error: errorMessage(failure) }); });
+    if (inFlight.current?.identity === identity) return;
+    const invocation = { identity, token: Symbol("money-invocation") };
+    inFlight.current = invocation;
+    patch({ pending: true, error: undefined, refusalError: undefined });
+    try {
+      await task(async lease => {
+        const outcome = await action();
+        requireIdentity(user, lease);
+        if (outcome.kind === "accepted") {
+          // The application owner receives verified acceptance even after navigation.
+          try { lifetime?.publishAccepted(lease, outcome.operationId, outcome.reference); }
+          catch { requireIdentity(user, lease); }
+        }
+        return outcome;
+      }, outcome => {
+        if (inFlight.current !== invocation || currentIdentity.current !== identity) return;
+        if (outcome.kind === "accepted") {
+          if (outcome.currentAttempt) { patch({ attempt: outcome.currentAttempt, accepted: undefined }); return; }
+          patch({ attempt: null, accepted: outcome.reference });
+          // Acceptance stays final if a mounted editor's refresh fails.
+          try { void Promise.resolve(callback.current(outcome.reference, outcome.result)).catch(() => patch({ error: "Saved. The latest view could not refresh. Open the recorded entry to check it." })); }
+          catch { patch({ error: "Saved. The latest view could not refresh. Open the recorded entry to check it." }); }
+        } else if (outcome.kind === "unknown" || outcome.kind === "locked" || outcome.kind === "superseded") patch({ attempt: outcome.attempt, accepted: undefined });
+        else if (outcome.kind === "refused") patch({ attempt: null, error: outcome.error.message, refusalError: outcome.error });
+        else patch({ attempt: null });
+      }, failure => { if (inFlight.current === invocation) patch({ error: errorMessage(failure) }); });
+    } finally {
+      if (inFlight.current === invocation) { inFlight.current = null; patch({ pending: false }); }
+    }
   }
   const current = state.identity === identity ? state : { identity, attempt: null, pending: false, loaded: false };
   return { ...current, refresh, submit: (command: LedgerCommand) => perform(() => submitAttempt(user, command)), check: () => perform(() => checkAttempt(user)), replay: () => perform(() => replayAttempt(user)) };
@@ -71,12 +90,14 @@ export function EntryDialog({ user, members, entry: suppliedEntry, duplicate = f
   const [entry] = useState(suppliedEntry);
   const [draft, setDraft] = useState(() => initialDraft(user, entry, duplicate, initialCurrency)); const [initial] = useState(() => JSON.stringify(draft));
   const [discard, setDiscard] = useState(false); const [currencyReview, setCurrencyReview] = useState(false);
-  const save = useFinancialAttempt(user, (reference, result) => { onDirtyChange?.(false); return onAccepted(reference, result); }); const connected = useOnline();
+  const releaseCurrentGuard = useRef<(() => void) | null>(null);
+  const save = useFinancialAttempt(user, (reference, result) => { releaseCurrentGuard.current?.(); return onAccepted(reference, result); }); const connected = useOnline();
   const errorSummary = useRef<HTMLParagraphElement>(null);
   useEffect(() => { if (save.error) errorSummary.current?.focus(); }, [save.error]);
   const dirty = duplicate || initial !== JSON.stringify(draft);
   const guarded = !save.accepted && (dirty || save.pending || !!save.attempt);
-  useEffect(() => { onDirtyChange?.(guarded); return () => onDirtyChange?.(false); }, [guarded, onDirtyChange]);
+  const releaseGuard = useMoneyGuard(guarded, onDirtyChange);
+  useLayoutEffect(() => { releaseCurrentGuard.current = releaseGuard; return () => { releaseCurrentGuard.current = null; }; }, [releaseGuard]);
   useEffect(() => { const prevent = (event: BeforeUnloadEvent) => { if (guarded) { event.preventDefault(); event.returnValue = ""; } }; window.addEventListener("beforeunload", prevent); return () => window.removeEventListener("beforeunload", prevent); }, [guarded]);
   function update(patch: Partial<Draft>) { setDraft(current => { if (!patch.items) return { ...current, ...patch }; const selected = Array.from(new Set(patch.items.flatMap(item => item.split.participants.map(p => p.memberId)))); return { ...current, ...patch, participantOrder: [...current.participantOrder.filter(id => selected.includes(id)), ...selected.filter(id => !current.participantOrder.includes(id))] }; }); }
   function close() { if (save.pending) return; if (save.attempt || save.accepted || !dirty) onClose(); else setDiscard(true); }

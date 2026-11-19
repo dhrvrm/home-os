@@ -53,6 +53,7 @@ import { ItemForm } from "./item-form";
 import { ItemRow } from "./item-row";
 import { ExpensesView } from "./expenses-view";
 import { LedgerView } from "@/ledger/ledger-view";
+import { MoneyLifetimeProvider } from "@/ledger/money-lifetime";
 import type { AcceptedReference } from "@/ledger/types";
 import { ShoppingView } from "./shopping-view";
 import { StockDialog } from "./stock-dialog";
@@ -99,9 +100,10 @@ export function InventoryApp({ session, onLogout, onSessionChange }: {
   const allowMoneyNavigation = useCallback(() => !moneyGuard.current || window.confirm("Leave this financial editor? Unsaved input will be discarded. Any uncertain save stays retained for recovery."), []);
 
   function setView(next: PrimaryView, detail: LedgerLocation & { mealId?: string; recipeId?: string } = {}) {
+    const destination = householdDestination(window.location.href, next, detail);
+    if (moneyGuard.current && next === "expenses" && destination === `${window.location.pathname}${window.location.search}`) return;
     if (!allowMoneyNavigation()) return;
     moneyGuard.current = false;
-    const destination = householdDestination(window.location.href, next, detail);
     if (`${window.location.pathname}${window.location.search}` !== destination) window.history.pushState(null, "", destination);
     currentDestination.current = `${window.location.pathname}${window.location.search}`;
     setNavigation(readHouseholdLocation(window.location.search));
@@ -118,6 +120,8 @@ export function InventoryApp({ session, onLogout, onSessionChange }: {
     let active = true;
     const restore = () => {
       if (!active) return;
+      const destination = `${window.location.pathname}${window.location.search}`;
+      if (moneyGuard.current && destination === currentDestination.current && readHouseholdLocation(window.location.search).view === "expenses") return;
       if (!allowMoneyNavigation()) {
         if (currentDestination.current) window.history.pushState(null, "", currentDestination.current);
         return;
@@ -314,7 +318,7 @@ export function InventoryApp({ session, onLogout, onSessionChange }: {
       case "shopping":
         return <ShoppingView items={items} pendingItem={pendingItem} disabled={readOnly} onRestock={(item) => item.trackingMode === "exact" ? setStockDialog({ item, action: "restock" }) : void runAction(item, { type: "restock" })} />;
       case "expenses":
-        return session ? <LedgerView key={`${session.user.householdId}:${session.user.id}:${session.user.role}:${JSON.stringify(navigation)}`} user={session.user} location={navigation} acceptedReference={recordedMoney?.identity === moneyIdentity ? recordedMoney.reference : undefined} onRecorded={recordMoney} onNavigate={(detail) => setView("expenses", detail)} onDirtyChange={setMoneyGuard} /> : <ExpensesView readOnly={readOnly} />;
+        return session ? <LedgerView key={`${session.user.householdId}:${session.user.id}:${session.user.role}:${JSON.stringify(navigation)}`} user={session.user} location={navigation} acceptedReference={recordedMoney?.identity === moneyIdentity ? recordedMoney.reference : undefined} onNavigate={(detail) => setView("expenses", detail)} /> : <ExpensesView readOnly={readOnly} />;
       case "members":
         return session ? <MembersView key={`${navigation.action}:${navigation.memberId}`} currentUser={session.user} action={navigation.action} memberId={navigation.memberId} /> : null;
       case "account":
@@ -333,6 +337,7 @@ export function InventoryApp({ session, onLogout, onSessionChange }: {
   }
 
   return (
+    <MoneyLifetimeProvider key={moneyIdentity} user={session?.user} onRecorded={recordMoney} onGuardChange={setMoneyGuard}>
     <div className="app-shell">
       <aside className="sidebar">
         <a className="brand" href="#main" aria-label="Home OS inventory home">
@@ -458,6 +463,7 @@ export function InventoryApp({ session, onLogout, onSessionChange }: {
       {editingItem && !readOnly && <ItemEditDialog item={editingItem} pending={pendingItem === editingItem.id} error={mutationError} onClose={() => { setEditingItem(null); setMutationError(null); }} onSubmit={saveItemEdit} />}
       {stockDialog && !readOnly && <StockDialog item={stockDialog.item} action={stockDialog.action} pending={pendingItem === stockDialog.item.id} error={mutationError} onClose={() => { setStockDialog(null); setMutationError(null); }} onSubmit={(input) => runAction(stockDialog.item, input)} />}
     </div>
+    </MoneyLifetimeProvider>
   );
 }
 

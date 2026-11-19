@@ -55,6 +55,24 @@ describe("durable financial attempts with real IndexedDB and access leases", () 
     expect((await replayAttempt(user)).kind).toBe("unknown");
     expect(await readAttempt(user)).not.toBeNull();
   });
+  it.each([{}, [], null, { data: null, error: {} }, { data: null, error: { code: 1, message: "Refused" } }, { data: null, error: { code: "conflict", message: 1 } }, { data: null, error: { code: "conflict", message: "Refused", field: 1 } }, { data: {}, error: { code: "conflict", message: "Refused" } }])("retains an actual first-send slot for unreadable 409 JSON %j", async body => {
+    const intent = command();
+    vi.mocked(fetch).mockResolvedValueOnce(new Response(JSON.stringify(body), { status: 409 }));
+    expect((await submitAttempt(user, intent)).kind).toBe("unknown");
+    expect(await readAttempt(user)).toMatchObject({ command: intent, phase: "unknown", mayHaveOtherRequest: true });
+  });
+  it.each([401, 403, 408, 429])("retains malformed JSON at HTTP %i with the proper authority lock", async status => {
+    const intent = command();
+    vi.mocked(fetch).mockResolvedValueOnce(new Response("null", { status }));
+    expect((await submitAttempt(user, intent)).kind).toBe([401, 403].includes(status) ? "locked" : "unknown");
+    expect((await readAttempt(user))?.command).toEqual(intent);
+  });
+  it("freezes a first send when the purported accepted result is corrupt", async () => {
+    const intent = command();
+    vi.mocked(fetch).mockResolvedValueOnce(response({ ...accepted, comment: { ...accepted.comment, observedVersion: 99 } }, 201));
+    expect((await submitAttempt(user, intent)).kind).toBe("unknown");
+    expect((await readAttempt(user))?.command).toEqual(intent);
+  });
   it("cannot clear or populate the next person's slot from a delayed previous-person response", async () => {
     let finish!: (r: Response) => void;
     vi.mocked(fetch).mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
@@ -79,8 +97,48 @@ describe("durable financial attempts with real IndexedDB and access leases", () 
     vi.mocked(fetch).mockRejectedValueOnce(new TypeError("lost"));
     const newer = command(); await submitAttempt(user, newer);
     finish(response(accepted, 201));
-    await expect(pending).rejects.toThrow(/access changed/i);
+    await expect(pending).resolves.toMatchObject({ kind: "accepted", currentAttempt: { command: newer } });
     expect((await readAttempt(user))?.command).toEqual(newer);
+  });
+  it("returns both concurrent accepted statuses after the first recovery clears the shared slot", async () => {
+    const intent = command(); vi.mocked(fetch).mockRejectedValueOnce(new TypeError("lost")); await submitAttempt(user, intent);
+    const finishes: ((value: Response) => void)[] = [];
+    vi.mocked(fetch).mockImplementation(() => new Promise(resolve => { finishes.push(resolve); }));
+    const first = checkAttempt(user); const second = checkAttempt(user);
+    await vi.waitFor(() => expect(finishes).toHaveLength(2));
+    const reference = { status: "accepted", entryId: "entry", version: 1, action: "comment", commentId: "comment" };
+    finishes[0](response(reference)); await expect(first).resolves.toMatchObject({ kind: "accepted", operationId: intent.operationId, currentAttempt: null });
+    finishes[1](response(reference)); await expect(second).resolves.toMatchObject({ kind: "accepted", operationId: intent.operationId, currentAttempt: null });
+    expect(await readAttempt(user)).toBeNull();
+  });
+  it("does not send a superseded replay or recreate its missing slot", async () => {
+    vi.mocked(fetch).mockRejectedValueOnce(new TypeError("lost")); await submitAttempt(user, command());
+    const row = await homeOSDatabase.householdCache.toCollection().first();
+    await homeOSDatabase.householdCache.clear();
+    vi.spyOn(homeOSDatabase.householdCache, "get").mockResolvedValueOnce(row);
+    await expect(replayAttempt(user)).resolves.toMatchObject({ kind: "superseded", attempt: null });
+    expect(fetch).toHaveBeenCalledTimes(1); expect(await readAttempt(user)).toBeNull();
+  });
+  it.each(["unknown", "refused"])("cannot rewrite or mark a newer slot after an old %s response", async outcome => {
+    let finish!: (value: Response) => void;
+    vi.mocked(fetch).mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    const old = submitAttempt(user, command()); await vi.waitFor(() => expect(finish).toBeTypeOf("function"));
+    vi.mocked(fetch).mockResolvedValueOnce(response({ status: "accepted", entryId: "entry", version: 1, action: "comment", commentId: "comment" })); await checkAttempt(user);
+    const newer = command(); vi.mocked(fetch).mockRejectedValueOnce(new TypeError("lost")); await submitAttempt(user, newer);
+    const before = await homeOSDatabase.householdCache.toArray();
+    finish(outcome === "refused" ? new Response(JSON.stringify({ data: null, error: { code: "conflict", message: "Refused" } }), { status: 409 }) : response({ nonsense: true }));
+    await expect(old).resolves.toMatchObject({ kind: "superseded", attempt: { command: newer } });
+    expect(await homeOSDatabase.householdCache.toArray()).toEqual(before);
+  });
+  it("does not mark or send a replay when its loaded slot has been replaced", async () => {
+    vi.mocked(fetch).mockRejectedValueOnce(new TypeError("lost")); await submitAttempt(user, command());
+    const oldRow = await homeOSDatabase.householdCache.toCollection().first();
+    await homeOSDatabase.householdCache.clear();
+    const newer = command(); vi.mocked(fetch).mockRejectedValueOnce(new TypeError("lost")); await submitAttempt(user, newer);
+    const before = await homeOSDatabase.householdCache.toArray();
+    vi.spyOn(homeOSDatabase.householdCache, "get").mockResolvedValueOnce(oldRow);
+    await expect(replayAttempt(user)).resolves.toMatchObject({ kind: "superseded", attempt: { command: newer } });
+    expect(fetch).toHaveBeenCalledTimes(2); expect(await homeOSDatabase.householdCache.toArray()).toEqual(before);
   });
   it("persists Viewer recovery locking without dispatch and retains 401 even when the body is unreadable", async () => {
     vi.mocked(fetch).mockRejectedValueOnce(new TypeError("lost")); await submitAttempt(user, command());

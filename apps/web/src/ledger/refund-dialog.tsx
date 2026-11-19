@@ -1,16 +1,18 @@
 "use client";
+import { validDate } from "./validation";
 import { memberLabel } from "./item-editor";
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { AmountField } from "./amount-field";
 import { decimalMoney, formatMoney, parseMoney } from "./allocation-preview";
-import { FinancialDialog, validDate, type FinancialDialogProps } from "./payment-dialog";
+import { FinancialDialog, type FinancialDialogProps } from "./payment-dialog";
 import { todayLedgerDate } from "./entry-dialog";
 import type { LedgerEntry, RefundCapacity, LedgerCommandDraft, RefundInput } from "./types";
-export function RefundDialog({ original, capacity, entry, onRefreshCapacity, ...props }: FinancialDialogProps & {
+export function RefundDialog({ original, capacity, entry, onRefreshCapacity, capacityState, ...props }: FinancialDialogProps & {
     original: LedgerEntry;
     capacity: RefundCapacity;
     entry?: LedgerEntry;
     onRefreshCapacity?: () => void;
+    capacityState?: ReactNode;
 }) {
     const [observed] = useState(entry);
     const source = observed?.intent.kind === "refund" ? observed.intent : undefined;
@@ -36,6 +38,7 @@ export function RefundDialog({ original, capacity, entry, onRefreshCapacity, ...
     const fact: RefundInput = { kind: "refund", expenseId: original.id, currency, date, description: description.trim(), totalMinor: totalMinor ?? 0, notes: notes.trim() || undefined, payers: ps, shares: ss };
     const command: LedgerCommandDraft = observed ? { action: "correct", entryId: observed.id, expectedVersion: observed.version, entry: fact } : { action: "create", entry: fact };
     return <FinancialDialog {...props} title={observed ? "Correct linked refund" : "Record linked refund"} dirty={snapshot !== initial} command={command} problem={problem} saveLabel={observed ? "Save correction" : "Record refund"}>
+    {capacityState}
     <p>Original expense · {openedOriginal.intent.kind !== "payment" ? openedOriginal.intent.description : openedOriginal.id} · {formatMoney(openedOriginal.intent.totalMinor, currency)}</p>
     <p>Remaining refund capacity · {formatMoney(shownCapacity.remainingMinor, currency)}. A refund reverses original contributions and allocated consumption.</p>
     <button className="button button--quiet" type="button" onClick={onRefreshCapacity}>Refresh original and capacity · keep input</button>

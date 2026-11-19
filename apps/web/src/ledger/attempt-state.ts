@@ -8,7 +8,8 @@ import { dispatchCommand, ledgerQuery, LedgerRequestError, validReference } from
 import type { AcceptedReference, CommandResult, LedgerCommand } from "./types";
 export const ATTEMPT_NAMESPACE = "ledger:attempt:v1";
 export interface RetainedAttempt { phase: "unknown" | "locked"; command: LedgerCommand; retainedAt: string; mayHaveOtherRequest: boolean; message?: string }
-export type AttemptOutcome = { kind: "accepted"; reference: AcceptedReference; result?: CommandResult } | { kind: "unknown" | "locked"; attempt: RetainedAttempt } | { kind: "refused"; error: Error } | { kind: "empty" };
+export type AttemptOutcome = { kind: "accepted"; operationId: string; reference: AcceptedReference; currentAttempt: RetainedAttempt | null; result?: CommandResult } | { kind: "unknown" | "locked"; attempt: RetainedAttempt } | { kind: "superseded"; attempt: RetainedAttempt | null } | { kind: "refused"; error: Error } | { kind: "empty" };
+interface SlotTransition { owned: boolean; current: RetainedAttempt | null }
 /** Counts only local recovery information; this is never an offline sending queue. */
 export async function countPendingMoneyAttempts(): Promise<number> { return (await homeOSDatabase.householdCache.toCollection().primaryKeys()).filter(key => { try { return JSON.parse(key)[2] === ATTEMPT_NAMESPACE; } catch { return false; } }).length; }
 async function load(user: AuthUser, lease: WorkLease): Promise<RetainedAttempt | null> {
@@ -19,10 +20,10 @@ async function load(user: AuthUser, lease: WorkLease): Promise<RetainedAttempt |
   return value;
 }
 export function readAttempt(user: AuthUser): Promise<RetainedAttempt | null> { return runHouseholdWork(lease => load(user, lease)); }
-async function replace(user: AuthUser, attempt: RetainedAttempt, lease: WorkLease, next?: RetainedAttempt, ordinaryRefusal = false): Promise<RetainedAttempt | null> {
+async function replace(user: AuthUser, attempt: RetainedAttempt, lease: WorkLease, next?: RetainedAttempt, ordinaryRefusal = false): Promise<SlotTransition> {
   const result = await homeOSDatabase.transaction("rw", homeOSDatabase.householdCache, async () => {
     requireIdentity(user, lease); const current = await load(user, lease);
-    if (!current || JSON.stringify(current.command) !== JSON.stringify(attempt.command)) throw new AccessChangedError();
+    if (!current || JSON.stringify(current.command) !== JSON.stringify(attempt.command)) return { owned: false, current };
     // Another tab may have replayed while this request was in flight. Its marker
     // is monotonic and is inspected in the same transaction as any clearing.
     let retained = next ? { ...next, mayHaveOtherRequest: !!current.mayHaveOtherRequest || !!next.mayHaveOtherRequest } : null;
@@ -30,7 +31,7 @@ async function replace(user: AuthUser, attempt: RetainedAttempt, lease: WorkLeas
     if (retained) await homeOSDatabase.householdCache.put({ key: cacheKey(user, ATTEMPT_NAMESPACE), householdId: user.householdId, memberId: user.id, data: retained, savedAt: retained.retainedAt });
     else await homeOSDatabase.householdCache.delete(cacheKey(user, ATTEMPT_NAMESPACE));
     requireIdentity(user, lease);
-    return retained;
+    return { owned: true, current: retained };
   });
   requireIdentity(user, lease);
   return result;
@@ -48,20 +49,20 @@ async function failure(user: AuthUser, attempt: RetainedAttempt, lease: WorkLeas
     const next: RetainedAttempt = { ...attempt, phase: "locked", mayHaveOtherRequest: true, message: "Recovery locked. Sign in as the same person to check this save; it may already have been recorded." };
     const retained = await replace(user, attempt, lease, next);
     if (error instanceof LedgerRequestError && error.status === 401) signalSessionExpired(lease.proof);
-    return { kind: "locked", attempt: retained! };
+    return retained.owned ? { kind: "locked", attempt: retained.current! } : { kind: "superseded", attempt: retained.current };
   }
   const definitive = error instanceof LedgerRequestError && error.status >= 400 && error.status < 500 && ![408, 429].includes(error.status) && error.code !== "invalid_response";
-  if (definitive) { const retained = await replace(user, attempt, lease, undefined, true); return retained ? { kind: "unknown", attempt: retained } : { kind: "refused", error }; }
+  if (definitive) { const retained = await replace(user, attempt, lease, undefined, true); return !retained.owned ? { kind: "superseded", attempt: retained.current } : retained.current ? { kind: "unknown", attempt: retained.current } : { kind: "refused", error }; }
   const next: RetainedAttempt = { ...attempt, phase: "unknown", mayHaveOtherRequest: true, message: "Save outcome unknown. This may already have been recorded. Check status or replay this same save." };
-  const retained = await replace(user, attempt, lease, next); return { kind: "unknown", attempt: retained! };
+  const retained = await replace(user, attempt, lease, next); return retained.owned ? { kind: "unknown", attempt: retained.current! } : { kind: "superseded", attempt: retained.current };
 }
 async function send(user: AuthUser, attempt: RetainedAttempt, lease: WorkLease): Promise<AttemptOutcome> {
   requireIdentity(user, lease);
-  if (user.role === "viewer") { const next: RetainedAttempt = { ...attempt, phase: "locked", message: "Viewers cannot replay financial changes. Your retained save remains available for authorized recovery." }; await replace(user, attempt, lease, next); return { kind: "locked", attempt: next }; }
+  if (user.role === "viewer") { const next: RetainedAttempt = { ...attempt, phase: "locked", message: "Viewers cannot replay financial changes. Your retained save remains available for authorized recovery." }; const retained = await replace(user, attempt, lease, next); return retained.owned ? { kind: "locked", attempt: retained.current! } : { kind: "superseded", attempt: retained.current }; }
   try {
     const result = await dispatchCommand(attempt.command); requireIdentity(user, lease);
     if ("entry" in result && result.entry.householdId !== user.householdId || "comment" in result && result.comment.authorId !== user.id) throw new APIError("Unreadable save ownership", "invalid_response");
-    await replace(user, attempt, lease); return { kind: "accepted", reference: reference(attempt.command, result), result };
+    const transition = await replace(user, attempt, lease); return { kind: "accepted", operationId: attempt.command.operationId, reference: reference(attempt.command, result), currentAttempt: transition.current, result };
   } catch (error) { return failure(user, attempt, lease, error); }
 }
 /** Never accepts a second intent while any unresolved slot exists, including from another tab. */
@@ -84,14 +85,14 @@ export function submitAttempt(user: AuthUser, command: LedgerCommand): Promise<A
     return send(user, attempt, lease);
   });
 }
-export function replayAttempt(user: AuthUser): Promise<AttemptOutcome> { return runHouseholdWork(async lease => { const attempt = await load(user, lease); if (!attempt) return { kind: "empty" }; const marked = await replace(user, attempt, lease, { ...attempt, mayHaveOtherRequest: true }); return send(user, marked!, lease); }); }
+export function replayAttempt(user: AuthUser): Promise<AttemptOutcome> { return runHouseholdWork(async lease => { const attempt = await load(user, lease); if (!attempt) return { kind: "empty" }; const marked = await replace(user, attempt, lease, { ...attempt, mayHaveOtherRequest: true }); if (!marked.owned || !marked.current) return { kind: "superseded", attempt: marked.current }; return send(user, marked.current, lease); }); }
 export function checkAttempt(user: AuthUser): Promise<AttemptOutcome> { return runHouseholdWork(async lease => {
   const attempt = await load(user, lease); if (!attempt) return { kind: "empty" };
   if (!online()) return { kind: attempt.phase, attempt };
   try {
     const result: unknown = await request(ledgerQuery(`/operations/${encodeURIComponent(attempt.command.operationId)}`)); requireIdentity(user, lease);
-    if (validReference(result) && matchesReference(attempt.command, result)) { await replace(user, attempt, lease); return { kind: "accepted", reference: result }; }
+    if (validReference(result) && matchesReference(attempt.command, result)) { const transition = await replace(user, attempt, lease); return { kind: "accepted", operationId: attempt.command.operationId, reference: result, currentAttempt: transition.current }; }
     if (!result || typeof result !== "object" || !("status" in result) || result.status !== "unknown") throw new APIError("Unreadable operation status", "invalid_response");
-    const next: RetainedAttempt = { ...attempt, phase: "unknown", mayHaveOtherRequest: true, message: "Not confirmed yet. An outstanding request may still be recorded. Keep checking or replay this same save." }; const retained = await replace(user, attempt, lease, next); return { kind: "unknown", attempt: retained! };
+    const next: RetainedAttempt = { ...attempt, phase: "unknown", mayHaveOtherRequest: true, message: "Not confirmed yet. An outstanding request may still be recorded. Keep checking or replay this same save." }; const retained = await replace(user, attempt, lease, next); return retained.owned ? { kind: "unknown", attempt: retained.current! } : { kind: "superseded", attempt: retained.current };
   } catch (error) { return failure(user, attempt, lease, error); }
 }); }

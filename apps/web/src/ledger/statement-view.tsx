@@ -1,9 +1,10 @@
 "use client";
+import { object, integer, validPage } from "./validation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { AuthUser } from "@/lib/auth";
 import { ResourceState, useHouseholdTask, useOnline } from "@/household/ui";
 import { ledgerQuery } from "./api";
-import { object, integer, validPage, useLedgerRead, PageControls } from "./balances-view";
+import { useLedgerRead, PageControls } from "./balances-view";
 import { formatMoney } from "./allocation-preview";
 import { downloadStatement } from "./export";
 import type { Currency, StatementPage, StatementMovement } from "./types";

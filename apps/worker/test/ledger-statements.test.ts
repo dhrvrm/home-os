@@ -4,6 +4,7 @@ import { D1LedgerQueryRepository } from '../src/ledger/d1-query-repository';
 import { LedgerService } from '../src/ledger/service';
 import { D1LedgerRepository } from '../src/ledger/d1-repository';
 import { bill, beforeBatch, ledgerDB, ledgerFixture } from './ledger-fixtures';
+import { measuredStatementDB } from './ledger-statement-measurement';
 let context: Awaited<ReturnType<typeof ledgerFixture>>;
 beforeEach(async () => { context = await ledgerFixture(); });
 const queries = (db = ledgerDB) => new LedgerQueries(new D1LedgerQueryRepository(db), 'query-test-secret');
@@ -88,4 +89,107 @@ it('keeps a completed first-page snapshot reconciling if a correction commits be
   expect(page).toEqual(before);
   expect(page).toMatchObject({ openingMinor: 0, movementMinor: 100, closingMinor: 100 });
   await expect(queries().statement(context('read'), { ...scope, cursor: page.nextCursor! })).rejects.toMatchObject({ status: 409, code: 'ledger_revision_changed' });
+});
+
+it('carries totals and exact running balances through date ties, zero, refund and payment movements', async () => {
+  const currency = 'USD', date = '2034-02-01';
+  const baseline = await queries().statement(context('carry-baseline'), { memberId: 'local-owner', currency, to: '2033-12-31' });
+  const prior = baseline.closingMinor;
+  const opening = await commands().createExpense(context('carry-opening'), bill(100, { currency, date: '2034-01-01' }));
+  const expense = await commands().createExpense(context('carry-expense'), bill(120, { currency, date }));
+  const zero = await commands().createExpense(context('carry-zero'), bill(20, { currency, date,
+    allocation: { kind: 'split', split: { mode: 'equal', participants: [{ memberId: 'local-owner', kind: 'equal' }] } } }));
+  const refund = await commands().createRefund(context('carry-refund'), { kind: 'refund', expenseId: opening.id, date,
+    description: 'Refund', currency, totalMinor: 20, payers: [{ memberId: 'local-owner', amountMinor: 20 }], shares: [{ memberId: 'ledger-b', amountMinor: 20 }] });
+  const payment = await commands().createPayment(context('carry-payment'), { kind: 'payment', date: '2034-02-02', currency,
+    totalMinor: 30, senderId: 'local-owner', receiverId: 'ledger-b', method: 'Cash' });
+  const expected = [{ entryId: expense.id, date, amountMinor: 60 }, { entryId: zero.id, date, amountMinor: 0 },
+    { entryId: refund.id, date, amountMinor: -20 }, { entryId: payment.id, date: '2034-02-02', amountMinor: 30 }]
+    .sort((a, b) => a.date < b.date ? -1 : a.date > b.date ? 1 : a.entryId < b.entryId ? -1 : 1);
+  const measured = measuredStatementDB(ledgerDB), q = queries(measured.database);
+  const input = { memberId: 'local-owner', currency, from: date, to: '2034-02-28', limit: 1 };
+  let cursor: string | undefined, running = prior + 50, seen = 0;
+  do {
+    const start = measured.records.length;
+    const page = await q.statement(context('carry-read'), { ...input, ...(cursor ? { cursor } : {}) });
+    expect(page).toMatchObject({ openingMinor: prior + 50, movementMinor: 70, closingMinor: prior + 120, movementCount: 4 });
+    running += expected[seen]!.amountMinor;
+    expect(page.items).toEqual([expect.objectContaining({ ...expected[seen]!, version: 1, runningMinor: running })]);
+    if (cursor) expect(measured.records.slice(start).map(row => row.sql).join('\n')).not.toMatch(/SUM\(|COUNT\(|OVER\(|OFFSET|WITH facts/);
+    seen++; cursor = page.nextCursor ?? undefined;
+  } while (cursor);
+  expect(seen).toBe(4); expect(running).toBe(prior + 120);
+  const json = await q.export(context('carry-json'), { ...input, limit: 50, format: 'json' });
+  const csv = await q.export(context('carry-csv'), { ...input, limit: 50, format: 'csv' });
+  expect(csv.items).toEqual(json.items);
+  for (const row of json.items) expect(csv.csv).toContain(`"${row.entryId}","${row.version}","${row.date}"`);
+  expect(await q.statement(context('carry-empty'), { ...input, from: '2034-02-10', to: '2034-02-11' })).toMatchObject({ openingMinor: prior + 120, movementMinor: 0, closingMinor: prior + 120, movementCount: 0, items: [] });
+  expect(await q.statement(context('carry-no-to'), { ...input, to: undefined, limit: 50 })).toMatchObject({ openingMinor: prior + 50, movementMinor: 70, closingMinor: prior + 120 });
+  expect(await q.statement(context('carry-no-from'), { ...input, from: undefined, limit: 50 })).toMatchObject({ openingMinor: 0, movementMinor: prior + 120, closingMinor: prior + 120, movementCount: baseline.movementCount + 5 });
+  expect(measured.records.every(row => row.rowsWritten === 0)).toBe(true);
+});
+
+it('authenticates statement carry values and refuses signed invalid shapes before repository reads', async () => {
+  for (let i = 0; i < 3; i++) await commands().createExpense(context(`signed-carry-${i}`), bill(2, { currency: 'EUR', date: '2035-01-01' }));
+  const input = { memberId: 'local-owner', currency: 'EUR', from: '2035-01-01', limit: 1 };
+  const first = await queries().statement(context('signed-read'), input);
+  const [body, signature] = first.nextCursor!.split('.');
+  type TestCursor = { offset: number; statement: { after: [string, string]; runningMinor: number; extra?: boolean; totals: { movementMinor: number; closingMinor: number; movementCount: number } } };
+  const decode = (value: string) => JSON.parse(atob(value.replaceAll('-', '+').replaceAll('_', '/'))) as TestCursor;
+  const encode = (value: unknown) => btoa(JSON.stringify(value)).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '');
+  const mutations = [
+    (value: TestCursor) => { value.statement.totals.movementMinor++; },
+    (value: TestCursor) => { value.statement.runningMinor++; },
+    (value: TestCursor) => { value.statement.after[1] = 'different-entry'; },
+  ];
+  for (const mutate of mutations) {
+    const payload = decode(body!); mutate(payload);
+    const measured = measuredStatementDB(ledgerDB);
+    await expect(queries(measured.database).statement(context('signed-read'), { ...input, cursor: `${encode(payload)}.${signature}` })).rejects.toMatchObject({ status: 400 });
+    expect(measured.records).toHaveLength(2); // Current authority before and after refusal; no snapshot/rows.
+  }
+  const original = first.nextCursor!;
+  for (const patch of [{ memberId: 'ledger-b' }, { currency: 'USD' }, { from: '2034-01-01' }, { to: '2035-12-31' }, { limit: 2 }]) {
+    await expect(queries().statement(context('signed-read'), { ...input, ...patch, cursor: original })).rejects.toMatchObject({ status: 400 });
+  }
+  await expect(queries().export(context('signed-read'), { ...input, format: 'json', cursor: original })).rejects.toMatchObject({ status: 400 });
+  const key = await crypto.subtle.importKey('raw', new TextEncoder().encode('query-test-secret'), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  for (const mutate of [
+    (value: TestCursor) => { value.statement.after[0] = '2035-02-30'; },
+    (value: TestCursor) => { value.statement.totals.closingMinor++; },
+    (value: TestCursor) => { value.statement.runningMinor = Number.MAX_SAFE_INTEGER + 1; },
+    (value: TestCursor) => { value.statement.extra = true; },
+    (value: TestCursor) => { value.offset = value.statement.totals.movementCount; },
+  ]) {
+    const payload = decode(body!); mutate(payload); const encoded = encode(payload);
+    const signed = new Uint8Array(await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(`home-os:ledger-query-cursor:v1\n${encoded}`)));
+    const signature = btoa(String.fromCharCode(...signed)).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '');
+    const measured = measuredStatementDB(ledgerDB);
+    await expect(queries(measured.database).statement(context('signed-read'), { ...input, cursor: `${encoded}.${signature}` })).rejects.toMatchObject({ status: 400 });
+    expect(measured.records).toHaveLength(2);
+  }
+});
+
+it('gates stale statement row work and rechecks authority on stale and failed reads', async () => {
+  for (let i = 0; i < 60; i++) await commands().createExpense(context(`stale-statement-${i}`), bill(2, { currency: 'GBP', date: '2036-01-01' }));
+  const input = { memberId: 'local-owner', currency: 'GBP', from: '2036-01-01', limit: 1 };
+  const first = await queries().statement(context('stale-read'), input);
+  await commands().createExpense(context('stale-statement-next'), bill(2, { currency: 'GBP', date: '2036-01-01' }));
+  const measured = measuredStatementDB(ledgerDB);
+  await expect(queries(measured.database).statement(context('stale-read'), { ...input, cursor: first.nextCursor! })).rejects.toMatchObject({ code: 'ledger_revision_changed' });
+  const rows = measured.records.filter(row => row.sql.includes('INDEXED BY ledger_revisions_statement_order'));
+  expect(rows).toHaveLength(2);
+  expect(rows.reduce((sum, row) => sum + row.rowsRead, 0)).toBeLessThanOrEqual(2);
+  expect(measured.records).toHaveLength(5);
+  const revoked = beforeBatch(ledgerDB, () => ledgerDB.prepare("UPDATE members SET archived_at=CURRENT_TIMESTAMP WHERE id='local-owner'").run());
+  await expect(queries(revoked).statement(context('stale-read'), { ...input, cursor: first.nextCursor! })).rejects.toMatchObject({ status: 403 });
+  await ledgerFixture();
+  const failed = new Proxy(ledgerDB, { get(target, key) {
+    if (key === 'batch') return async () => {
+      await ledgerDB.prepare("UPDATE members SET archived_at=CURRENT_TIMESTAMP WHERE id='local-owner'").run();
+      throw new Error('Simulated read failure');
+    };
+    const value = Reflect.get(target, key, target); return typeof value === 'function' ? value.bind(target) : value;
+  } });
+  await expect(queries(failed).statement(context('failed-read'), input)).rejects.toMatchObject({ status: 403 });
 });

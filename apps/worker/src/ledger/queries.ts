@@ -7,13 +7,20 @@ import { decimalMoney } from '../../../../shared/ledger-money';
 import type { LedgerComment, LedgerEntry, LedgerPage, StoredLedgerRevision } from './model';
 import type { BalanceTotal, LedgerQueryRepository, MemberBalance, OperationStatus, QueryFilter, QueryItem, QueryKind, RefundCapacity, RepaymentSuggestion, SpendingGroup, SpendingTotal, StatementExport, StatementMovement, StatementPage } from './query-repository';
 import { balanceQueryInput, entryQueryInput, exportQueryInput, ledgerPageInput, parseQuery, repaymentQueryInput, statementQueryInput, summaryQueryInput } from './query-validation';
-import { ledgerId } from './validation';
+import { calendarDate, ledgerId } from './validation';
 export type * from './query-repository';
 
 const DOMAIN = 'home-os:ledger-query-cursor:v1\n';
+const signedMinor = z.number().int().min(-Number.MAX_SAFE_INTEGER).max(Number.MAX_SAFE_INTEGER);
+const statementCursor = z.object({
+  after: z.tuple([calendarDate, ledgerId]), runningMinor: signedMinor,
+  totals: z.object({ openingMinor: signedMinor, movementMinor: signedMinor, closingMinor: signedMinor,
+    movementCount: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER) }).strict(),
+}).strict().refine(value => BigInt(value.totals.openingMinor) + BigInt(value.totals.movementMinor) === BigInt(value.totals.closingMinor), 'Invalid statement totals');
 const cursorPayload = z.object({
   v: z.literal(1), binding: z.string().regex(/^[a-f0-9]{64}$/), revision: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).nullable(),
   offset: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER), after: z.tuple([z.string().max(40), ledgerId]).optional(),
+  statement: statementCursor.optional(),
 }).strict();
 type Cursor = z.infer<typeof cursorPayload>;
 const bytes = (value: string) => new TextEncoder().encode(value);
@@ -96,16 +103,21 @@ export class LedgerQueries {
     await this.repository.authorize(context, action);
     const { limit, cursor: token, ...filter } = query;
     const binding = await digest(DOMAIN + canonical({ actorId: context.actorId, householdId: context.householdId, kind, filter: canonical(filter), limit }));
-    const cursor = token ? await this.readCursor(token, binding, kind === 'comments') : undefined;
+    const statement = kind === 'statement' || kind === 'export';
     try {
-      const snapshot = await this.repository.read(context, { kind, filter, limit, offset: cursor?.offset ?? 0, ...(cursor?.after ? { afterComment: cursor.after } : {}) }, action);
+      const cursor = token ? await this.readCursor(token, binding, kind) : undefined;
+      if (cursor?.statement && ((filter.from && cursor.statement.after[0] < filter.from) || (filter.to && cursor.statement.after[0] > filter.to))) throw new ValidationError('cursor', 'Invalid cursor or different query scope');
+      const snapshot = await this.repository.read(context, { kind, filter, limit, offset: statement ? 0 : cursor?.offset ?? 0, ...(cursor?.after ? { afterComment: cursor.after } : {}), ...(cursor?.statement ? { statement: { ...cursor.statement, revision: cursor.revision! } } : {}) }, action);
       if (!snapshot.subjectExists) throw new NotFoundError(filter.entryId ? 'ledger_entry' : 'member', filter.entryId ?? filter.memberId!);
       if (cursor && kind !== 'comments' && cursor.revision !== snapshot.revision) throw new LedgerRevisionChangedError();
       const items = snapshot.items.slice(0, limit) as T[];
       let nextCursor: string | null = null;
       if (snapshot.items.length > limit) {
-        const last = items.at(-1) as LedgerComment;
-        nextCursor = await this.writeCursor({ v: 1, binding, revision: kind === 'comments' ? null : snapshot.revision, offset: (cursor?.offset ?? 0) + items.length, ...(kind === 'comments' ? { after: [last.acceptedAt, last.id] as [string, string] } : {}) });
+        const last = items.at(-1)!;
+        nextCursor = await this.writeCursor({ v: 1, binding, revision: kind === 'comments' ? null : snapshot.revision, offset: (cursor?.offset ?? 0) + items.length,
+          ...(kind === 'comments' ? { after: [(last as LedgerComment).acceptedAt, (last as LedgerComment).id] as [string, string] } : {}),
+          ...(statement ? { statement: { after: [(last as StatementMovement).date, (last as StatementMovement).entryId] as [string, string], runningMinor: (last as StatementMovement).runningMinor, totals: snapshot.statementTotals! } } : {}),
+        });
       }
       return { page: { items, nextCursor, revision: snapshot.revision }, snapshot };
     } finally {
@@ -118,13 +130,15 @@ export class LedgerQueries {
     const signature = await crypto.subtle.sign('HMAC', await this.key, bytes(DOMAIN + body));
     return `${body}.${encode(new Uint8Array(signature))}`;
   }
-  private async readCursor(token: string, binding: string, comments: boolean): Promise<Cursor> {
+  private async readCursor(token: string, binding: string, kind: QueryKind): Promise<Cursor> {
     try {
       if (token.length > 4096) throw new Error('Cursor too long');
       const parts = token.split('.');
       if (parts.length !== 2 || !await crypto.subtle.verify('HMAC', await this.key, decode(parts[1]!), bytes(DOMAIN + parts[0]!))) throw new Error('Invalid cursor signature');
       const payload = cursorPayload.parse(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(decode(parts[0]!))));
-      if (payload.binding !== binding || (comments ? payload.revision !== null || !payload.after : payload.revision === null || payload.after !== undefined)) throw new Error('Different cursor scope');
+      const comments = kind === 'comments', statement = kind === 'statement' || kind === 'export';
+      if (payload.binding !== binding || (comments ? payload.revision !== null || !payload.after : payload.revision === null || payload.after !== undefined)
+        || (statement ? !payload.statement || payload.offset <= 0 || payload.offset >= payload.statement.totals.movementCount : payload.statement !== undefined)) throw new Error('Different cursor scope');
       return payload;
     } catch { throw new ValidationError('cursor', 'Invalid cursor or different query scope'); }
   }

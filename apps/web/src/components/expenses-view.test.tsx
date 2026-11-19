@@ -1,4 +1,5 @@
-import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { useState } from "react";
+import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { APIError, archiveExpense, createExpense, listExpenses, listMembers, restoreExpense, updateExpense } from "@/lib/api";
@@ -209,13 +210,39 @@ describe("ExpensesView", () => {
 
     await userEvent.click(within(dialog).getByRole("button", { name: "Save recurring rule" }));
     expect(updateExpenseMock).toHaveBeenCalledTimes(1);
-    await userEvent.click(screen.getByRole("button", { name: "Review latest rule" }));
+    await userEvent.click(within(dialog).getByRole("button", { name: "Review latest rule" }));
     await waitFor(() => expect(screen.queryByRole("button", { name: "Review latest rule" })).toBeNull());
     updateExpenseMock.mockResolvedValue({ ...electricity, name: "Power bill", version: 8 });
     await userEvent.click(within(dialog).getByRole("button", { name: "Save recurring rule" }));
 
     await waitFor(() => expect(updateExpenseMock).toHaveBeenCalledTimes(2));
     expect(updateExpenseMock.mock.calls[1]![2]).toMatchObject({ expectedVersion: 7 });
+  });
+
+  it("retains the conflict and draft when latest-rule review fails, then retries inside the modal", async () => {
+    await renderReady();
+    await userEvent.click(within(screen.getByRole("article", { name: "Electricity" })).getByRole("button", { name: "Edit Electricity" }));
+    const dialog = screen.getByRole("dialog");
+    await userEvent.clear(within(dialog).getByLabelText("Rule name"));
+    await userEvent.type(within(dialog).getByLabelText("Rule name"), "Retained power draft");
+    updateExpenseMock.mockRejectedValueOnce(new APIError("Concurrent rule change", "conflict"));
+    await userEvent.click(within(dialog).getByRole("button", { name: "Save recurring rule" }));
+    await within(dialog).findByRole("button", { name: "Review latest rule" });
+    listExpensesMock.mockRejectedValueOnce(new APIError("Unavailable", "network_error"));
+    await userEvent.click(within(dialog).getByRole("button", { name: "Review latest rule" }));
+    await within(dialog).findByText(/The latest rule could not be loaded/);
+    expect(within(dialog).getByRole("button", { name: "Save recurring rule" })).toBeDisabled();
+    expect(within(dialog).getByLabelText("Rule name")).toHaveValue("Retained power draft");
+    expect(updateExpenseMock.mock.calls[0]![2]).toMatchObject({ expectedVersion: 3 });
+    activeAndArchived([{ ...electricity, name: "Current authority rule", version: 9 }, internet]);
+    await userEvent.click(within(dialog).getByRole("button", { name: "Review latest rule" }));
+    await within(dialog).findByText(/Reviewed current rule · version 9 · Current authority rule/);
+    expect(within(dialog).getByLabelText("Rule name")).toHaveValue("Retained power draft");
+    updateExpenseMock.mockResolvedValue({ ...electricity, version: 10 });
+    await userEvent.click(within(dialog).getByRole("button", { name: "Save recurring rule" }));
+    await waitFor(() => expect(updateExpenseMock).toHaveBeenCalledTimes(2));
+    expect(updateExpenseMock.mock.calls[1]![2]).toMatchObject({ expectedVersion: 9 });
+    expect(updateExpenseMock.mock.calls[1]![1]).toMatchObject({ name: "Retained power draft" });
   });
 
   it("archives a rule after confirmation and restores it from the archived list", async () => {
@@ -250,4 +277,117 @@ it("keeps the operation identity stable for an identical recurring rule retry af
   await userEvent.click(screen.getByRole("button",{name:"Save recurring rule"}));await waitFor(()=>expect(updateExpenseMock).toHaveBeenCalledTimes(2));
   expect(updateExpenseMock.mock.calls[1]![2]?.operationId).toBe(updateExpenseMock.mock.calls[0]![2]?.operationId);
   expect(updateExpenseMock.mock.calls[1]![2]?.expectedVersion).toBe(3);
+});
+
+it("keeps a newer expense guarded when an older recurring save completes", async () => {
+  const { MoneyLifetimeProvider } = await import("@/ledger/money-lifetime");
+  const { EntryDialog } = await import("@/ledger/entry-dialog");
+  const { publishAccessBoundary, resumeHouseholdWork, setActiveMemberId } = await import("@/auth/work");
+  const { homeOSDatabase } = await import("@/offline/db");
+  const user = { id: "owner", householdId: "home", role: "member" as const, name: "Asha", email: "asha@example.com" };
+  setActiveMemberId(user.id); publishAccessBoundary("ready", user); resumeHouseholdWork();
+  await homeOSDatabase.householdCache.clear();
+  const guarded = vi.fn(); const legacyGuard = vi.fn();
+  let finishSave: ((rule: ExpenseRule) => void) | undefined;
+  updateExpenseMock.mockImplementationOnce(() => new Promise(resolve => { finishSave = resolve; }));
+  function Editors() {
+    const [expenseOpen, setExpenseOpen] = useState(false);
+    return <MoneyLifetimeProvider user={user} onRecorded={vi.fn()} onGuardChange={guarded}>
+      <ExpensesView user={user} onDirtyChange={legacyGuard}/>
+      <button type="button" onClick={() => setExpenseOpen(true)}>Open another expense</button>
+      {expenseOpen && <EntryDialog user={user} members={members} onClose={() => setExpenseOpen(false)} onAccepted={vi.fn()}/>}
+    </MoneyLifetimeProvider>;
+  }
+  render(<Editors/>);
+  await userEvent.click(await screen.findByRole("button", { name: "Edit Electricity" }));
+  await waitFor(() => expect(guarded).toHaveBeenLastCalledWith(true));
+  expect(legacyGuard).not.toHaveBeenCalled();
+  await userEvent.click(screen.getByRole("button", { name: "Save recurring rule" }));
+  await waitFor(() => expect(finishSave).toBeDefined());
+  await userEvent.click(screen.getByRole("button", { name: "Open another expense" }));
+  await userEvent.type(await screen.findByLabelText("Description"), "Newer unsaved dinner");
+  const beforeCompletion = guarded.mock.calls.length;
+  finishSave!({ ...electricity, version: 4 });
+  await waitFor(() => expect(screen.queryByRole("heading", { name: "Edit Electricity" })).not.toBeInTheDocument());
+  expect(screen.getByLabelText("Description")).toHaveValue("Newer unsaved dinner");
+  expect(guarded).toHaveBeenLastCalledWith(true);
+  expect(guarded.mock.calls.slice(beforeCompletion).every(([value]) => value === true)).toBe(true);
+  await userEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Cancel" }));
+  await userEvent.click(screen.getByRole("button", { name: "Discard draft" }));
+  await waitFor(() => expect(guarded).toHaveBeenLastCalledWith(false));
+  await homeOSDatabase.householdCache.clear();
+});
+it.each([
+  { replacement: electricity, dismissal: "Cancel" },
+  { replacement: internet, dismissal: "Cancel" },
+  { replacement: electricity, dismissal: "Escape" },
+  { replacement: internet, dismissal: "Escape" },
+])("ignores held latest-rule review after $dismissal and reopening $replacement.name", async ({ replacement, dismissal }) => {
+  const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+  await renderReady();
+  await userEvent.click(screen.getByRole("button", { name: "Edit Electricity" }));
+  updateExpenseMock.mockRejectedValueOnce(new APIError("First dialog conflict", "conflict"));
+  await userEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Save recurring rule" }));
+  await within(screen.getByRole("dialog")).findByRole("button", { name: "Review latest rule" });
+  let finishReview: ((rules: ExpenseRule[]) => void) | undefined;
+  listExpensesMock.mockImplementationOnce(() => new Promise(resolve => { finishReview = resolve; }));
+  await userEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Review latest rule" }));
+  await waitFor(() => expect(finishReview).toBeDefined());
+  if (dismissal === "Escape") {
+    await userEvent.click(within(screen.getByRole("dialog")).getByLabelText("Rule name"));
+    await userEvent.keyboard("{Escape}");
+  }
+  else await userEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Cancel" }));
+  expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  await userEvent.click(screen.getByRole("button", { name: `Edit ${replacement.name}` }));
+  const dialog = screen.getByRole("dialog");
+  await userEvent.clear(within(dialog).getByLabelText("Rule name"));
+  await userEvent.type(within(dialog).getByLabelText("Rule name"), "Replacement draft");
+  await act(async () => { finishReview!([{ ...electricity, version: 20 }, { ...internet, version: 30 }]); });
+  await waitFor(() => expect(screen.queryByText(/Reviewed current rule/)).not.toBeInTheDocument());
+  expect(within(dialog).getByLabelText("Rule name")).toHaveValue("Replacement draft");
+  updateExpenseMock.mockRejectedValueOnce(new APIError("Replacement conflict", "conflict"));
+  await userEvent.click(within(dialog).getByRole("button", { name: "Save recurring rule" }));
+  await within(dialog).findByText("Replacement conflict");
+  expect(updateExpenseMock.mock.calls[1]![0]).toBe(replacement.id);
+  expect(updateExpenseMock.mock.calls[1]![2]).toMatchObject({ expectedVersion: replacement.version });
+  expect(within(dialog).getByRole("button", { name: "Review latest rule" })).toBeEnabled();
+  confirm.mockRestore();
+});
+it.each(["success", "error"] as const)("settles held review %s across a same-identity user object refresh", async outcome => {
+  const { publishAccessBoundary, resumeHouseholdWork, setActiveMemberId } = await import("@/auth/work");
+  const user = { id: "owner", householdId: "home", role: "member" as const, name: "Asha", email: "asha@example.com" };
+  setActiveMemberId(user.id); publishAccessBoundary("ready", user); resumeHouseholdWork();
+  const view = render(<ExpensesView user={user}/>);
+  await userEvent.click(await screen.findByRole("button", { name: "Edit Electricity" }));
+  const dialog = screen.getByRole("dialog");
+  await userEvent.clear(within(dialog).getByLabelText("Rule name"));
+  await userEvent.type(within(dialog).getByLabelText("Rule name"), "Same person retained draft");
+  updateExpenseMock.mockRejectedValueOnce(new APIError("Rule changed", "conflict"));
+  await userEvent.click(within(dialog).getByRole("button", { name: "Save recurring rule" }));
+  await within(dialog).findByRole("button", { name: "Review latest rule" });
+  let finishReview: ((rules: ExpenseRule[]) => void) | undefined;
+  let failReview: ((error: Error) => void) | undefined;
+  listExpensesMock.mockImplementationOnce(() => new Promise((resolve, reject) => { finishReview = resolve; failReview = reject; }));
+  await userEvent.click(within(dialog).getByRole("button", { name: "Review latest rule" }));
+  await waitFor(() => expect(finishReview).toBeDefined());
+  view.rerender(<ExpensesView user={{ ...user }}/>);
+  await waitFor(() => expect(listMembersMock).toHaveBeenCalledTimes(3));
+  await act(async () => {
+    if (outcome === "success") finishReview!([{ ...electricity, version: 7 }, internet]);
+    else failReview!(new APIError("Review network unavailable", "network_error"));
+  });
+  if (outcome === "error") {
+    await within(dialog).findByText(/The latest rule could not be loaded/);
+    expect(within(dialog).getByRole("button", { name: "Review latest rule" })).toBeEnabled();
+    activeAndArchived([{ ...electricity, version: 7 }, internet]);
+    await userEvent.click(within(dialog).getByRole("button", { name: "Review latest rule" }));
+  }
+  await within(dialog).findByText(/Reviewed current rule · version 7/);
+  expect(within(dialog).getByLabelText("Rule name")).toHaveValue("Same person retained draft");
+  expect(within(dialog).getByRole("button", { name: "Save recurring rule" })).toBeEnabled();
+  updateExpenseMock.mockResolvedValueOnce({ ...electricity, version: 8 });
+  await userEvent.click(within(dialog).getByRole("button", { name: "Save recurring rule" }));
+  await waitFor(() => expect(updateExpenseMock).toHaveBeenCalledTimes(2));
+  expect(updateExpenseMock.mock.calls[1]![2]).toMatchObject({ expectedVersion: 7 });
 });

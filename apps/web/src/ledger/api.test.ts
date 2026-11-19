@@ -42,6 +42,23 @@ describe("ledger transport", () => {
     expect(rows.filter(row => JSON.parse(row.key)[2].startsWith("ledger:read:detail:"))).toHaveLength(10);
     expect(rows.some(row => JSON.parse(row.key)[2] === "ledger:attempt:v1")).toBe(true);
   });
+  it.each(["query", "detail"] as const)("retains the higher same-key %s revision and its original timestamp after delayed reads and offline reopening", async kind => {
+    type Snapshot = { revision: number; value: string };
+    const valid = (v: unknown): v is Snapshot => !!v && typeof v === "object" && "revision" in v && Number.isSafeInteger(v.revision) && "value" in v && typeof v.value === "string";
+    const path = "/api/v1/ledger/entries?from=2026-11-01&to=2026-11-19&cursor=unchanged";
+    let resolveOld!: (response: Response) => void;
+    vi.mocked(fetch).mockImplementationOnce(() => new Promise(resolve => { resolveOld = resolve; }));
+    const oldRead = ledgerRead(user, path, valid, kind);
+    await vi.waitFor(() => expect(resolveOld).toBeTypeOf("function"));
+    vi.mocked(fetch).mockResolvedValueOnce(new Response(JSON.stringify({ data: { revision: 2, value: "new" }, error: null })));
+    const newer = await ledgerRead(user, path, valid, kind);
+    await new Promise(resolve => setTimeout(resolve, 10));
+    resolveOld(new Response(JSON.stringify({ data: { revision: 1, value: "old" }, error: null })));
+    const delayed = await oldRead;
+    expect(delayed).toEqual({ data: newer.data, savedAt: newer.savedAt, cached: true });
+    vi.spyOn(navigator, "onLine", "get").mockReturnValue(false);
+    expect(await ledgerRead(user, path, valid, kind)).toEqual({ data: newer.data, savedAt: newer.savedAt, cached: true });
+  });
   it("assembles only a complete export at one revision and keeps the first CSV header", async () => {
     const scope = { memberId: "alice", currency: "INR" as const, from: null, to: null, basis: "current-effective" as const };
     const page = (id: string, nextCursor: string | null, csv: string, revision = 1) => ({ scope, revision, format: "csv", csv, nextCursor, items: [{ entryId: id, version: 1, date: "2026-11-19", kind: "expense", description: "Dinner", currency: "INR", amountMinor: 1, runningMinor: id === "one" ? 1 : 2 }], openingMinor: 0, movementMinor: 2, closingMinor: 2, movementCount: 2, maxMovementRows: 10000, maxBytes: 8388608, requiresNarrowerRange: false });

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { expenseRuleId } from "../expenses/catalog/validation";
 import { MAX_ENTRY_MINOR, MAX_ITEMS, MAX_PARTICIPANTS, MAX_WEIGHT, parseQuantity } from "../../../../shared/ledger-money";
 import { resolveExpense, validateRefundAllocation, assertContributions } from "./allocation";
 import type { ExpenseInput, LedgerCommand, RefundInput } from "./model";
@@ -56,20 +57,21 @@ export const paymentInput = z.object({
 export const financialInput = z.discriminatedUnion("kind", [expenseInput, refundInput, paymentInput]);
 const operationId = ledgerId;
 const expectedVersion = integer(1, Number.MAX_SAFE_INTEGER);
-export const ledgerCommandInput = z.discriminatedUnion("action", [
-  z.object({ operationId, action: z.literal("create"), entry: financialInput }).strict(),
-  z.object({ operationId, action: z.literal("correct"), entryId: ledgerId, expectedVersion, entry: financialInput }).strict(),
-  z.object({ operationId, action: z.literal("void"), entryId: ledgerId, expectedVersion }).strict(),
-  z.object({ operationId, action: z.literal("restore"), entryId: ledgerId, expectedVersion }).strict(),
-  z.object({ operationId, action: z.literal("comment"), entryId: ledgerId, expectedVersion, text: text(2000) }).strict(),
-  z.object({ operationId, action: z.literal("post"), ruleId: ledgerId, expectedRuleVersion: expectedVersion,
+export const createCommandInput = z.object({ operationId, action: z.literal("create"), entry: financialInput }).strict();
+export const correctCommandInput = z.object({ operationId, action: z.literal("correct"), entryId: ledgerId, expectedVersion, entry: financialInput }).strict();
+export const voidCommandInput = z.object({ operationId, action: z.literal("void"), entryId: ledgerId, expectedVersion }).strict();
+export const restoreCommandInput = z.object({ operationId, action: z.literal("restore"), entryId: ledgerId, expectedVersion }).strict();
+export const commentCommandInput = z.object({ operationId, action: z.literal("comment"), entryId: ledgerId, expectedVersion, text: text(2000) }).strict();
+export const postCommandInput = z.object({ operationId, action: z.literal("post"), ruleId: expenseRuleId, expectedRuleVersion: expectedVersion,
     // An ordinal from the rule's original anchor; calendar range/cadence are acceptance checks.
     period: integer(0, Number.MAX_SAFE_INTEGER),
     date: calendarDate, payers: contributions, description: optionalText(160), category: optionalText(200), notes: optionalText(2000),
   }).strict().superRefine((input, context) => calculationIssue(context, () => {
     const total = input.payers.reduce((sum, p) => sum + BigInt(p.amountMinor), BigInt(0));
     assertContributions(input.payers, Number(total));
-  })),
+  }));
+export const ledgerCommandInput = z.discriminatedUnion("action", [
+  createCommandInput, correctCommandInput, voidCommandInput, restoreCommandInput, commentCommandInput, postCommandInput,
 ]);
 /** HTTP/MCP callers must invoke before JSON.parse so escaped/multi-byte payloads are bounded. */
 export function parseLedgerRequest(raw: string | Uint8Array): LedgerCommand {

@@ -39,6 +39,10 @@ CREATE TABLE ledger_effects (
  FOREIGN KEY(household_id,entry_id,version) REFERENCES ledger_revisions(household_id,entry_id,version),
  FOREIGN KEY(household_id,member_id) REFERENCES members(household_id,id)
 );
+CREATE INDEX ledger_revisions_statement_order ON ledger_revisions (
+ household_id, json_extract(snapshot_json,'$.intent.currency'),
+ json_extract(snapshot_json,'$.intent.date'), entry_id, version
+);
 CREATE INDEX ledger_effects_member ON ledger_effects(household_id,member_id,currency,entry_id,version);
 -- Original sides retain zero allocations and participant order for caps and explanation.
 CREATE TABLE ledger_allocations (

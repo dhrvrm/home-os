@@ -9,6 +9,7 @@ import { runHouseholdWork } from "@/auth/work";
 import { requireIdentity } from "@/household/api";
 import { useOnline } from "@/household/ui";
 import { ExpenseRuleDialog } from "./expense-rule-dialog";
+import { useMoneyGuard } from "@/ledger/money-lifetime";
 
 type LoadState = "loading" | "error" | "ready";
 type DialogState = { mode: "create" } | { mode: "edit"; rule: ExpenseRule; expectedVersion: number };
@@ -17,6 +18,8 @@ export function ExpensesView({ readOnly = false, user, onPost, onDirtyChange }: 
   const connected = useOnline();
   const attempts = useRef(new Map<string,string>());
   const [conflicting, setConflicting] = useState(false);
+  const [reviewing, setReviewing] = useState(false);
+  const [reviewedRule, setReviewedRule] = useState<ExpenseRule>();
   const scoped = useCallback(async <T,>(action: () => Promise<T>): Promise<T> => runHouseholdWork(async lease => { if(user) requireIdentity(user,lease); const value = await action(); if(user) requireIdentity(user,lease); return value; }),[user]);
   function operation(intent: unknown): string { const key=JSON.stringify(intent); const existing=attempts.current.get(key); if(existing)return existing; const id=crypto.randomUUID();attempts.current.set(key,id);return id; }
   const [rules, setRules] = useState<ExpenseRule[]>([]);
@@ -27,6 +30,7 @@ export function ExpensesView({ readOnly = false, user, onPost, onDirtyChange }: 
   const [showArchived, setShowArchived] = useState(false);
   const [mutationError, setMutationError] = useState<string | null>(null);
   const [dialog, setDialog] = useState<DialogState | null>(null);
+  const dialogGeneration = useRef(0);
   const [saving, setSaving] = useState(false);
   const [pendingRule, setPendingRule] = useState<string | null>(null);
 
@@ -56,7 +60,31 @@ export function ExpensesView({ readOnly = false, user, onPost, onDirtyChange }: 
     void (async () => { await load(); })();
   }, [load]);
 
-  useEffect(() => { onDirtyChange?.(!!dialog || saving); return () => onDirtyChange?.(false); }, [dialog, saving, onDirtyChange]);
+  useEffect(() => {
+    const generation = dialogGeneration;
+    return () => { generation.current++; };
+  }, []);
+
+  useMoneyGuard(!!dialog || saving, onDirtyChange);
+
+  function openDialog(next: DialogState) {
+    dialogGeneration.current++;
+    setReviewing(false);
+    setConflicting(false);
+    setReviewedRule(undefined);
+    setMutationError(null);
+    setDialog(next);
+  }
+
+  function closeDialog() {
+    if (!window.confirm("Discard this unsaved recurring rule draft?")) return;
+    dialogGeneration.current++;
+    setDialog(null);
+    setReviewing(false);
+    setReviewedRule(undefined);
+    setMutationError(null);
+    setConflicting(false);
+  }
 
   async function saveRule(input: CreateExpenseInput) {
     if (readOnly || !connected || conflicting) return;
@@ -68,7 +96,9 @@ export function ExpensesView({ readOnly = false, user, onPost, onDirtyChange }: 
       } else {
         await scoped(() => createExpense(input, { operationId: operation(["create",input]) }));
       }
+      dialogGeneration.current++;
       setDialog(null);
+      setReviewedRule(undefined);
       attempts.current.clear();
       try { await refresh(); } catch { setMutationError("Rule saved. Refresh the recurring rules to inspect the latest list."); }
     } catch (error) {
@@ -81,16 +111,23 @@ export function ExpensesView({ readOnly = false, user, onPost, onDirtyChange }: 
 
   /** Explicit review only: a conflict never changes the observed version automatically. */
   async function rebase() {
+    if (dialog?.mode !== "edit" || reviewing) return;
+    const generation = dialogGeneration.current;
+    setReviewing(true);
     try {
       const active = await refresh();
-      setDialog((current) => {
-        if (current?.mode !== "edit") return current;
-        const latest = active.find((rule) => rule.id === current.rule.id);
-        return latest ? { ...current, expectedVersion: latest.version } : current;
-      });
+      if (dialogGeneration.current !== generation) return;
+      const latest = active.find(rule => rule.id === dialog.rule.id);
+      if (!latest) { setMutationError("The current rule is no longer active. Your entered draft is retained."); return; }
+      setDialog(current => current?.mode === "edit" && current.rule.id === latest.id ? { ...current, expectedVersion: latest.version } : current);
+      setReviewedRule(latest);
+      setMutationError(null);
       setConflicting(false);
     } catch {
-      // The conflict message already stands; a failed refresh must not replace it.
+      if (dialogGeneration.current !== generation) return;
+      setMutationError("The latest rule could not be loaded. Try Review latest rule again. Your entered draft is retained.");
+    } finally {
+      if (dialogGeneration.current === generation) setReviewing(false);
     }
   }
 
@@ -131,14 +168,13 @@ export function ExpensesView({ readOnly = false, user, onPost, onDirtyChange }: 
           <button className="button button--small button--quiet" type="button" onClick={() => setShowArchived((current) => !current)}>
             <Archive size={16} aria-hidden="true" /> {showArchived ? "Active" : "Archived"}
           </button>
-          {!showArchived && !readOnly && <button className="button button--primary" type="button" onClick={() => setDialog({ mode: "create" })}>
+          {!showArchived && !readOnly && <button className="button button--primary" type="button" onClick={() => openDialog({ mode: "create" })}>
             <Plus size={18} weight="bold" aria-hidden="true" /> Add recurring rule
           </button>}
         </div>
       </header>
 
       {!connected && <p role="status">Connect to maintain recurring rules or record a period.</p>}
-      {conflicting && <p role="alert">Review the latest rule before another save. Your entered draft is retained. <button type="button" className="button button--quiet" onClick={() => void rebase()}>Review latest rule</button></p>}
       {mutationError && (
         <div className="inline-error" role="alert"><WarningCircle size={19} weight="fill" aria-hidden="true" /><span>{mutationError}</span><button type="button" onClick={() => setMutationError(null)}>Dismiss</button></div>
       )}
@@ -158,7 +194,7 @@ export function ExpensesView({ readOnly = false, user, onPost, onDirtyChange }: 
           <Receipt size={26} aria-hidden="true" />
           <h3>{showArchived ? "No archived recurring rules" : "No recurring rules yet"}</h3>
           <p>{showArchived ? "Expenses you archive stay recoverable here." : "Add rent, utilities, or any shared cost that repeats."}</p>
-          {!showArchived && !readOnly && <button className="button button--primary" type="button" onClick={() => setDialog({ mode: "create" })}>Add your first recurring rule</button>}
+          {!showArchived && !readOnly && <button className="button button--primary" type="button" onClick={() => openDialog({ mode: "create" })}>Add your first recurring rule</button>}
         </div>
       )}
 
@@ -182,7 +218,7 @@ export function ExpensesView({ readOnly = false, user, onPost, onDirtyChange }: 
                 {showArchived
                   ? <button className="button button--small button--quiet" type="button" disabled={!connected || pendingRule === rule.id} onClick={() => void restoreRule(rule)} aria-label={`Restore ${rule.name}`}>Restore</button>
                   : <>
-                      <button className="button button--small button--quiet" type="button" disabled={!connected} onClick={() => {setConflicting(false);setDialog({ mode: "edit", rule, expectedVersion: rule.version });}} aria-label={`Edit ${rule.name}`}>Edit</button>
+                      <button className="button button--small button--quiet" type="button" disabled={!connected} onClick={() => openDialog({ mode: "edit", rule, expectedVersion: rule.version })} aria-label={`Edit ${rule.name}`}>Edit</button>
                       {onPost && <button className="button button--small button--quiet" type="button" disabled={!connected || rule.needsAttention} onClick={() => onPost(rule)}>Record period for {rule.name}</button>}
                       <button className="button button--small button--quiet" type="button" disabled={!connected || pendingRule === rule.id} onClick={() => void archiveRule(rule)} aria-label={`Archive ${rule.name}`}>Archive</button>
                     </>}
@@ -197,7 +233,9 @@ export function ExpensesView({ readOnly = false, user, onPost, onDirtyChange }: 
         members={members}
         pending={saving}
         error={mutationError}
-        onClose={() => { if (!window.confirm("Discard this unsaved recurring rule draft?")) return; setDialog(null); setMutationError(null); setConflicting(false); }}
+        conflict={conflicting ? { reviewing, onReview: () => void rebase() } : undefined}
+        reviewedRule={reviewedRule}
+        onClose={closeDialog}
         onSubmit={saveRule}
       />}
     </section>

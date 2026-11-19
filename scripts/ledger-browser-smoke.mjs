@@ -158,7 +158,7 @@ async function stored() {
 }
 
 function step(name) { console.log('[ledger-browser] ' + name); }
-async function callbackWithin(promise) {let timer;try{return await Promise.race([promise,new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error('No OAuth callback within 15 seconds')),15000)})])}finally{clearTimeout(timer)}}
+async function callbackWithin(promise,label='OAuth callback') {let timer;try{return await Promise.race([promise,new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error('No '+label+' within 15 seconds')),15000)})])}finally{clearTimeout(timer)}}
 async function check(name, action) { step(name); await action(); checks.push(name); }
 function observe(target) { target.on('pageerror', error => errors.push(error.message)); }
 async function shot(name,fullPage=true) { await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));await page.screenshot({path:path.join(evidence, name + '.png'), fullPage,animations:'disabled'}); }
@@ -489,10 +489,43 @@ try {
   const json=JSON.parse(downloads.JSON);assert.equal(json.scope.basis,'current-effective');assert.equal(json.scope.memberId,ownerId);assert.equal(json.scope.currency,'INR');assert.equal(json.revision,statement.revision);assert.equal(json.movementCount,statement.movementCount);assert.equal(json.items.length,statement.movementCount);assert.equal(json.openingMinor+json.items.reduce((n,r)=>n+r.amountMinor,0),json.closingMinor);
   assert.ok(downloads.CSV.includes('"revision",'+statement.revision));assert.ok(downloads.CSV.includes('"basis","current-effective"'));assert.ok(downloads.CSV.includes("'=Formula-safe text"));
   assert.equal(json.items.filter(row=>row.entryId===changed.id).length,1);
+  // These fixture descriptions are single-line; compare every downloaded record,
+  // including escaped CSV fields, against the complete JSON statement.
+  const csvRecords=downloads.CSV.trimEnd().split('\r\n').map(line=>Array.from(line.matchAll(/"((?:""|[^"])*)"(?=,|$)/g),match=>match[1].replaceAll('""','"')));
+  const headerIndex=csvRecords.findIndex(row=>row[0]==='entry_id');assert.ok(headerIndex>=0);
+  const moneyMinor=value=>{assert.match(value,/^-?\d+\.\d{2}$/);return BigInt(value.replace('.',''))};
+  const financialRows=csvRecords.slice(headerIndex+1);assert.equal(financialRows.length,json.items.length);
+  for(let i=0;i<financialRows.length;i++){const row=financialRows[i],fact=json.items[i];assert.equal(row.length,8);assert.equal(row[0],fact.entryId);assert.equal(Number(row[1]),fact.version);assert.equal(row[2],fact.date);assert.equal(row[5],fact.currency);assert.equal(moneyMinor(row[6]),BigInt(fact.amountMinor));assert.equal(moneyMinor(row[7]),BigInt(fact.runningMinor))}
+
   const balance=(await parity()).items.find(p=>p.memberId===ownerId);assert.equal(json.closingMinor,balance.netMinor);
   for(const width of [320,390,1280]) for(const theme of ['light','dark']){
    await page.setViewportSize({width,height:width===320?568:width===390?844:800});await page.emulateMedia({colorScheme:theme});await noOverflow();await page.evaluate(()=>window.scrollTo(0,0));await shot(`statement-${width}-${theme}`,false);
   }
+
+  // Cancel after the first real page, release the delayed continuation, and then
+  // complete a fresh export. A cancelled preparation must never download a file.
+  await open('&ledgerTab=balances&statementMemberId='+encodeURIComponent(ownerId));
+  let releaseContinuation,signalContinuation,signalReleased,cancelled=false,cancelDownloads=0;
+  const continuationHeld=new Promise(resolve=>releaseContinuation=resolve),continuationArrived=new Promise(resolve=>signalContinuation=resolve),continuationReleased=new Promise(resolve=>signalReleased=resolve);
+  const observeCancelledDownload=()=>cancelDownloads++;page.on('download',observeCancelledDownload);
+  await page.route('**/api/v1/ledger/export?**',async route=>{
+   const response=await route.fetch();
+   if(new URL(route.request().url()).searchParams.has('cursor')){signalContinuation();await continuationHeld;try{await route.fulfill({response})}catch(error){if(!cancelled)throw error}finally{signalReleased()}}
+   else await route.fulfill({response});
+  });
+  await page.getByRole('button',{name:'Export complete JSON',exact:true}).click();await callbackWithin(continuationArrived,'statement continuation');
+  cancelled=true;await page.getByRole('button',{name:'Cancel export',exact:true}).click();releaseContinuation();await callbackWithin(continuationReleased,'cancelled continuation release');
+  await expect(page.getByRole('region',{name:'Member statement',exact:true}).getByRole('alert')).toContainText('cancelled');
+  await expect(page.getByRole('button',{name:'Export complete JSON',exact:true})).toBeEnabled();assert.equal(cancelDownloads,0);
+  page.off('download',observeCancelledDownload);await page.unroute('**/api/v1/ledger/export?**');
+  const restartedDownload=page.waitForEvent('download');await page.getByRole('button',{name:'Export complete JSON',exact:true}).click();
+  const restarted=await restartedDownload;assert.equal(await restarted.failure(),null);const restartedPath=path.join(evidence,'statement-after-cancel.json');await restarted.saveAs(restartedPath);
+  assert.deepEqual(JSON.parse(await readFile(restartedPath,'utf8')),json);
+  // A server refusal flag is independently honored even when the count fits.
+  await page.route('**/api/v1/ledger/export?**',async route=>{const response=await route.fetch();const body=await response.json();body.data.requiresNarrowerRange=true;await route.fulfill({response,json:body})});
+  let flaggedDownloads=0;const observeFlagged=()=>flaggedDownloads++;page.on('download',observeFlagged);
+  await page.getByRole('button',{name:'Export complete JSON',exact:true}).click();await expect(page.getByRole('region',{name:'Member statement',exact:true}).getByRole('alert')).toContainText('narrower');assert.equal(flaggedDownloads,0);
+  page.off('download',observeFlagged);await page.unroute('**/api/v1/ledger/export?**');
   // Export limits are enforced on actual clicked browser controls, without creating 10k ledger facts.
   await page.route('**/api/v1/ledger/export?**',async route=>{
    const response=await route.fetch();const body=await response.json();body.data.movementCount=10001;await route.fulfill({response,json:body});

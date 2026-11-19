@@ -44,10 +44,10 @@ for (const ceiling of ['owner','member','viewer'] as const) for (const role of [
     expect(refused.error || refused.result?.isError).toBeTruthy();
   }
 });
-it('enforces raw MCP framing limits before parsing escaped or multibyte bodies, preserving OAuth admission', async () => {
+it('enforces raw financial MCP framing limits before dispatch with escaped or multibyte bodies, preserving OAuth admission', async () => {
   const oauth = await personalOAuth('viewer', 'ledger-body-reader');
   const original = mcpRequest(oauth.tokens.access_token);
-  for (const raw of [' '.repeat(65537), JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list', extra: '界'.repeat(23000) })]) {
+  for (const raw of [JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'ledger_balances', arguments: {} } }).padEnd(65537), JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'ledger_balances', arguments: {} }, extra: '界'.repeat(23000) })]) {
     const measured = measuredFetch();
     const response = await measured.fetch(new Request(original, { body: raw }));
     expect(response.status).toBe(413);

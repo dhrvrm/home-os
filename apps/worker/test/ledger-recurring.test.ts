@@ -33,7 +33,7 @@ it('retains source identity forever across concurrent operation IDs, rule versio
 });
 it.each(['version','archive','membership'])('rechecks changed %s at the accepting batch',async(kind)=>{
  const r=await rule();const db=beforeBatch(ledgerDB,()=>kind==='membership'?ledgerDB.prepare("UPDATE members SET archived_at=CURRENT_TIMESTAMP WHERE id='ledger-b'").run():kind==='archive'?rules().archiveRule(context('post-race-archive',1),r.id):rules().updateRule(context('post-race-version',1),r.id,{name:'Changed'}));
- const cmd=post(r.id,`post-refuse-${kind}`); await expect(service(db).execute(context(cmd.operationId),cmd)).rejects.toMatchObject({status:400});
+ const cmd=post(r.id,`post-refuse-${kind}`); await expect(service(db).execute(context(cmd.operationId),cmd)).rejects.toMatchObject(kind==='membership'?{status:400}:{status:409,actualVersion:2,details:{id:r.id,version:2}});
  expect(await ledgerDB.prepare('SELECT count(*) n FROM ledger_sources WHERE rule_id=?').bind(r.id).first('n')).toBe(0);
 });
 it('replays accepted postings after rule archival, preserves old shares and bounds success/refusal requests',async()=>{

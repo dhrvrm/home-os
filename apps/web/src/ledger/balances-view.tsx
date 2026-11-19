@@ -1,5 +1,6 @@
 "use client";
 import { memberLabel } from "./item-editor";
+import { useMoneyReadSignal } from "./money-lifetime";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { APIError } from "@/lib/api";
 import type { AuthUser } from "@/lib/auth";
@@ -9,10 +10,7 @@ import type { SavedCopy } from "@/household/cache";
 import { ledgerQuery, ledgerRead } from "./api";
 import { formatMoney } from "./allocation-preview";
 import type { Currency, LedgerPage, MemberBalance, RepaymentSuggestion, BalanceTotal } from "./types";
-import { object } from "./validation";
-export { object } from "./validation";
-export const integer = (value: unknown): value is number => typeof value === "number" && Number.isSafeInteger(value);
-export function validPage<T>(valid: (row: unknown) => row is T) { return (value: unknown): value is LedgerPage<T> => object(value) && integer(value.revision) && value.revision >= 0 && (value.nextCursor === null || typeof value.nextCursor === "string") && Array.isArray(value.items) && value.items.length <= 50 && value.items.every(valid); }
+import { object, integer, validPage } from "./validation";
 export const validBalance = (value: unknown): value is MemberBalance => object(value) && typeof value.memberId === "string" && typeof value.displayName === "string" && typeof value.active === "boolean" && ["INR", "USD", "EUR", "GBP", "JPY"].includes(String(value.currency)) && [value.paidMinor, value.shareMinor, value.sentMinor, value.receivedMinor, value.netMinor].every(integer);
 const validBalanceTotal=(v:unknown):v is BalanceTotal=>object(v)&&["INR","USD","EUR","GBP","JPY"].includes(String(v.currency))&&[v.paidMinor,v.shareMinor,v.sentMinor,v.receivedMinor,v.netMinor].every(integer);
 const balancePage=(v:unknown):v is LedgerPage<MemberBalance>&{totals:BalanceTotal[]}=>validPage(validBalance)(v)&&object(v)&&Array.isArray(v.totals)&&v.totals.length<=5&&v.totals.every(validBalanceTotal);
@@ -24,6 +22,7 @@ export function useLedgerRead<T>(user: AuthUser, path: string, valid: (value: un
     refresh: () => Promise<void>;
 } {
     const identity = `${user.householdId}:${user.id}:${user.role}:${path}`;
+    const readSignal = useMoneyReadSignal();
     const [state, setState] = useState<{
         identity: string;
         loading: boolean;
@@ -36,7 +35,7 @@ export function useLedgerRead<T>(user: AuthUser, path: string, valid: (value: un
         setState({ identity, loading: false, copy }); }, error => { if (sequence.current === request)
         setState(old => ({ identity, loading: false, copy: error instanceof APIError && ["forbidden", "unauthorized", "session_changed"].includes(error.code) ? undefined : old.identity === identity ? old.copy : undefined, error: error instanceof Error ? error.message : "Financial information could not be loaded." })); }); }, [task, user, identity, path, valid, kind]);
     useEffect(() => { let active = true; const requests = sequence; queueMicrotask(() => { if (active)
-        void refresh(); }); return () => { active = false; requests.current++; }; }, [refresh]);
+        void refresh(); }); return () => { active = false; requests.current++; }; }, [refresh, readSignal]);
     return { ...(state.identity === identity ? state : { loading: true }), refresh };
 }
 export function balanceWords(net: number, currency: Currency, personal = false) { return net === 0 ? "Settled" : `${personal ? "You " : ""}${net > 0 ? personal ? "are owed" : "is owed" : personal ? "owe" : "owes"} ${formatMoney(Math.abs(net), currency)}`; }

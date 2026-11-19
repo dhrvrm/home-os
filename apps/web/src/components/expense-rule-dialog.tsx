@@ -39,6 +39,8 @@ interface ExpenseRuleDialogProps {
   members: Member[];
   pending: boolean;
   error: string | null;
+  conflict?: { reviewing: boolean; onReview: () => void };
+  reviewedRule?: ExpenseRule;
   onClose: () => void;
   onSubmit: (input: CreateExpenseInput) => Promise<void>;
 }
@@ -56,7 +58,7 @@ const SPLIT_MODES: Array<{ value: SplitMode; label: string }> = [
   { value: "percent", label: "Percentage" },
 ];
 
-export function ExpenseRuleDialog({ rule, members, pending, error, onClose, onSubmit }: ExpenseRuleDialogProps) {
+export function ExpenseRuleDialog({ rule, members, pending, error, conflict, reviewedRule, onClose, onSubmit }: ExpenseRuleDialogProps) {
   const [name, setName] = useState(rule?.name ?? "");
   const [currency, setCurrency] = useState(rule?.currency ?? DEFAULT_CURRENCY);
   const [amountText, setAmountText] = useState(() =>
@@ -205,10 +207,12 @@ export function ExpenseRuleDialog({ rule, members, pending, error, onClose, onSu
             {preview === null && <p>Enter an amount to preview each share.</p>}
           </section>
 
+          {conflict && <p className="form-error" role="alert">Review the latest rule before another save. Your entered draft is retained. <button type="button" className="button button--quiet" disabled={pending || conflict.reviewing} onClick={conflict.onReview}>{conflict.reviewing ? "Loading latest rule…" : "Review latest rule"}</button></p>}
+          {reviewedRule && <p role="status">Reviewed current rule · version {reviewedRule.version} · {reviewedRule.name} · {formatMinorAmount(reviewedRule.amountMinor, reviewedRule.currency)}. Your entered draft is retained.</p>}
           {error && <p className="form-error" role="alert">{error}</p>}
           <footer className="dialog__actions field--wide">
             <button className="button button--quiet" type="button" onClick={onClose} disabled={pending}>Cancel</button>
-            <button className="button button--primary" type="submit" disabled={pending || !submittable}>{pending ? "Saving..." : "Save recurring rule"}</button>
+            <button className="button button--primary" type="submit" disabled={pending || !!conflict || !submittable}>{pending ? "Saving..." : "Save recurring rule"}</button>
           </footer>
         </form>
       </section>

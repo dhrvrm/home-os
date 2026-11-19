@@ -5,7 +5,7 @@ import type { Action } from '../auth/permissions';
 import { assertAuthority } from '../auth/authority';
 import type { Env } from '../env';
 import { parseQuery } from '../ledger/query-validation';
-import { financialInput, ledgerCommandInput } from '../ledger/validation';
+import { financialInput, commentCommandInput, postCommandInput } from '../ledger/validation';
 import type { CommandContext } from '../platform/context';
 import { ValidationError } from '../platform/errors';
 import { boundedLedgerJSON } from './body';
@@ -19,8 +19,8 @@ export async function executeLedger(env: Env, command: CommandContext, input: Le
   try { return await ledgerService(env).execute(command, input); }
   finally { await assertAuthority(env.DB, command, action); }
 }
-const commentInput = z.object({ text: ledgerCommandInput.options[4].shape.text }).strict();
-const postingInput = z.object((({ action: _action, operationId: _operationId, ...shape }) => shape)(ledgerCommandInput.options[5].shape)).strict();
+const commentInput = z.object({ text: commentCommandInput.shape.text }).strict();
+const postingInput = z.object((({ action: _action, operationId: _operationId, ...shape }) => shape)(postCommandInput.shape)).strict();
 
 export function createLedgerRoutes(): Hono<{ Bindings: Env }> {
   const routes = new Hono<{ Bindings: Env }>();

@@ -135,6 +135,13 @@ export class D1LedgerRepository implements LedgerRepository {
                     await this.authorize(command.context, command.policyAction);
                     throw new ConflictError('ledger_source', entry.id, 0, entry.version, entry);
                 }
+                // Source collisions and identical receipt replay take precedence. A rule
+                // changed during acceptance must expose the same conflict as postingBasis.
+                let current;
+                try { current = await new D1ExpenseRepository(this.database).getRule(h, after.source.ruleId); }
+                finally { await this.authorize(command.context, command.policyAction); }
+                if (current.version !== after.source.ruleVersion)
+                    throw new ConflictError('expense_rule', current.id, after.source.ruleVersion, current.version, current);
             }
             const check = await this.database.prepare(`SELECT (${guard.sql}) AS admitted`).bind(...guard.values).first<{
                 admitted: number;
