@@ -2,10 +2,12 @@ import { APIError, request } from "@/lib/api";
 import type { AuthUser } from "@/lib/auth";
 import { captureAccessProof, runHouseholdWork } from "@/auth/work";
 import { online, requireIdentity } from "@/household/api";
-import { cacheKey, readCopy, writeCopy, type SavedCopy } from "@/household/cache";
+import { readCopy, writeCopy, type SavedCopy } from "@/household/cache";
 import { homeOSDatabase } from "@/offline/db";
-import { previewAllocation, previewItemizedBill } from "./allocation-preview";
+import { MAX_ENTRY_MINOR, MAX_PARTICIPANTS, previewAllocation, previewItemizedBill } from "./allocation-preview";
 import type { AcceptedReference, CommandResult, Currency, ExpenseInput, LedgerCommand, LedgerEntry, ResolvedExpense, RecurringPostingSource, Share, SplitIntent, ItemizedIntent, StatementExport, StatementMovement, StatementScope } from "./types";
+
+import { object, positiveInteger, validDate } from "./validation";
 
 export class LedgerRequestError extends APIError {
   constructor(message: string, code: string, public readonly status: number, field?: string, public readonly details?: unknown) { super(message, code, field); }
@@ -38,19 +40,17 @@ export async function dispatchCommand(command: LedgerCommand): Promise<CommandRe
     return envelope.data;
   } finally { window.clearTimeout(timer); }
 }
-const object = (value: unknown): value is Record<string, unknown> => !!value && typeof value === "object" && !Array.isArray(value);
-export function validReference(value: unknown): value is AcceptedReference { return object(value) && value.status === "accepted" && typeof value.entryId === "string" && Number.isSafeInteger(value.version) && Number(value.version) > 0 && typeof value.action === "string" && (value.commentId === undefined || typeof value.commentId === "string"); }
-const positiveInteger = (value: unknown): value is number => typeof value === "number" && Number.isSafeInteger(value) && value > 0;
-const date = (value: unknown): value is string => typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value) && !value.startsWith("0000") && Number.isFinite(Date.parse(`${value}T00:00:00Z`)) && new Date(`${value}T00:00:00Z`).toISOString().slice(0, 10) === value;
-function validShares(value: unknown, total: number): value is Share[] { return Array.isArray(value) && value.length > 0 && value.length <= 12 && value.every(p => object(p) && typeof p.memberId === "string" && typeof p.amountMinor === "number" && Number.isSafeInteger(p.amountMinor) && p.amountMinor >= 0 && p.amountMinor <= 10_000_000_000) && new Set(value.map(p => p.memberId)).size === value.length && value.reduce((sum, p) => sum + BigInt(p.amountMinor), BigInt(0)) === BigInt(total); }
+export function validReference(value: unknown): value is AcceptedReference { return object(value) && value.status === "accepted" && typeof value.entryId === "string" && positiveInteger(value.version) && typeof value.action === "string" && (value.commentId === undefined || typeof value.commentId === "string"); }
+const date = (value: unknown): value is string => typeof value === "string" && validDate(value);
+function validShares(value: unknown, total: number): value is Share[] { return Array.isArray(value) && value.length > 0 && value.length <= MAX_PARTICIPANTS && value.every(p => object(p) && typeof p.memberId === "string" && typeof p.amountMinor === "number" && Number.isSafeInteger(p.amountMinor) && p.amountMinor >= 0 && p.amountMinor <= MAX_ENTRY_MINOR) && new Set(value.map(p => p.memberId)).size === value.length && value.reduce((sum, p) => sum + BigInt(p.amountMinor), BigInt(0)) === BigInt(total); }
 const sameShares = (a: Share[], b: Share[]) => a.length === b.length && a.every((share, i) => b[i]?.memberId === share.memberId && b[i]?.amountMinor === share.amountMinor);
 /** A readable accepted financial fact includes valid intent and conserving resolved sides. */
 export function validLedgerEntry(value: unknown): value is LedgerEntry {
   if (!object(value) || typeof value.id !== "string" || typeof value.householdId !== "string" || !positiveInteger(value.version) || !["effective", "void"].includes(String(value.lifecycle)) || typeof value.createdAt !== "string" || !Number.isFinite(Date.parse(value.createdAt)) || typeof value.updatedAt !== "string" || !Number.isFinite(Date.parse(value.updatedAt)) || !object(value.intent)) return false;
   const input = value.intent;
-  if (!["expense", "refund", "payment"].includes(String(input.kind)) || !["INR", "USD", "EUR", "GBP", "JPY"].includes(String(input.currency)) || !positiveInteger(input.totalMinor) || input.totalMinor > 10_000_000_000 || !date(input.date) || !Array.isArray(value.payers) || !Array.isArray(value.shares)) return false;
+  if (!["expense", "refund", "payment"].includes(String(input.kind)) || !["INR", "USD", "EUR", "GBP", "JPY"].includes(String(input.currency)) || !positiveInteger(input.totalMinor) || input.totalMinor > MAX_ENTRY_MINOR || !date(input.date) || !Array.isArray(value.payers) || !Array.isArray(value.shares)) return false;
   if (input.kind === "payment") return typeof input.senderId === "string" && typeof input.receiverId === "string" && input.senderId !== input.receiverId && typeof input.method === "string" && input.method.trim().length > 0 && [...input.method].length <= 200 && value.payers.length === 0 && value.shares.length === 0;
-  if (typeof input.description !== "string" || !input.description.trim() || [...input.description].length > 160 || !validShares(input.payers, input.totalMinor) || !validShares(value.payers, input.totalMinor) || !sameShares(input.payers, value.payers) || !validShares(value.shares, input.totalMinor) || new Set([...value.payers, ...value.shares].map(p => p.memberId)).size > 12) return false;
+  if (typeof input.description !== "string" || !input.description.trim() || [...input.description].length > 160 || !validShares(input.payers, input.totalMinor) || !validShares(value.payers, input.totalMinor) || !sameShares(input.payers, value.payers) || !validShares(value.shares, input.totalMinor) || new Set([...value.payers, ...value.shares].map(p => p.memberId)).size > MAX_PARTICIPANTS) return false;
   if (input.kind === "refund") return typeof input.expenseId === "string" && validShares(input.shares, input.totalMinor) && sameShares(input.shares, value.shares);
   if (!object(input.allocation)) return false;
   try {
@@ -89,7 +89,7 @@ export async function ledgerRead<T>(user: AuthUser, path: string, valid: (value:
         const prefix = `ledger:read:${kind}:`;
         const rows = (await homeOSDatabase.householdCache.where("memberId").equals(user.id).toArray()).filter(row => row.householdId === user.householdId && (() => { try { return String(JSON.parse(row.key)[2]).startsWith(prefix); } catch { return false; } })()).sort((a, b) => b.savedAt.localeCompare(a.savedAt) || a.key.localeCompare(b.key));
         const keep = kind === "detail" ? 10 : 20;
-        await homeOSDatabase.householdCache.bulkDelete(rows.slice(keep).map(row => row.key));
+        if (rows.length > keep) await homeOSDatabase.householdCache.bulkDelete(rows.slice(keep).map(row => row.key));
         requireIdentity(user, lease);
       });
       return copy;
@@ -105,7 +105,6 @@ export async function ledgerRead<T>(user: AuthUser, path: string, valid: (value:
 function ownsData(value: unknown, user: AuthUser): boolean { if (!value || typeof value !== "object") return true; if (Array.isArray(value)) return value.every(child => ownsData(child, user)); const row = value as Record<string, unknown>; return (typeof row.householdId !== "string" || row.householdId === user.householdId) && Object.values(row).every(child => ownsData(child, user)); }
 export async function previewExpense(user: AuthUser, input: ExpenseInput): Promise<{ allocation: ResolvedExpense }> { return runHouseholdWork(async lease => { requireIdentity(user, lease); if (!online()) throw new APIError("Connect to check the authoritative preview.", "offline"); const result = await request<{ allocation: ResolvedExpense }>(ledgerQuery("/preview"), { method: "POST", body: JSON.stringify(input) }); requireIdentity(user, lease); return result; }); }
 export async function previewPosting(user: AuthUser, input: { ruleId: string; expectedRuleVersion: number; period: number }): Promise<{ source: RecurringPostingSource }> { return runHouseholdWork(async lease => { requireIdentity(user, lease); if (!online()) throw new APIError("Connect to inspect this recurring period.", "offline"); const result = await request<{ source: RecurringPostingSource }>(ledgerQuery("/preview"), { method: "POST", body: JSON.stringify({ kind: "rule-posting", ...input }) }); requireIdentity(user, lease); return result; }); }
-export { cacheKey };
 export interface StatementExportInput { memberId: string; currency: Currency; from?: string; to?: string; format: "csv" | "json" }
 export interface PreparedStatementExport { text: string; filename: string; mime: string; scope: StatementScope; revision: number; openingMinor: number; movementMinor: number; closingMinor: number; movementCount: number; bytes: number }
 /** Returns a complete artifact only. Cancellation, stale revision and changed identity return none. */

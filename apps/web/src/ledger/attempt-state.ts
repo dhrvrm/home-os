@@ -10,7 +10,7 @@ export const ATTEMPT_NAMESPACE = "ledger:attempt:v1";
 export interface RetainedAttempt { phase: "unknown" | "locked"; command: LedgerCommand; retainedAt: string; mayHaveOtherRequest: boolean; message?: string }
 export type AttemptOutcome = { kind: "accepted"; reference: AcceptedReference; result?: CommandResult } | { kind: "unknown" | "locked"; attempt: RetainedAttempt } | { kind: "refused"; error: Error } | { kind: "empty" };
 /** Counts only local recovery information; this is never an offline sending queue. */
-export async function countPendingMoneyAttempts(): Promise<number> { return (await homeOSDatabase.householdCache.toArray()).filter(row => { try { return JSON.parse(row.key)[2] === ATTEMPT_NAMESPACE; } catch { return false; } }).length; }
+export async function countPendingMoneyAttempts(): Promise<number> { return (await homeOSDatabase.householdCache.toCollection().primaryKeys()).filter(key => { try { return JSON.parse(key)[2] === ATTEMPT_NAMESPACE; } catch { return false; } }).length; }
 async function load(user: AuthUser, lease: WorkLease): Promise<RetainedAttempt | null> {
   requireIdentity(user, lease); const row = await homeOSDatabase.householdCache.get(cacheKey(user, ATTEMPT_NAMESPACE)); requireIdentity(user, lease);
   if (!row) return null;

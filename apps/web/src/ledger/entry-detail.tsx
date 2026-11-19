@@ -1,4 +1,5 @@
 "use client";
+import { memberLabel } from "./item-editor";
 import { useState } from "react";
 import type { AuthUser } from "@/lib/auth";
 import type { Member } from "@/lib/expenses";
@@ -9,7 +10,7 @@ import { EntryDialog, type OnLedgerAccepted } from "./entry-dialog";
 import { FinancialDialog, PaymentDialog } from "./payment-dialog";
 import { RefundDialog } from "./refund-dialog";
 import { formatMoney } from "./allocation-preview";
-import type { LedgerEntry, LedgerComment, StoredLedgerRevision, RefundCapacity, LedgerCommand } from "./types";
+import type { LedgerEntry, LedgerComment, StoredLedgerRevision, RefundCapacity, LedgerCommandDraft } from "./types";
 export interface EntryDetailData {
     entry: LedgerEntry;
     revision: number;
@@ -39,12 +40,12 @@ export function EntryDetail({ user, members, entryId, onBack, onAccepted, onDirt
     const [observed, setObserved] = useState<LedgerEntry>();
     const openEditor = (next: NonNullable<typeof editor>) => { setObserved(entry); setEditor(next); };
     const [comment, setComment] = useState("");
-    const name = (id: string) => members.find(m => m.id === id)?.name ?? id;
+    const name = (id: string) => memberLabel(members, id);
     const close = () => { setEditor(undefined); setObserved(undefined); onDirtyChange?.(false); onEditorClose?.(); };
     const accepted: OnLedgerAccepted = async (reference, result) => { close(); setComment(""); await onAccepted(reference, result); await Promise.all([detail.refresh(), comments.refresh(), history.refresh(), original.refresh()]); };
     const input = entry?.intent;
     const target = observed ?? entry;
-    const command: LedgerCommand | undefined = target && editor === "comment" ? { operationId: "", action: "comment", entryId: target.id, expectedVersion: target.version, text: comment.trim() } : target && (editor === "void" || editor === "restore") ? { operationId: "", action: editor, entryId: target.id, expectedVersion: target.version } : undefined;
+    const command: LedgerCommandDraft | undefined = target && editor === "comment" ? { action: "comment", entryId: target.id, expectedVersion: target.version, text: comment.trim() } : target && (editor === "void" || editor === "restore") ? { action: editor, entryId: target.id, expectedVersion: target.version } : undefined;
     return <section className="ledger-detail" aria-label="Financial entry">
     <button type="button" className="button button--quiet" onClick={onBack}>Back to previous money view</button>
     <ResourceState {...detail} retry={() => void detail.refresh()}/>{entry && input && <>

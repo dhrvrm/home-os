@@ -106,7 +106,7 @@ it("retains editable input and focuses an ordinary initial validation refusal", 
   render(<EntryDialog user={user} members={members} onAccepted={vi.fn()} onClose={vi.fn()} />); await screen.findByLabelText("Description"); fillEqual();
   vi.mocked(fetch).mockResolvedValueOnce(new Response(JSON.stringify({ data: null, error: { code: "invalid_request", message: "Review this description" } }), { status: 400 }));
   fireEvent.click(screen.getByRole("button", { name: "Save expense" }));
-  expect(await screen.findByRole("alert")).toHaveTextContent("Review this description"); expect(screen.getByRole("alert")).toHaveFocus();
+  expect(await screen.findByRole("alert")).toHaveTextContent("Review this description"); await waitFor(() => expect(screen.getByRole("alert")).toHaveFocus());
   expect(screen.getByLabelText("Description")).toHaveValue("Dinner"); expect(screen.getByLabelText("Bill amount")).toHaveValue("100"); expect(screen.getByRole("button", { name: "Save expense" })).toBeEnabled();
 });
 

@@ -1,4 +1,5 @@
 "use client";
+import { memberLabel } from "./item-editor";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { AuthUser } from "@/lib/auth";
 import type { Member } from "@/lib/expenses";
@@ -6,7 +7,8 @@ import { Modal, useOnline } from "@/household/ui";
 import { AmountField } from "./amount-field";
 import { decimalMoney, formatMoney, parseMoney } from "./allocation-preview";
 import { AttemptRecovery, todayLedgerDate, useFinancialAttempt, type OnLedgerAccepted } from "./entry-dialog";
-import type { LedgerCommand, LedgerEntry, RepaymentSuggestion, Currency, PaymentInput } from "./types";
+import type { LedgerCommandDraft, LedgerEntry, RepaymentSuggestion, Currency, PaymentInput } from "./types";
+import { validDate } from "./validation";
 export interface FinancialDialogProps {
     user: AuthUser;
     members: Member[];
@@ -17,7 +19,7 @@ export interface FinancialDialogProps {
 export function FinancialDialog({ title, user, members, onAccepted, onClose, onDirtyChange, dirty, command, children, problem, saveLabel = "Record", refusalContent }: FinancialDialogProps & {
     title: string;
     dirty: boolean;
-    command?: Omit<LedgerCommand, "operationId"> | LedgerCommand;
+    command?: LedgerCommandDraft;
     children: ReactNode;
     problem?: string;
     saveLabel?: string;
@@ -52,7 +54,7 @@ export function FinancialDialog({ title, user, members, onAccepted, onClose, onD
         <button type="button" className="button button--quiet" autoFocus onClick={() => setDiscard(false)}>Keep editing</button>
         <button type="button" className="button button--primary" onClick={onClose}>Discard draft</button>
         </section> : <form onSubmit={event => { event.preventDefault(); if (command && !problem && connected && user.role !== "viewer")
-            void save.submit({ ...command, operationId: crypto.randomUUID() } as LedgerCommand); }}>
+            void save.submit({ ...command, operationId: crypto.randomUUID() }); }}>
         <p className="ledger-unsaved">Unsaved</p>{!connected && <p role="status">Connect to record this change. Money is never queued for later sending.</p>}{user.role === "viewer" && <p>Viewers can inspect finances but cannot record changes.</p>}<fieldset className="ledger-fields" disabled={save.pending || user.role === "viewer"}>{children}</fieldset>{problem && <p role="status">{problem}</p>}<footer className="dialog__actions">
         <button type="button" className="button button--quiet" onClick={close}>Cancel</button>
         <button type="submit" className="button button--primary" disabled={!command || !!problem || !connected || save.pending || user.role === "viewer"}>{save.pending ? "Saving…" : saveLabel}</button>
@@ -68,9 +70,9 @@ export function PaymentDialog({ suggestion, entry, defaultCurrency = "INR", ...p
     const [observed] = useState(entry);
     const input = observed?.intent.kind === "payment" ? observed.intent : undefined;
     const [senderId, setSender] = useState(input?.senderId ?? suggestion?.senderId ?? props.user.id);
-    const [receiverId, setReceiver] = useState(input?.receiverId ?? suggestion?.receiverId ?? props.members.find(m => m.id !== props.user.id)?.id ?? "");
+    const [receiverId, setReceiver] = useState(() => input?.receiverId ?? suggestion?.receiverId ?? props.members.find(m => m.id !== props.user.id)?.id ?? "");
     const [currency, setCurrency] = useState<Currency>(input?.currency ?? suggestion?.currency ?? defaultCurrency);
-    const [amount, setAmount] = useState(input ? decimalMoney(input.totalMinor, input.currency) : suggestion ? decimalMoney(suggestion.amountMinor, suggestion.currency) : "");
+    const [amount, setAmount] = useState(() => input ? decimalMoney(input.totalMinor, input.currency) : suggestion ? decimalMoney(suggestion.amountMinor, suggestion.currency) : "");
     const [date, setDate] = useState(input?.date ?? todayLedgerDate());
     const [method, setMethod] = useState(input?.method ?? "");
     const [reference, setReference] = useState(input?.reference ?? "");
@@ -81,8 +83,8 @@ export function PaymentDialog({ suggestion, entry, defaultCurrency = "INR", ...p
     const totalMinor = parseMoney(amount, currency);
     const problem = !totalMinor ? "Enter a positive reported amount." : senderId === receiverId || !senderId || !receiverId ? "Choose different sender and receiver." : !method.trim() ? "Enter the payment method." : !validDate(date) ? "Enter a real date." : review ? "Review amounts after changing currency; no conversion is performed." : undefined;
     const fact: PaymentInput = { kind: "payment", senderId, receiverId, currency, totalMinor: totalMinor ?? 0, date, method: method.trim(), reference: reference.trim() || undefined, notes: notes.trim() || undefined };
-    const command: LedgerCommand = observed ? { operationId: "", action: "correct", entryId: observed.id, expectedVersion: observed.version, entry: fact } : { operationId: "", action: "create", entry: fact };
-    const name = (id: string) => props.members.find(m => m.id === id)?.name ?? id;
+    const command: LedgerCommandDraft = observed ? { action: "correct", entryId: observed.id, expectedVersion: observed.version, entry: fact } : { action: "create", entry: fact };
+    const name = (id: string) => memberLabel(props.members, id);
     return <FinancialDialog {...props} title={observed ? "Correct recorded payment" : "Record payment"} dirty={dirty} command={command} problem={problem} saveLabel={observed ? "Save correction" : "Record payment"}>
     <p>This records a payment you report. Home OS does not transfer money.</p>{suggestion && <p>Suggested amount was {formatMoney(suggestion.amountMinor, suggestion.currency)}. Balances may change; your entered fact stays editable and may be partial or reverse a balance.</p>}{([['Sender', senderId, setSender], ['Receiver', receiverId, setReceiver]] as const).map(([label, value, set]) => <label className="field" key={label}>
         <span>{label}</span>
@@ -112,9 +114,4 @@ export function PaymentDialog({ suggestion, entry, defaultCurrency = "INR", ...p
         <p>Sender net increases by {formatMoney(totalMinor, currency)}; receiver net decreases by the same amount.</p>
         </section>}</FinancialDialog>;
 }
-export function validDate(date: string) { try {
-    return /^\d{4}-\d{2}-\d{2}$/.test(date) && !date.startsWith("0000") && new Date(`${date}T00:00:00Z`).toISOString().slice(0, 10) === date;
-}
-catch {
-    return false;
-} }
+export { validDate } from "./validation";

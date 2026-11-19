@@ -1,4 +1,5 @@
 "use client";
+import { memberLabel } from "./item-editor";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { APIError } from "@/lib/api";
 import type { AuthUser } from "@/lib/auth";
@@ -8,7 +9,8 @@ import type { SavedCopy } from "@/household/cache";
 import { ledgerQuery, ledgerRead } from "./api";
 import { formatMoney } from "./allocation-preview";
 import type { Currency, LedgerPage, MemberBalance, RepaymentSuggestion, BalanceTotal } from "./types";
-export const object = (value: unknown): value is Record<string, unknown> => !!value && typeof value === "object" && !Array.isArray(value);
+import { object } from "./validation";
+export { object } from "./validation";
 export const integer = (value: unknown): value is number => typeof value === "number" && Number.isSafeInteger(value);
 export function validPage<T>(valid: (row: unknown) => row is T) { return (value: unknown): value is LedgerPage<T> => object(value) && integer(value.revision) && value.revision >= 0 && (value.nextCursor === null || typeof value.nextCursor === "string") && Array.isArray(value.items) && value.items.length <= 50 && value.items.every(valid); }
 export const validBalance = (value: unknown): value is MemberBalance => object(value) && typeof value.memberId === "string" && typeof value.displayName === "string" && typeof value.active === "boolean" && ["INR", "USD", "EUR", "GBP", "JPY"].includes(String(value.currency)) && [value.paidMinor, value.shareMinor, value.sentMinor, value.receivedMinor, value.netMinor].every(integer);
@@ -50,7 +52,7 @@ export function BalancesView({ user, members, currency, cursor, onCursor, onStat
     const balances = useLedgerRead(user, ledgerQuery("/balances", { currency, cursor, limit: 25 }), balancePage);
     const [repaymentCursor, setRepaymentCursor] = useState<string>();
     const repayments = useLedgerRead(user, ledgerQuery("/repayments", { currency, cursor: repaymentCursor, limit: 25 }), repaymentPage);
-    const name = (id: string) => members.find(m => m.id === id)?.name ?? id;
+    const name = (id: string) => memberLabel(members, id);
     return <section aria-label="Household balances">
     <h2>Balances · {currency}</h2>
     <p>Complete current contribution, consumption and recorded payment effects. Positive balances are owed to the person.</p>

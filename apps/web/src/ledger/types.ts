@@ -2,7 +2,7 @@
 export type { Currency, Adjustment, BillItem, ItemizedIntent, ItemizedResult, Share, SplitIntent, SplitParticipant } from "../../../../shared/ledger-money";
 export type { ExpenseInput, RefundInput, PaymentInput, FinancialInput, LedgerCommand, ResolvedExpense, LedgerEntry, LedgerRevision, LedgerComment, LedgerEffect, LedgerLifecycle, LedgerOrigin, LedgerPage, RecurringPostingSource } from "../../../worker/src/ledger/model";
 export type { StoredLedgerRevision } from "../../../worker/src/ledger/model";
-import type { Currency, LedgerComment, LedgerEntry, LedgerPage } from "../../../worker/src/ledger/model";
+import type { Currency, LedgerCommand, LedgerComment, LedgerEntry, LedgerPage } from "../../../worker/src/ledger/model";
 export type CommandResult = { status: "accepted"; entry: LedgerEntry } | { status: "accepted"; comment: LedgerComment };
 export interface AcceptedReference { status: "accepted"; entryId: string; version: number; action: string; commentId?: string }
 // Transport views deliberately avoid the repository's server authority dependencies.
@@ -18,3 +18,6 @@ export interface StatementScope { memberId: string; currency: Currency; from: st
 export interface StatementPage extends LedgerPage<StatementMovement> { scope: StatementScope; openingMinor: number; movementMinor: number; closingMinor: number; movementCount: number }
 export interface StatementExport extends StatementPage { format: "csv" | "json"; csv?: string; maxMovementRows: 10000; maxBytes: 8388608; requiresNarrowerRange: boolean }
 export type OperationStatus = { status: "unknown" } | AcceptedReference;
+
+type WithoutOperationId<T> = T extends { operationId: string } ? Omit<T, "operationId"> : never;
+export type LedgerCommandDraft = WithoutOperationId<LedgerCommand>;

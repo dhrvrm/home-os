@@ -96,7 +96,7 @@ export function InventoryApp({ session, onLogout, onSessionChange }: {
   const moneyGuard = useRef(false);
   const currentDestination = useRef<string | null>(null);
   const setMoneyGuard = useCallback((guarded: boolean) => { moneyGuard.current = guarded; }, []);
-  function allowMoneyNavigation() { return !moneyGuard.current || window.confirm("Leave this financial editor? Unsaved input will be discarded. Any uncertain save stays retained for recovery."); }
+  const allowMoneyNavigation = useCallback(() => !moneyGuard.current || window.confirm("Leave this financial editor? Unsaved input will be discarded. Any uncertain save stays retained for recovery."), []);
 
   function setView(next: PrimaryView, detail: LedgerLocation & { mealId?: string; recipeId?: string } = {}) {
     if (!allowMoneyNavigation()) return;
@@ -118,7 +118,7 @@ export function InventoryApp({ session, onLogout, onSessionChange }: {
     let active = true;
     const restore = () => {
       if (!active) return;
-      if (moneyGuard.current && !window.confirm("Leave this financial editor? Unsaved input will be discarded. Any uncertain save stays retained for recovery.")) {
+      if (!allowMoneyNavigation()) {
         if (currentDestination.current) window.history.pushState(null, "", currentDestination.current);
         return;
       }
@@ -135,7 +135,7 @@ export function InventoryApp({ session, onLogout, onSessionChange }: {
     queueMicrotask(restore);
     window.addEventListener("popstate", restore);
     return () => { active = false; window.removeEventListener("popstate", restore); };
-  }, []);
+  }, [allowMoneyNavigation]);
 
   useEffect(() => {
     let active = true;

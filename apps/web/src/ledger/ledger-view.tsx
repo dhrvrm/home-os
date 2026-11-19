@@ -1,4 +1,5 @@
 "use client";
+import { memberLabel } from "./item-editor";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { AuthUser } from "@/lib/auth";
 import type { ExpenseRule, Member } from "@/lib/expenses";
@@ -12,8 +13,8 @@ import { EntryDetail, entryLabel } from "./entry-detail";
 import { AttemptRecovery, EntryDialog, todayLedgerDate, useFinancialAttempt, type OnLedgerAccepted } from "./entry-dialog";
 import { FinancialDialog, PaymentDialog, validDate } from "./payment-dialog";
 import { StatementView } from "./statement-view";
-import { decimalMoney, formatMoney, parseMoney } from "./allocation-preview";
-import type { Currency, LedgerPage, LedgerEntry, RepaymentSuggestion, RecurringPostingSource, LedgerCommand, SpendingTotal, SpendingGroup, AcceptedReference } from "./types";
+import { MAX_PARTICIPANTS, decimalMoney, formatMoney, parseMoney } from "./allocation-preview";
+import type { Currency, LedgerPage, LedgerEntry, RepaymentSuggestion, RecurringPostingSource, LedgerCommandDraft, SpendingTotal, SpendingGroup, AcceptedReference } from "./types";
 import "./ledger.css";
 const validMembers = (v: unknown): v is {
     members: Member[];
@@ -76,7 +77,7 @@ export function LedgerView({ user, location, onNavigate, onDirtyChange, accepted
  <nav className="ledger-tabs" aria-label="Money sections">{([['entries', 'Expenses'], ['balances', 'Balances'], ['rules', 'Recurring rules']] as const).map(([value, label]) => <button className={tab === value ? "is-active" : ""} aria-current={tab === value ? "page" : undefined} type="button" key={value} onClick={() => navigate({ ledgerTab: value, entryId: undefined, statementMemberId: undefined, ledgerCursor: undefined })}>{label}</button>)}</nav>
  {save.error && <p role="alert">{save.error}</p>}{save.attempt && !editor && !rule && <AttemptRecovery attempt={save.attempt} pending={save.pending} connected={connected} onCheck={() => void save.check()} onReplay={() => void save.replay()} members={members} canReplay={user.role !== "viewer"}/>}
  <ResourceState {...membersResource} retry={() => void membersResource.refresh()}/>
- {location.entryId ? <EntryDetail key={location.entryId} user={user} members={members} entryId={location.entryId} onEditorClose={() => void save.refresh()} onBack={() => navigate({ entryId: undefined })} onAccepted={async (ref, result) => { void save.refresh(); await accepted(ref, result); }} onDirtyChange={onDirtyChange}/> : location.statementMemberId ? <StatementView key={`${location.statementMemberId}:${currency}`} user={user} memberId={location.statementMemberId} name={members.find(m => m.id === location.statementMemberId)?.name ?? location.statementMemberId} currency={currency} from={location.from} to={location.to} cursor={location.ledgerCursor} onScope={scope => navigate({ ...scope, ledgerCursor: undefined })} onCursor={ledgerCursor => navigate({ ledgerCursor })} onEntry={entryId => navigate({ entryId })} onBack={() => navigate({ statementMemberId: undefined, ledgerCursor: undefined, ledgerTab: "balances" })}/> : tab === "balances" ? <BalancesView key={currency} user={user} members={members} currency={currency} cursor={location.ledgerCursor} onCursor={ledgerCursor => navigate({ ledgerCursor })} onStatement={statementMemberId => navigate({ statementMemberId, ledgerCursor: undefined })} onPayment={value => { setSuggestion(value); setEditor("payment"); }}/> : tab === "rules" ? <ExpensesView user={user} readOnly={user.role === "viewer"} onPost={setRule} onDirtyChange={onDirtyChange}/> : <>
+ {location.entryId ? <EntryDetail key={location.entryId} user={user} members={members} entryId={location.entryId} onEditorClose={() => void save.refresh()} onBack={() => navigate({ entryId: undefined })} onAccepted={async (ref, result) => { void save.refresh(); await accepted(ref, result); }} onDirtyChange={onDirtyChange}/> : location.statementMemberId ? <StatementView key={`${location.statementMemberId}:${currency}`} user={user} memberId={location.statementMemberId} name={memberLabel(members, location.statementMemberId)} currency={currency} from={location.from} to={location.to} cursor={location.ledgerCursor} onScope={scope => navigate({ ...scope, ledgerCursor: undefined })} onCursor={ledgerCursor => navigate({ ledgerCursor })} onEntry={entryId => navigate({ entryId })} onBack={() => navigate({ statementMemberId: undefined, ledgerCursor: undefined, ledgerTab: "balances" })}/> : tab === "balances" ? <BalancesView key={currency} user={user} members={members} currency={currency} cursor={location.ledgerCursor} onCursor={ledgerCursor => navigate({ ledgerCursor })} onStatement={statementMemberId => navigate({ statementMemberId, ledgerCursor: undefined })} onPayment={value => { setSuggestion(value); setEditor("payment"); }}/> : tab === "rules" ? <ExpensesView user={user} readOnly={user.role === "viewer"} onPost={setRule} onDirtyChange={onDirtyChange}/> : <>
         <form className="ledger-filters" onSubmit={e => { e.preventDefault(); navigate({ search: search.trim() || undefined, category: category.trim() || undefined, ledgerCursor: undefined }); }}>
         <label className="field">
         <span>Search financial records</span>
@@ -178,8 +179,8 @@ function PostingDialog({ rule, onExisting, ...props }: Parameters<typeof Payment
 }) {
     const [observed] = useState(rule);
     const [period, setPeriod] = useState("0");
-    const [date, setDate] = useState(todayLedgerDate());
-    const [payers, setPayers] = useState([{ memberId: props.user.id, value: decimalMoney(observed.amountMinor, observed.currency as Currency) }]);
+    const [date, setDate] = useState(todayLedgerDate);
+    const [payers, setPayers] = useState(() => [{ memberId: props.user.id, value: decimalMoney(observed.amountMinor, observed.currency as Currency) }]);
     const [source, setSource] = useState<RecurringPostingSource>();
     const [error, setError] = useState<string>();
     const [previewing, setPreviewing] = useState(false);
@@ -203,10 +204,10 @@ function PostingDialog({ rule, onExisting, ...props }: Parameters<typeof Payment
     } }); }); return () => { active = false; }; }, [task, observed, props.user, period]);
     const contributions = payers.map(p => ({ memberId: p.memberId, amountMinor: parseMoney(p.value, observed.currency as Currency) }));
     const total = contributions.reduce((sum, p) => sum + (p.amountMinor ?? 0), 0);
-    const problem = previewing ? "Loading normalized server period…" : error ?? (!source ? "Inspect a current period preview first." : !validDate(date) ? "Enter a real date." : contributions.some(p => p.amountMinor === null) || total !== observed.amountMinor ? "Payer contributions must equal this observed rule total." : !payers.length || new Set([...(source?.snapshot.shares.map(p=>p.memberId)??[]),...payers.map(p=>p.memberId)]).size > 12 || payers.some(p => !props.members.some(m => m.id === p.memberId && m.active)) ? "Choose at most 12 active payers." : undefined);
+    const problem = previewing ? "Loading normalized server period…" : error ?? (!source ? "Inspect a current period preview first." : !validDate(date) ? "Enter a real date." : contributions.some(p => p.amountMinor === null) || total !== observed.amountMinor ? "Payer contributions must equal this observed rule total." : !payers.length || new Set([...(source?.snapshot.shares.map(p=>p.memberId)??[]),...payers.map(p=>p.memberId)]).size > MAX_PARTICIPANTS || payers.some(p => !props.members.some(m => m.id === p.memberId && m.active)) ? "Choose at most 12 active payers." : undefined);
     const draftSnapshot = JSON.stringify({ period, date, payers });
     const [initialDraft] = useState(draftSnapshot);
-    const command: LedgerCommand = { operationId: "", action: "post", ruleId: observed.id, expectedRuleVersion: observed.version, period: Number(period), date, payers: contributions.map(p => ({ memberId: p.memberId, amountMinor: p.amountMinor ?? 0 })) };
+    const command: LedgerCommandDraft = { action: "post", ruleId: observed.id, expectedRuleVersion: observed.version, period: Number(period), date, payers: contributions.map(p => ({ memberId: p.memberId, amountMinor: p.amountMinor ?? 0 })) };
     return <FinancialDialog {...props} title="Post recurring period" dirty={draftSnapshot !== initialDraft} command={command} problem={problem} saveLabel="Record period expense" refusalContent={failure => {
             const existing = failure instanceof LedgerRequestError ? failure.details : undefined;
             return validLedgerEntry(existing) && existing.householdId === props.user.householdId && existing.intent.kind === "expense" && existing.source?.ruleId === observed.id && source && existing.source.periodStart === source.periodStart ? <p>This period already has an original{existing.lifecycle === "void" ? " (voided)" : ""}.<button type="button" className="button button--quiet" onClick={() => onExisting(existing.id)}>Open existing original</button>
@@ -217,7 +218,7 @@ function PostingDialog({ rule, onExisting, ...props }: Parameters<typeof Payment
     <span>Billing period number</span>
     <input type="number" min={0} step={1} value={period} onChange={e => setPeriod(e.target.value)}/>
     </label>
-    <p>Period 0 starts at the rule’s original anchor, {observed.cadence.anchorDate}. Choose the next period number for the next cadence interval.</p>{source && <section><p>Normalized period · {source.periodStart} to {source.periodEnd} (exclusive) · {formatMoney(source.snapshot.totalMinor, source.snapshot.currency)}</p><h3>Observed rule shares</h3>{source.snapshot.shares.map(share=><p key={share.memberId}>{props.members.find(member=>member.id===share.memberId)?.name??share.memberId} · {formatMoney(share.amountMinor,source.snapshot.currency)}</p>)}</section>}<label className="field">
+    <p>Period 0 starts at the rule’s original anchor, {observed.cadence.anchorDate}. Choose the next period number for the next cadence interval.</p>{source && <section><p>Normalized period · {source.periodStart} to {source.periodEnd} (exclusive) · {formatMoney(source.snapshot.totalMinor, source.snapshot.currency)}</p><h3>Observed rule shares</h3>{source.snapshot.shares.map(share=><p key={share.memberId}>{memberLabel(props.members,share.memberId)} · {formatMoney(share.amountMinor,source.snapshot.currency)}</p>)}</section>}<label className="field">
     <span>Actual expense date</span>
     <input type="date" value={date} onChange={e => setDate(e.target.value)}/>
     </label>

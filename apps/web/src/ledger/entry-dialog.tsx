@@ -6,10 +6,11 @@ import { Modal, useHouseholdTask, useOnline } from "@/household/ui";
 import { errorMessage } from "@/household/api";
 import { AmountField } from "./amount-field";
 import { checkAttempt, readAttempt, replayAttempt, submitAttempt, type AttemptOutcome, type RetainedAttempt } from "./attempt-state";
-import { decimalMoney, formatMoney, parseMoney, previewAllocation, previewItemizedBill } from "./allocation-preview";
+import { MAX_PARTICIPANTS, decimalMoney, formatMoney, parseMoney, previewAllocation, previewItemizedBill } from "./allocation-preview";
 import { AdjustmentEditor, ItemEditor, SplitEditor, adjustmentDraft, adjustmentValue, emptyItem, emptySplit, itemDraft, itemValue, memberLabel, splitDraft, splitValue, type AdjustmentDraft, type ItemDraft, type SplitDraft } from "./item-editor";
 import type { AcceptedReference, CommandResult, Currency, ExpenseInput, LedgerCommand, LedgerEntry, ResolvedExpense } from "./types";
 import "./ledger.css";
+import { validDate } from "./validation";
 export type OnLedgerAccepted = (reference: AcceptedReference, result?: CommandResult) => void | Promise<void>;
 interface AttemptView { identity: string; attempt: RetainedAttempt | null; pending: boolean; loaded: boolean; error?: string; refusalError?: Error; accepted?: AcceptedReference }
 /** Shared by expense, payment, refund, comment and lifecycle forms. No effect sends money. */
@@ -85,8 +86,8 @@ export function EntryDialog({ user, members, entry: suppliedEntry, duplicate = f
   const parties = new Set([...draft.payers.map(p => p.memberId), ...(preview?.shares.map(p => p.memberId) ?? (draft.mode === "split" ? draft.split.participants.map(p => p.memberId) : draft.items.flatMap(item => item.split.participants.map(p => p.memberId))))]);
   const historical = !duplicate && entry ? new Set([...entry.payers, ...entry.shares].map(p => p.memberId)) : new Set<string>();
   const departed = [...parties].some(id => !members.some(m => m.id === id && m.active) && !historical.has(id));
-  const realDate = /^\d{4}-\d{2}-\d{2}$/.test(draft.date) && !draft.date.startsWith("0000") && (() => { try { return new Date(`${draft.date}T00:00:00.000Z`).toISOString().slice(0, 10) === draft.date; } catch { return false; } })();
-  const problem = departed ? "Replace or remove departed people before saving a new expense." : parties.size > 12 ? "Choose at most 12 distinct payers and beneficiaries." : !draft.description.trim() ? "Enter a description." : !realDate ? "Enter a real calendar date." : draft.payers.length === 0 ? "Choose at least one payer." : invalid ?? (preview && payersMinor !== preview.totalMinor ? "Payer contributions must equal the bill total." : currencyReview ? "Review the amounts after changing currency." : undefined);
+  const realDate = validDate(draft.date);
+  const problem = departed ? "Replace or remove departed people before saving a new expense." : parties.size > MAX_PARTICIPANTS ? "Choose at most 12 distinct payers and beneficiaries." : !draft.description.trim() ? "Enter a description." : !realDate ? "Enter a real calendar date." : draft.payers.length === 0 ? "Choose at least one payer." : invalid ?? (preview && payersMinor !== preview.totalMinor ? "Payer contributions must equal the bill total." : currencyReview ? "Review the amounts after changing currency." : undefined);
   const disabled = save.pending || user.role === "viewer";
   async function submit() {
     if (problem || !preview || disabled || !connected || !save.loaded) return;
