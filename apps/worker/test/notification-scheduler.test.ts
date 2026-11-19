@@ -15,6 +15,7 @@ import { NotificationRepository } from "../src/notifications/d1-repository";
 import { runNotificationTick } from "../src/notifications/scheduled";
 import type { PushFetch } from "../src/notifications/push";
 import {
+  notificationAuthority,
   pushFixture,
   resetNotifications,
   seedNotificationMeal,
@@ -56,6 +57,7 @@ async function enabledPush() {
     "local-owner",
     { mealReminders: true, pushEnabled: true },
     now,
+    await notificationAuthority("local-owner"),
   );
   await repo.registerSubscription(
     "local-owner",
@@ -96,6 +98,21 @@ async function delivery() {
 }
 
 describe("bounded notification scheduling", () => {
+  it("keeps permanent device authority beyond its old deadline while native expiry remains independent", async () => {
+    const fixture = await enabledPush();
+    await env.DB.prepare("UPDATE auth_sessions SET permanent = 1, expires_at = '2000-01-01T00:00:00.000Z' WHERE token_hash = ?").bind(fixture.hash).run();
+    await fixture.repo.prune(now);
+    expect(await fixture.repo.currentSubscription("local-owner", { tokenHash: fixture.hash, expiresAt: null, credentialVersion: 1 }, now)).toMatchObject({ enabled: true, expiresAt: null });
+    let sent = 0;
+    const summary = await runNotificationTick(fixture.settings, source, now, { fetcher: async () => { sent++; return new Response(null, { status: 201 }); } });
+    expect(sent).toBe(1);
+    expect(summary.accepted).toBe(1);
+    await env.DB.prepare("UPDATE notification_subscriptions SET expiration_time = ?").bind(Date.parse(now)).run();
+    expect(await fixture.repo.currentSubscription("local-owner", { tokenHash: fixture.hash, expiresAt: null, credentialVersion: 1 }, now)).toEqual({ enabled: false });
+    await fixture.repo.prune(now);
+    expect(await count("notification_subscriptions")).toBe(0);
+  });
+
   it("delivers to every household device without exceeding the Free D1 invocation budget", async () => {
     const fixture = await pushFixture();
     const repository = new NotificationRepository(env.DB, "home");
@@ -110,7 +127,8 @@ describe("bounded notification scheduling", () => {
         member,
         { mealReminders: true, pushEnabled: true },
         now,
-      );
+    await notificationAuthority(member),
+  );
       const subscription = {
         ...fixture.subscription,
         endpoint: `${fixture.subscription.endpoint}-${index}`,
@@ -522,7 +540,8 @@ describe("bounded notification scheduling", () => {
           "local-owner",
           { mealReminders: false, pushEnabled: false },
           now,
-        );
+    await notificationAuthority("local-owner"),
+  );
       if (changed === "cancelled" || changed === "answered") eligible = false;
       await runNotificationTick(
         fixture.settings,
@@ -561,7 +580,7 @@ describe("bounded notification scheduling", () => {
           .run();
       if (changed === "expired")
         await env.DB.prepare(
-          "UPDATE auth_sessions SET expires_at = ? WHERE token_hash = ?",
+          "UPDATE auth_sessions SET permanent = 0, expires_at = ? WHERE token_hash = ?",
         )
           .bind("2026-11-12T10:00:30.000Z", fixture.hash)
           .run();
@@ -598,7 +617,8 @@ describe("bounded notification scheduling", () => {
       "local-owner",
       { mealReminders: false, pushEnabled: true },
       now,
-    );
+    await notificationAuthority("local-owner"),
+  );
     await runNotificationTick(fixture.settings, source, now, {
       fetcher: async () => {
         throw new Error("not eligible");
@@ -609,7 +629,8 @@ describe("bounded notification scheduling", () => {
       "local-owner",
       { mealReminders: true, pushEnabled: true },
       now,
-    );
+    await notificationAuthority("local-owner"),
+  );
     await env.DB.prepare(
       "UPDATE notification_subscriptions SET auth = 'invalid'",
     ).run();
@@ -636,7 +657,8 @@ describe("bounded notification scheduling", () => {
         memberId,
         { mealReminders: true, pushEnabled: true },
         now,
-      );
+    await notificationAuthority(memberId),
+  );
       const native = {
         ...fixture.subscription,
         endpoint: `https://fcm.googleapis.com/fcm/send/fixture-${index}`,

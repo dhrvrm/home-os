@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { AuthUser } from "@/lib/auth";
 import type { WorkLease } from "@/auth/work";
 import type {
@@ -64,6 +64,7 @@ export function needsInstallation(): boolean {
 }
 export function NotificationsView(props: {
   currentUser: AuthUser;
+  enableRequested?: boolean;
   onOpenMeal: (mealId: string) => void;
 }) {
   return (
@@ -76,10 +77,14 @@ export function NotificationsView(props: {
 function NotificationScreen({
   currentUser: user,
   onOpenMeal,
+  enableRequested = false,
 }: {
   currentUser: AuthUser;
+  enableRequested?: boolean;
   onOpenMeal: (mealId: string) => void;
 }) {
+  const deviceHeading = useRef<HTMLHeadingElement>(null);
+  useEffect(() => { if (enableRequested) deviceHeading.current?.focus(); }, [enableRequested]);
   const inbox = useResource(
     user,
     "notifications",
@@ -456,7 +461,8 @@ function NotificationScreen({
             </label>
           </>
         )}
-        <h4>Push on this device</h4>
+        <h4 ref={deviceHeading} tabIndex={-1}>Push on this device</h4>
+        {enableRequested && <p className="hh-notice">To set up reminders on this device, review the status below and choose Enable push notifications. Opening this page does not ask for permission.</p>}
         <p>{deviceLabel()}</p>
         <ResourceState {...config} retry={() => void config.refresh()} />
         <ResourceState {...device} retry={() => void device.refresh()} />

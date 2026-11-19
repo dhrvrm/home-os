@@ -498,7 +498,8 @@ describe("household views", () => {
       if (init?.method === "PUT") order.push(path);
       return original(path, init, options);
     });
-    render(<NotificationsView currentUser={user} onOpenMeal={vi.fn()} />);
+    render(<NotificationsView currentUser={user} enableRequested onOpenMeal={vi.fn()} />);
+    expect(screen.getByRole("heading", { name: "Push on this device" })).toHaveFocus();
     const button = await screen.findByRole("button", {
       name: "Enable push notifications",
     });

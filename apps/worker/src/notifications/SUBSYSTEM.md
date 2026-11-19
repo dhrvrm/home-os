@@ -6,7 +6,7 @@ definition: >
   announcement gives each eligible person one logical reminder, even when
   delivery is retried or several devices belong to that person. Delivery
   requires the person's permission and continuing authority on that device;
-  obsolete questions and expired authority cannot justify further attempts.
+  obsolete questions and revoked authority cannot justify further attempts.
   Without this subsystem cooking plans require every member to remember to
   open the menu before the cook needs their answer.
 inputs:
@@ -14,8 +14,12 @@ inputs:
     description: >
       A person's intention to inspect or acknowledge their own reminders,
       enable or disable delivery, and register or retire a device they have
-      explicitly permitted to receive them. Supplied by the household
-      planning experience and confined to the admitted person's own state.
+      explicitly permitted to receive them. Supplied by household planning
+      or connected household interaction and confined to the admitted
+      person's own state. A connected caller may manage personal preferences
+      and reading state, but cannot grant device permission or enroll a
+      device on the person's behalf; those intentions require direct device
+      consent and the exact continuing direct-access grant.
   - name: protected-action-admission
     description: >
       The household access decision and verified member authority for a
@@ -24,16 +28,16 @@ inputs:
   - name: meal-reminder-state
     description: >
       The current announced cooking question, due moment, cooking deadline,
-      announcement identity, and unanswered eligible recipients supplied
-      by household cooking. Required both when making a reminder due and
-      before delivery, so a changed answer, cancelled meal, or changed
-      announcement makes an earlier attempt ineligible.
+      announcement identity, and unanswered eligible recipients supplied by
+      household cooking. Required both when making a reminder due and before
+      delivery, so a changed answer, cancelled meal, or changed announcement
+      makes an earlier attempt ineligible.
   - name: notification-delivery-authority
     description: >
       The current household and device-grant admission supplied by household
       access for a proposed recipient. Required before each dispatch or
-      retry so saved delivery permission cannot outlive sign-out, expiry,
-      credential replacement, or departure from the household.
+      retry so saved delivery permission cannot outlive sign-out,
+      revocation, credential replacement, or departure from the household.
   - name: present-time
     description: >
       The trusted current moment and scheduled opportunities to act supplied
@@ -56,15 +60,17 @@ outputs:
   - name: notification-state
     description: >
       The admitted person's recent reminder inbox, reading state, delivery
-      preference, and current device registration status. Supplied to the
-      household planning experience without disclosing receiving secrets.
-      Retention keeps at most fifty reminders or fourteen days per person.
+      preference, and current device registration status. Supplied to
+      household planning or connected household interaction without
+      disclosing receiving secrets. Retention keeps at most fifty reminders
+      or fourteen days per person.
   - name: notification-command-outcome
     description: >
       Whether a personal reminder request succeeded and its resulting
-      visible state, or the reason it could not be applied. Supplied to the
-      household planning experience so enabling delivery is never claimed
-      merely because a permission prompt was shown.
+      visible state, or the reason it could not be applied. Supplied to
+      household planning or connected household interaction so enabling
+      delivery is never claimed merely because a permission prompt was
+      shown.
   - name: notification-delivery-check
     description: >
       The proposed recipient, household, and exact continuing device grant
@@ -75,7 +81,7 @@ outputs:
     description: >
       The eligible recipient's due cooking question, its announcement
       identity, expiry, and return location, together with confidential
-      receiving permission. Supplied to the external delivery service so
-      the person's device can present the reminder and reopen the current
-      meal without granting authority to answer on anyone's behalf.
+      receiving permission. Supplied to the external delivery service so the
+      person's device can present the reminder and reopen the current meal
+      without granting authority to answer on anyone's behalf.
 ---

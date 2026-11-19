@@ -5,22 +5,23 @@ import { login, setupOwner } from "@/lib/auth";
 import { AuthScreen } from "./auth-screen";
 
 vi.mock("@/lib/auth", () => ({ login: vi.fn(), setupOwner: vi.fn() }));
-const session = { user: { id: "owner", householdId: "home", name: "Asha", email: "asha@example.com", role: "owner" as const }, expiresAt: "2027-01-01T00:00:00Z" };
+const session = { sessionId: "a".repeat(32), user: { id: "owner", householdId: "home", name: "Asha", email: "asha@example.com", role: "owner" as const }, expiresAt: "2027-01-01T00:00:00Z" };
 
 beforeEach(() => { vi.clearAllMocks(); vi.mocked(login).mockResolvedValue(session); vi.mocked(setupOwner).mockResolvedValue(session); });
 afterEach(cleanup);
 
 describe("AuthScreen", () => {
-  it("signs in with native password-manager fields and the chosen persistence", async () => {
+  it("signs in with native password-manager fields with continuing access", async () => {
     const accepted = vi.fn();
     render(<AuthScreen setupRequired={false} setupAvailable onAuthenticated={accepted} />);
+    expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
+    expect(screen.getByText(/Stay signed in until you sign out/)).toBeInTheDocument();
     expect(screen.getByLabelText("Email")).toHaveAttribute("autocomplete", "username");
     expect(screen.getByLabelText("Password", { exact: true })).toHaveAttribute("autocomplete", "current-password");
     await userEvent.type(screen.getByLabelText("Email"), "asha@example.com");
     await userEvent.type(screen.getByLabelText("Password", { exact: true }), "my-long-password");
-    await userEvent.click(screen.getByLabelText("Keep me signed in"));
     await userEvent.click(screen.getByRole("button", { name: "Sign in" }));
-    expect(login).toHaveBeenCalledWith({ email: "asha@example.com", password: "my-long-password", remember: false });
+    expect(login).toHaveBeenCalledWith({ email: "asha@example.com", password: "my-long-password" });
     expect(accepted).toHaveBeenCalledWith(session);
   });
 
@@ -58,7 +59,7 @@ describe("AuthScreen", () => {
     await userEvent.clear(screen.getByLabelText("Confirm password"));
     await userEvent.type(screen.getByLabelText("Confirm password"), "my-long-password");
     await userEvent.click(screen.getByRole("button", { name: "Set up your home" }));
-    expect(setupOwner).toHaveBeenCalledWith({ name: "Asha", email: "asha@example.com", password: "my-long-password", setupToken: "trusted-setup-code", remember: true });
+    expect(setupOwner).toHaveBeenCalledWith({ name: "Asha", email: "asha@example.com", password: "my-long-password", setupToken: "trusted-setup-code" });
   });
 
   it("explains unavailable setup and prevents an unusable submit", () => {
@@ -80,7 +81,7 @@ describe("AuthScreen", () => {
     await userEvent.click(screen.getByRole("button", { name: "Sign in instead" }));
     expect(screen.getByLabelText("Email")).toHaveValue("asha@example.com");
     await userEvent.click(screen.getByRole("button", { name: "Sign in" }));
-    expect(login).toHaveBeenCalledWith({ email: "asha@example.com", password: "my-long-password", remember: true });
+    expect(login).toHaveBeenCalledWith({ email: "asha@example.com", password: "my-long-password" });
   });
 
   it("shows rejected local reconciliation and keeps credentials for retry", async () => {
@@ -91,4 +92,21 @@ describe("AuthScreen", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("Finish saving local changes first.");
     expect(screen.getByLabelText("Password", { exact: true })).toHaveValue("my-long-password");
   });
+});
+
+it("preserves only the opaque allowlisted consent intent across sign-in", async () => {
+  const intent = "c".repeat(32);
+  window.history.replaceState(null, "", `/api/oauth/consent?connect=${intent}&redirect=https://evil.example`);
+  try {
+    const accepted = vi.fn();
+    render(<AuthScreen setupRequired={false} setupAvailable onAuthenticated={accepted} />);
+    expect(screen.getByText(/Signing in does not approve access/)).toBeInTheDocument();
+    await userEvent.type(screen.getByLabelText("Email"), "asha@example.com");
+    await userEvent.type(screen.getByLabelText("Password", { exact: true }), "my-long-password");
+    await userEvent.click(screen.getByRole("button", { name: "Sign in" }));
+    expect(accepted).toHaveBeenCalledWith(session);
+    expect(window.location.pathname).toBe("/api/oauth/consent");
+    expect(new URLSearchParams(window.location.search).get("connect")).toBe(intent);
+    expect(login).toHaveBeenCalledWith({ email: "asha@example.com", password: "my-long-password" });
+  } finally { window.history.replaceState(null, "", "/"); }
 });

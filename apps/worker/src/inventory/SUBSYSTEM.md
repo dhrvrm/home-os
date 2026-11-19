@@ -14,6 +14,14 @@ definition: >
   has no shared memory of its stock and no reason-bearing answer to "what do
   we need".
 inputs:
+  - name: protected-action-admission
+    description: >
+      The household access decision for this action, with the verified active
+      person, household, and current role, restricted by any connection's
+      approved ceiling. Required before disclosure or change so direct and
+      connected callers share one authority boundary. Owners and members
+      maintain shared facts; viewers inspect them. Claimed actor information
+      never substitutes for this decision.
   - name: item-declaration
     description: >
       The household's statement of an item: its name and aliases, categories,

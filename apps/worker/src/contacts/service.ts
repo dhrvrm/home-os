@@ -1,3 +1,4 @@
+import type { PageInput } from "../inventory/validation";
 import type { CommandContext } from "../platform/context";
 import { ConflictError, ValidationError } from "../platform/errors";
 import { createId } from "../platform/ids";
@@ -23,6 +24,10 @@ export class ContactService {
 
   listContacts(householdId: string, filter: ContactFilter = {}) {
     return this.repository.list(householdId, filter);
+  }
+
+  listContactsPage(householdId: string, filter: ContactFilter, page: PageInput) {
+    return this.repository.listPage(householdId, filter, page);
   }
 
   getContact(householdId: string, id: string) {

@@ -1,3 +1,4 @@
+import type { HouseholdCommand } from "../../platform/household-command";
 import type { CommandContext } from "../../platform/context";
 import { ConflictError, ValidationError } from "../../platform/errors";
 import { createId } from "../../platform/ids";
@@ -58,12 +59,21 @@ export class ExpenseService {
     return rules.map((rule) => enrich(rule, members));
   }
 
+  async listRulesPage(householdId: string, filter: ExpenseFilter, page: import("../../inventory/validation").PageInput = {}) {
+    if (!this.repository.listRulesPage) throw new Error("Paged expenses require a bounded repository");
+    const result = await this.repository.listRulesPage(householdId, filter, page);
+    const members = await this.memberIndex(householdId);
+    return { rules: result.items.map(rule => enrich(rule, members)), nextCursor: result.nextCursor };
+  }
+
   async getRule(householdId: string, ruleId: string): Promise<ExpenseRule> {
     const rule = await this.repository.getRule(householdId, ruleId.trim());
     return enrich(rule, await this.memberIndex(householdId));
   }
 
   async createRule(context: CommandContext, input: CreateExpenseInput): Promise<ExpenseRule> {
+    const admission = await this.repository.beginMutation?.(context, ACTION_CREATED, undefined, input);
+    if (admission?.replay) return enrich(admission.replay, await this.memberIndex(context.householdId));
     const members = await this.memberIndex(context.householdId);
     const currency = assertCurrency(input.currency ?? DEFAULT_CURRENCY);
     const timestamp = this.now().toISOString();
@@ -84,6 +94,7 @@ export class ExpenseService {
 
     const stored = await this.repository.createRule(rule, {
       context,
+      command: admission?.command,
       action: ACTION_CREATED,
       expectedVersion: 0,
       changes: createdFields(rule),
@@ -96,6 +107,8 @@ export class ExpenseService {
     ruleId: string,
     input: UpdateExpenseInput,
   ): Promise<ExpenseRule> {
+    const admission = await this.repository.beginMutation?.(context, ACTION_UPDATED, ruleId.trim(), input);
+    if (admission?.replay) return enrich(admission.replay, await this.memberIndex(context.householdId));
     const current = await this.repository.getRule(context.householdId, ruleId.trim());
     const members = await this.memberIndex(context.householdId);
     const next = structuredClone(current);
@@ -115,7 +128,7 @@ export class ExpenseService {
     const updated = await this.applied(context, current, () =>
       this.repository.updateRule(
         next,
-        this.mutation(context, ACTION_UPDATED, current.version, changedFields(current, next)),
+        this.mutation(context, ACTION_UPDATED, current.version, changedFields(current, next), admission?.command),
       ),
     );
     return enrich(updated, members);
@@ -134,9 +147,14 @@ export class ExpenseService {
     ruleId: string,
     archived: boolean,
   ): Promise<ExpenseRule> {
+    const admission = await this.repository.beginMutation?.(context, archived ? ACTION_ARCHIVED : ACTION_RESTORED, ruleId.trim(), {});
+    if (admission?.replay) return enrich(admission.replay, await this.memberIndex(context.householdId));
     const current = await this.repository.getRule(context.householdId, ruleId.trim());
     const members = await this.memberIndex(context.householdId);
-    if ((current.archivedAt !== null) === archived) return enrich(current, members);
+    if ((current.archivedAt !== null) === archived) {
+      if (!admission) return enrich(current, members);
+      return enrich(await this.repository.setArchived(current, this.mutation(context, archived ? ACTION_ARCHIVED : ACTION_RESTORED, current.version, [], admission.command)), members);
+    }
 
     const timestamp = this.now().toISOString();
     const next = structuredClone(current);
@@ -152,6 +170,7 @@ export class ExpenseService {
           archived ? ACTION_ARCHIVED : ACTION_RESTORED,
           current.version,
           changedFields(current, next),
+          admission?.command,
         ),
       ),
     );
@@ -186,10 +205,12 @@ export class ExpenseService {
     action: string,
     currentVersion: number,
     changes: AuditChange[],
+    command?: HouseholdCommand,
   ): ExpenseMutation {
     return {
       context,
       action,
+      command,
       expectedVersion: context.expectedVersion ?? currentVersion,
       changes,
     };

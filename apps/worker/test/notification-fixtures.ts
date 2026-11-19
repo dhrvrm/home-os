@@ -107,3 +107,10 @@ export async function seedNotificationMeal(now = new Date().toISOString()) {
     timezone: "Asia/Kolkata",
   };
 }
+
+/** A real stored browser grant, used when tests issue personal application commands. */
+export async function notificationAuthority(memberId = "local-owner"): Promise<import("../src/platform/context").CommandContext> {
+  const row = await env.DB.prepare(`SELECT s.token_hash, s.credential_version, m.role FROM auth_sessions s JOIN members m ON m.id = s.member_id WHERE m.id = ? AND s.expires_at > ? ORDER BY s.created_at DESC LIMIT 1`).bind(memberId, new Date().toISOString()).first<{ token_hash: string; credential_version: number; role: "owner" | "member" | "viewer" }>();
+  if (!row) throw new Error(`Missing real browser fixture for ${memberId}`);
+  return { householdId: "home", actorId: memberId, actorType: "member", source: "pwa", operationId: crypto.randomUUID(), authority: { householdId: "home", memberId, role: row.role, proof: { kind: "browser", tokenHash: row.token_hash, credentialVersion: row.credential_version } } };
+}

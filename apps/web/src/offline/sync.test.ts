@@ -169,4 +169,28 @@ describe("inventory sync client", () => {
     expect(await database.activity.get("old")).toBeUndefined();
     expect(await database.activity.get("recent")).toMatchObject({ id: "recent" });
   });
+  it("drains bounded pages with stable operation IDs and keeps only the failed page queued for retry", async () => {
+    for (let index = 0; index < 5; index++) await createLocalItem(database, { name: `Item ${index}` }, { householdId: "home", deviceId: "test-device" });
+    const original = (await database.outbox.orderBy("order").toArray()).map(operation => operation.operationId);
+    const seen: string[][] = [];
+    let fail = true;
+    const fetcher = vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
+      const page = JSON.parse(String(init!.body)) as { operations: { operationId: string }[]; cursor: number };
+      const ids = page.operations.map(operation => operation.operationId);
+      seen.push(ids);
+      expect(ids.length).toBeLessThanOrEqual(2);
+      if (seen.length === 2 && fail) throw new Error("offline again");
+      return new Response(JSON.stringify({ data: { results: ids.map(operationId => ({ operationId, status: "accepted" })), items: (await database.items.toArray()).map(item => ({ ...item, name: "Server projection", version: 1 })), events: [], activity: [], cursor: page.cursor + 1 }, error: null }));
+    });
+    await expect(syncInventory(database, { fetcher })).rejects.toThrow("offline again");
+    expect(seen).toEqual([original.slice(0, 2), original.slice(2, 4)]);
+    expect((await database.outbox.orderBy("order").toArray()).map(operation => operation.operationId)).toEqual(original.slice(2));
+    expect((await database.outbox.toArray()).every(operation => operation.state === "pending")).toBe(true);
+    expect((await database.items.toArray()).filter(item => item.name.startsWith("Item ")).map(item => item.name).sort()).toEqual(["Item 2", "Item 3", "Item 4"]);
+    fail = false;
+    expect(await syncInventory(database, { fetcher })).toMatchObject({ accepted: 3, conflicts: 0 });
+    expect(seen.slice(2)).toEqual([original.slice(2, 4), original.slice(4)]);
+    expect(await database.outbox.count()).toBe(0);
+  });
+
 });

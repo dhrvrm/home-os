@@ -7,12 +7,12 @@ import "./auth.css";
 
 type Editor = { memberId: string; mode: "edit" | "password" | "deactivate" };
 
-export function MembersView({ currentUser }: { currentUser: AuthUser }) {
+export function MembersView({ currentUser, action, memberId }: { currentUser: AuthUser; action?: string; memberId?: string }) {
   const [members, setMembers] = useState<MemberAccount[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [editor, setEditor] = useState<Editor | null>(null);
-  const [adding, setAdding] = useState(false);
+  const [adding, setAdding] = useState(currentUser.role === "owner" && action === "create-member");
   const [pending, setPending] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -21,12 +21,14 @@ export function MembersView({ currentUser }: { currentUser: AuthUser }) {
 
   const load = useCallback(async () => {
     try {
-      setMembers(await getMembers());
+      const rows = await getMembers();
+      setMembers(rows);
+      if (currentUser.role === "owner" && action === "reset-password" && rows.some(member => member.id === memberId && member.active && member.id !== currentUser.id && member.email)) setEditor({ memberId: memberId!, mode: "password" });
       setLoadError(null);
     }
     catch (failure) { setLoadError(errorMessage(failure, "Household members could not be loaded.")); }
     finally { setLoading(false); }
-  }, []);
+  }, [currentUser.role, currentUser.id, action, memberId]);
 
   useEffect(() => { void (async () => { await load(); })(); }, [load]);
   useEffect(() => {
@@ -36,6 +38,8 @@ export function MembersView({ currentUser }: { currentUser: AuthUser }) {
     window.addEventListener("offline", refresh);
     return () => { window.removeEventListener("online", refresh); window.removeEventListener("offline", refresh); };
   }, []);
+
+  useEffect(() => { if (editor?.mode === "password") document.querySelector<HTMLInputElement>('.member-editor input[name="password"]')?.focus(); }, [editor]);
 
   function closeEditor() { setEditor(null); setAdding(false); setFormError(null); }
   function openEditor(memberId: string, mode: Editor["mode"]) {
@@ -93,7 +97,7 @@ export function MembersView({ currentUser }: { currentUser: AuthUser }) {
       await resetMemberPassword(member.id, password);
       replaceMember({ ...member, hasLogin: true });
       closeEditor();
-      setNotice(`${member.name}’s password was saved and their previous sessions were ended.`);
+      setNotice(`${member.name}’s password was saved and their previous browser sessions and assistant connections were ended.`);
     } catch (failure) { setFormError(errorMessage(failure, "The password could not be saved.")); }
     finally { setPending(false); }
   }
@@ -113,7 +117,7 @@ export function MembersView({ currentUser }: { currentUser: AuthUser }) {
     } finally { setPending(false); }
   }
 
-  const activeOwners = members.filter((member) => member.active && member.role === "owner").length;
+  const activeOwners = members.filter((member) => member.active && member.hasLogin && member.role === "owner").length;
 
   return (
     <section className="members-panel" aria-labelledby="members-title">
@@ -123,7 +127,7 @@ export function MembersView({ currentUser }: { currentUser: AuthUser }) {
       </header>
       {owner && <p className="account-description">You can have several home owners. Choose Owner access when adding or editing a member to let them manage accounts too.</p>}
       {!online && <div className="members-feedback"><p className="account-offline" role="status">Connect to manage household members and account access.</p></div>}
-      {!owner && <div className="members-feedback"><p className="account-description">Household owners manage accounts and access. {currentUser.role === "viewer" ? "Your account has view-only access." : "Ask an owner if someone needs to be added."}</p></div>}
+      {!owner && <div className="members-feedback"><p className="account-description">Household owners manage accounts and access. {currentUser.role === "viewer" ? "You can read shared information and manage your own reminders and connections." : "Ask an owner if someone needs to be added."}</p></div>}
       {notice && <div className="members-feedback"><p className="account-success" role="status">{notice}</p></div>}
       {loadError && <div className="members-feedback"><p className="form-error" role="alert">{loadError}</p><button className="button button--quiet" type="button" style={{ marginTop: 12 }} onClick={() => { setLoading(true); setLoadError(null); void load(); }}>Try again</button></div>}
       {adding && <section className="members-add" aria-labelledby="new-member-title">
@@ -132,7 +136,7 @@ export function MembersView({ currentUser }: { currentUser: AuthUser }) {
         <form className="account-form" aria-label="Add household member" onSubmit={submitNew} aria-busy={pending}>
           <label className="field auth-field"><span>Name</span><input name="name" required maxLength={80} disabled={pending} autoComplete="name" autoFocus /></label>
           <label className="field auth-field"><span>Email</span><input name="email" type="email" inputMode="email" autoComplete="off" autoCapitalize="none" spellCheck={false} required maxLength={254} disabled={pending} /></label>
-          <label className="field auth-field"><span>Access</span><select name="role" defaultValue="member" disabled={pending}><RoleOptions /></select><small className="auth-help">Members can update household data. Owners also manage accounts. Viewers can only read.</small></label>
+          <label className="field auth-field"><span>Access</span><select name="role" defaultValue="member" disabled={pending}><RoleOptions /></select><small className="auth-help">Members update household data. Owners also manage accounts. Viewers read shared data and manage their own reminders and connections.</small></label>
           <PasswordField label="Initial password" name="password" autoComplete="new-password" disabled={pending} help="Use 12–128 characters and share it privately. They can change it in Account." />
           <PasswordField label="Confirm initial password" name="confirmPassword" autoComplete="new-password" disabled={pending} />
           {formError && <p className="form-error" role="alert">{formError}</p>}
@@ -151,7 +155,7 @@ export function MembersView({ currentUser }: { currentUser: AuthUser }) {
             {owner && <div className="member-row__actions">
               <button type="button" className="button button--quiet" disabled={pending || !online} onClick={() => openEditor(member.id, "edit")}>Edit</button>
               {member.id !== currentUser.id && member.active && <button type="button" className="button button--quiet" disabled={pending || !online || !member.email} onClick={() => openEditor(member.id, "password")}>{member.hasLogin ? "Reset password" : "Set sign-in password"}</button>}
-              {member.id !== currentUser.id && member.active && !(member.role === "owner" && activeOwners < 2) && <button type="button" className="button button--quiet" disabled={pending || !online} onClick={() => openEditor(member.id, "deactivate")}>Deactivate</button>}
+              {member.id !== currentUser.id && member.active && !(member.role === "owner" && member.hasLogin && activeOwners < 2) && <button type="button" className="button button--quiet" disabled={pending || !online} onClick={() => openEditor(member.id, "deactivate")}>Deactivate</button>}
               {!member.active && <button type="button" className="button button--quiet" disabled={pending || !online} onClick={() => void setActive(member, true)}>Reactivate</button>}
             </div>}
           </div>
@@ -161,8 +165,8 @@ export function MembersView({ currentUser }: { currentUser: AuthUser }) {
               <form className="account-form" onSubmit={(event) => void submitEdit(event, member)} aria-busy={pending} aria-label={`Edit ${member.name}`}>
                 <label className="field auth-field"><span>Name</span><input name="name" defaultValue={member.name} required maxLength={80} disabled={pending} autoFocus /></label>
                 <label className="field auth-field"><span>Email</span><input name="email" type="email" inputMode="email" defaultValue={member.email ?? ""} required maxLength={254} autoCapitalize="none" spellCheck={false} disabled={pending} /></label>
-                <label className="field auth-field"><span>Access</span><select name="role" defaultValue={member.role} disabled={pending || (member.role === "owner" && (member.id === currentUser.id || activeOwners < 2))}><RoleOptions /></select></label>
-                {member.role === "owner" && activeOwners < 2 && <p className="auth-help">The home must keep at least one active owner.</p>}
+                <label className="field auth-field"><span>Access</span><select name="role" defaultValue={member.role} disabled={pending || (member.role === "owner" && member.hasLogin && (member.id === currentUser.id || activeOwners < 2))}><RoleOptions /></select></label>
+                {member.role === "owner" && member.hasLogin && activeOwners < 2 && <p className="auth-help">The home must keep at least one active owner with a sign-in password.</p>}
                 {formError && <p className="form-error" role="alert">{formError}</p>}
                 <div className="account-form__actions"><button type="submit" className="button button--primary" disabled={pending || !online}>{pending ? "Saving…" : "Save details"}</button><button type="button" className="button button--quiet" onClick={closeEditor} disabled={pending}>Cancel</button></div>
               </form>
@@ -170,7 +174,7 @@ export function MembersView({ currentUser }: { currentUser: AuthUser }) {
             {editor.mode === "password" && <>
               <h4>{member.hasLogin ? "Reset" : "Set"} {member.name}’s password</h4>
               <form className="account-form" onSubmit={(event) => void submitPassword(event, member)} aria-busy={pending} aria-label={`Password for ${member.name}`}>
-                <p className="account-description">Their existing sessions will end. Share the new password privately.</p>
+                <p className="account-description">Their existing browser sessions and assistant connections will end. Share the new password privately.</p>
                 <PasswordField label={`New password for ${member.name}`} name="password" autoComplete="new-password" disabled={pending} help="Use 12–128 characters." />
                 <PasswordField label={`Confirm new password for ${member.name}`} name="confirmPassword" autoComplete="new-password" disabled={pending} />
                 {formError && <p className="form-error" role="alert">{formError}</p>}
@@ -179,7 +183,7 @@ export function MembersView({ currentUser }: { currentUser: AuthUser }) {
             </>}
             {editor.mode === "deactivate" && <>
               <h4>Deactivate {member.name}?</h4>
-              <p className="account-description">Their sessions will end. Past inventory activity and expense shares stay linked to them. You can reactivate them later.</p>
+              <p className="account-description">Their sessions will end, including browser and assistant access. Past inventory activity and expense shares stay linked to them. You can reactivate them later.</p>
               {formError && <p className="form-error" role="alert">{formError}</p>}
               <div className="account-form__actions" style={{ marginTop: 16 }}><button type="button" className="button button--danger" disabled={pending || !online} onClick={() => void setActive(member, false)}>{pending ? "Deactivating…" : `Deactivate ${member.name}`}</button><button type="button" className="button button--quiet" onClick={closeEditor} disabled={pending}>Cancel</button></div>
             </>}

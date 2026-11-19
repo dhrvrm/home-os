@@ -1,3 +1,4 @@
+import type { PageInput } from "../inventory/validation";
 import type { CommandContext } from "../platform/context";
 import { ConflictError, ValidationError } from "../platform/errors";
 import { createId } from "../platform/ids";
@@ -79,6 +80,19 @@ export class MealService {
     return Promise.all(
       recipes.map((recipe) => this.repository.withAvailability(recipe, stock)),
     );
+  }
+
+  async listRecipesPage(householdId: string, filter: RecipeFilter, page: PageInput) {
+    const result = await this.repository.listRecipesPage(householdId, filter, page);
+    const stock = await this.repository.inventoryStock(householdId, result.recipes.flatMap(recipe => recipe.ingredients.flatMap(i => i.inventoryItemId ? [i.inventoryItemId] : [])));
+    return { ...result, recipes: await Promise.all(result.recipes.map(recipe => this.repository.withAvailability(recipe, stock))) };
+  }
+
+  async listMealsPage(householdId: string, memberId: string, range: MealRange, page: PageInput) {
+    const timezone = assertTimezone(await this.repository.timezone(householdId));
+    const bounds = menuBounds(range.from, range.to, timezone);
+    const result = await this.repository.listMealsPage(householdId, bounds.from, bounds.to, range.includeCancelled ?? false, page);
+    return { ...result, meals: await this.repository.withAttendanceForMeals(result.meals, memberId), timezone, from: range.from, to: range.to };
   }
 
   async getRecipe(householdId: string, id: string): Promise<Recipe> {
@@ -256,14 +270,10 @@ export class MealService {
     householdId: string,
     ids: string[],
   ): Promise<RecipeSnapshot[]> {
-    return Promise.all(
-      ids.map(async (id) => {
-        const recipe = await this.repository.getRecipe(householdId, id);
-        if (recipe.archivedAt)
-          throw new ValidationError("recipeIds", "select active recipes");
-        return snapshot(recipe);
-      }),
-    );
+    return (await this.repository.selectedRecipes(householdId, ids)).map(recipe => {
+      if (recipe.archivedAt) throw new ValidationError("recipeIds", "select active recipes");
+      return snapshot(recipe);
+    });
   }
 
   private async zone(householdId: string, supplied?: string): Promise<string> {
@@ -325,6 +335,7 @@ export class MealService {
     context: CommandContext,
     id: string,
     input: UpdateMealInput,
+    policyAction: "meals_update" | "meals_cancel" = "meals_update",
   ): Promise<Meal> {
     const data = validate(mealUpdateSchema, input);
     const version = expectedVersion(context);
@@ -332,9 +343,10 @@ export class MealService {
       this.repository.database,
       context,
       "meal",
-      "meals.updated",
+      policyAction === "meals_cancel" ? "meals.cancelled" : "meals.updated",
       id,
       data,
+      policyAction,
     );
     const replay = await replayCommand<Meal>(this.repository.database, command);
     if (replay) return replay;
@@ -390,6 +402,10 @@ export class MealService {
       command,
       false,
     );
+  }
+
+  cancelMeal(context: CommandContext, id: string): Promise<Meal> {
+    return this.updateMeal(context, id, { status: "cancelled" }, "meals_cancel");
   }
 
   async respond(

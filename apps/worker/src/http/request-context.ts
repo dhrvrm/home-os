@@ -3,7 +3,7 @@ import type { Env } from "../env";
 import type { CommandContext } from "../platform/context";
 import { ValidationError } from "../platform/errors";
 import { createId } from "../platform/ids";
-import { currentMember } from "../auth/session";
+import { currentAuthority, currentMember } from "../auth/session";
 
 export function commandContext(
   context: Context<{ Bindings: Env }>,
@@ -15,7 +15,8 @@ export function commandContext(
   }
   const expectedVersion = parseExpectedVersion(context.req.header("If-Match"));
   return {
-    householdId: context.env.HOMEOS_DEFAULT_HOUSEHOLD_ID,
+    householdId: currentMember(context).householdId,
+    authority: currentAuthority(context),
     actorId: currentMember(context).id,
     actorType: "member",
     source: "pwa",

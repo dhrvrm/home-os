@@ -1,3 +1,4 @@
+import type { CommandContext } from "../platform/context";
 import {
   hasNotificationDeliveryAuthority,
   type DeviceGrant,
@@ -16,8 +17,9 @@ export class NotificationService {
     readonly env: Env,
     readonly householdId: string,
     readonly source: MealReminderSource,
+    context?: CommandContext,
   ) {
-    this.repository = new NotificationRepository(env.DB, householdId);
+    this.repository = new NotificationRepository(env.DB, householdId, context);
   }
 
   async register(

@@ -1,3 +1,8 @@
+import { beginCommand, replayCommand, commitCommand, commandGuard } from "../platform/household-command";
+import { sessionLifetimeSQL } from "../auth/session-policy";
+import { authorizedBatch, authorityDenied } from "../auth/authority";
+import type { Action } from "../auth/permissions";
+import type { CommandContext } from "../platform/context";
 import type { DeviceGrant } from "../auth/session";
 import { HomeOSError } from "../platform/errors";
 import type { MealReminderCandidate } from "../meals/model";
@@ -28,7 +33,7 @@ export interface SubscriptionRow {
   auth: string;
   expiration_time: number | null;
   created_at: string;
-  session_expires_at?: string;
+  session_expires_at?: string | null;
 }
 export interface DeliveryRow {
   cooking_at: string;
@@ -73,7 +78,26 @@ export class NotificationRepository {
   constructor(
     readonly db: D1Database,
     readonly householdId: string,
+    readonly context?: CommandContext,
   ) {}
+
+  private async personalWrite(
+    memberId: string,
+    action: Action,
+    statements: D1PreparedStatement[],
+    context = this.context,
+  ) {
+    if (
+      !context ||
+      context.actorId !== memberId ||
+      context.householdId !== this.householdId
+    )
+      throw authorityDenied();
+    return authorizedBatch(this.db, context, action, statements, {
+      householdId: this.householdId,
+      memberId,
+    });
+  }
 
   async scanCursor(): Promise<string | undefined> {
     const row = await this.db
@@ -112,22 +136,21 @@ export class NotificationRepository {
     memberId: string,
     preferences: NotificationPreferences,
     now: string,
+    authority?: CommandContext,
   ): Promise<NotificationPreferences> {
-    await this.db
-      .prepare(
-        `INSERT INTO notification_preferences (household_id, member_id, meal_reminders, push_enabled, updated_at)
-      VALUES (?, ?, ?, ?, ?) ON CONFLICT(member_id) DO UPDATE SET meal_reminders = excluded.meal_reminders,
-      push_enabled = excluded.push_enabled, updated_at = excluded.updated_at WHERE household_id = excluded.household_id`,
-      )
-      .bind(
-        this.householdId,
-        memberId,
-        Number(preferences.mealReminders),
-        Number(preferences.pushEnabled),
-        now,
-      )
-      .run();
-    return this.preferences(memberId);
+    const context = authority ?? this.context;
+    if (!context || context.actorId !== memberId || context.householdId !== this.householdId) throw authorityDenied();
+    const command = await beginCommand(this.db, context, "notification_preferences", "notification.preferences.updated", memberId, preferences, "notification_preferences_set", "private");
+    const replay = await replayCommand<NotificationPreferences>(this.db, command);
+    if (replay) return replay;
+    // Private durable identity prevents A -> B -> retry A from reapplying A.
+    // Only the acknowledgement is retained; household activity contains no personal state.
+    return commitCommand(this.db, command, preferences, memberId, now, [
+      this.db.prepare(`INSERT INTO notification_preferences (household_id, member_id, meal_reminders, push_enabled, updated_at)
+        VALUES (?, ?, ?, ?, ?) ON CONFLICT(member_id) DO UPDATE SET meal_reminders = excluded.meal_reminders,
+        push_enabled = excluded.push_enabled, updated_at = excluded.updated_at WHERE household_id = excluded.household_id`)
+        .bind(this.householdId, memberId, Number(preferences.mealReminders), Number(preferences.pushEnabled), now),
+    ], async () => {});
   }
 
   async list(
@@ -165,17 +188,24 @@ export class NotificationRepository {
     return row ? publicNotification(row) : null;
   }
 
-  async markRead(
-    memberId: string,
-    id: string,
-    now: string,
-  ): Promise<HouseholdNotification | null> {
-    await this.db
-      .prepare(
-        "UPDATE notifications SET read_at = COALESCE(read_at, ?) WHERE household_id = ? AND member_id = ? AND id = ?",
-      )
-      .bind(now, this.householdId, memberId, id)
-      .run();
+  async acknowledgeRead(memberId: string, id: string, now: string): Promise<{ id: string; read: true }> {
+    const context = this.context;
+    if (!context || context.actorId !== memberId || context.householdId !== this.householdId) throw authorityDenied();
+    const command = await beginCommand(this.db, context, "notification", "notification.read", id, { read: true }, "notifications_mark_read", "private");
+    const replay = await replayCommand<{ id: string; read: true }>(this.db, command);
+    if (replay) return replay;
+    if (!await this.notification(memberId, id, now)) throw new HomeOSError("Notification not found.", "not_found", 404);
+    return commitCommand(this.db, command, { id, read: true as const }, id, now, [
+      commandGuard(this.db, command, 1, "SELECT 1 FROM notifications WHERE household_id = ? AND member_id = ? AND id = ? AND created_at > ?", [this.householdId, memberId, id, new Date(Date.parse(now) - 14 * 86400000).toISOString()]),
+      this.db.prepare("UPDATE notifications SET read_at = COALESCE(read_at, ?) WHERE household_id = ? AND member_id = ? AND id = ?")
+        .bind(now, this.householdId, memberId, id),
+    ], async () => {
+      if (!await this.notification(memberId, id, now)) throw new HomeOSError("Notification not found.", "not_found", 404);
+    });
+  }
+
+  async markRead(memberId: string, id: string, now: string): Promise<HouseholdNotification | null> {
+    await this.acknowledgeRead(memberId, id, now);
     return this.notification(memberId, id, now);
   }
 
@@ -187,15 +217,18 @@ export class NotificationRepository {
     const row = await this.db
       .prepare(
         `SELECT n.id, n.created_at, n.expiration_time FROM notification_subscriptions n
-      WHERE n.household_id = ? AND n.member_id = ? AND n.session_hash = ? AND (n.expiration_time IS NULL OR n.expiration_time > ?)`,
+      JOIN auth_sessions s ON s.token_hash = n.session_hash
+      JOIN members m ON m.id = s.member_id JOIN auth_accounts a ON a.member_id = m.id
+      WHERE ${sessionLifetimeSQL("s")} AND m.archived_at IS NULL AND m.household_id = n.household_id AND s.member_id = n.member_id
+        AND s.credential_version = a.credential_version AND n.household_id = ? AND n.member_id = ? AND n.session_hash = ? AND (n.expiration_time IS NULL OR n.expiration_time > ?)`,
       )
-      .bind(this.householdId, memberId, grant.tokenHash, Date.parse(now))
+      .bind(now, this.householdId, memberId, grant.tokenHash, Date.parse(now))
       .first<{
         id: string;
         created_at: string;
         expiration_time: number | null;
       }>();
-    if (!row || grant.expiresAt <= now) return { enabled: false };
+    if (!row || (grant.expiresAt !== null && grant.expiresAt <= now)) return { enabled: false };
     return {
       enabled: true,
       id: row.id,
@@ -204,7 +237,7 @@ export class NotificationRepository {
         row.expiration_time == null
           ? grant.expiresAt
           : new Date(
-              Math.min(row.expiration_time, Date.parse(grant.expiresAt)),
+              Math.min(row.expiration_time, grant.expiresAt === null ? Infinity : Date.parse(grant.expiresAt)),
             ).toISOString(),
     };
   }
@@ -248,60 +281,81 @@ export class NotificationRepository {
     const id = own?.id ?? crypto.randomUUID();
     // A matching browser permission may move to the newly admitted account/session.
     // The conditional delete prevents an unrelated endpoint registration taking it over.
-    const result = await this.db.batch([
-      this.db
-        .prepare(
-          `DELETE FROM notification_subscriptions WHERE endpoint_hash = ? AND session_hash != ? AND p256dh = ? AND auth = ?`,
-        )
-        .bind(
-          endpointHash,
-          grant.tokenHash,
-          native.keys.p256dh,
-          native.keys.auth,
-        ),
-      this.db
-        .prepare(
-          `INSERT INTO notification_subscriptions
+    const authority: CommandContext = this.context ?? {
+      householdId: this.householdId,
+      actorId: memberId,
+      actorType: "member",
+      source: "pwa",
+      operationId: crypto.randomUUID(),
+      authority: {
+        householdId: this.householdId,
+        memberId,
+        role: "viewer",
+        proof: {
+          kind: "browser",
+          tokenHash: grant.tokenHash,
+          credentialVersion: grant.credentialVersion,
+        },
+      },
+    };
+    const [, registration] = await this.personalWrite(
+      memberId,
+      "notification_device_setup",
+      [
+        this.db
+          .prepare(
+            `DELETE FROM notification_subscriptions WHERE endpoint_hash = ? AND session_hash != ? AND p256dh = ? AND auth = ?`,
+          )
+          .bind(
+            endpointHash,
+            grant.tokenHash,
+            native.keys.p256dh,
+            native.keys.auth,
+          ),
+        this.db
+          .prepare(
+            `INSERT INTO notification_subscriptions
         (id, household_id, member_id, session_hash, endpoint_hash, endpoint, p256dh, auth, expiration_time, created_at, updated_at)
         SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE EXISTS
           (SELECT 1 FROM auth_sessions s JOIN members m ON m.id = s.member_id JOIN auth_accounts a ON a.member_id = m.id
-           WHERE s.token_hash = ? AND m.id = ? AND m.household_id = ? AND m.archived_at IS NULL AND s.expires_at > ? AND s.credential_version = a.credential_version)
+           WHERE s.token_hash = ? AND m.id = ? AND m.household_id = ? AND m.archived_at IS NULL AND ${sessionLifetimeSQL("s")} AND s.credential_version = a.credential_version)
         ON CONFLICT(session_hash) DO UPDATE SET endpoint_hash = excluded.endpoint_hash, endpoint = excluded.endpoint,
           p256dh = excluded.p256dh, auth = excluded.auth, expiration_time = excluded.expiration_time, updated_at = excluded.updated_at
         WHERE household_id = excluded.household_id AND member_id = excluded.member_id`,
-        )
-        .bind(
-          id,
-          this.householdId,
-          memberId,
-          grant.tokenHash,
-          endpointHash,
-          native.endpoint,
-          native.keys.p256dh,
-          native.keys.auth,
-          native.expirationTime ?? null,
-          now,
-          now,
-          grant.tokenHash,
-          memberId,
-          this.householdId,
-          now,
-        ),
-    ]);
-    if (result[1]!.meta.changes !== 1)
+          )
+          .bind(
+            id,
+            this.householdId,
+            memberId,
+            grant.tokenHash,
+            endpointHash,
+            native.endpoint,
+            native.keys.p256dh,
+            native.keys.auth,
+            native.expirationTime ?? null,
+            now,
+            now,
+            grant.tokenHash,
+            memberId,
+            this.householdId,
+            now,
+          ),
+        // Keep registration and its per-person device cap in the same admitted transaction.
+        this.db
+          .prepare(
+            `DELETE FROM notification_subscriptions WHERE household_id = ? AND member_id = ? AND id IN
+        (SELECT id FROM notification_subscriptions WHERE household_id = ? AND member_id = ? ORDER BY updated_at DESC, id DESC LIMIT -1 OFFSET 8)`,
+          )
+          .bind(this.householdId, memberId, this.householdId, memberId),
+      ],
+      authority,
+    );
+    if (registration!.meta.changes !== 1)
       throw new HomeOSError(
         "Your session has ended. Sign in again.",
         "unauthorized",
         401,
       );
-    // Retain at most eight device registrations per person. Sessions themselves remain intact.
-    await this.db
-      .prepare(
-        `DELETE FROM notification_subscriptions WHERE household_id = ? AND member_id = ? AND id IN
-      (SELECT id FROM notification_subscriptions WHERE household_id = ? AND member_id = ? ORDER BY updated_at DESC, id DESC LIMIT -1 OFFSET 8)`,
-      )
-      .bind(this.householdId, memberId, this.householdId, memberId)
-      .run();
     return this.currentSubscription(memberId, grant, now);
   }
 
@@ -309,12 +363,13 @@ export class NotificationRepository {
     memberId: string,
     tokenHash: string,
   ): Promise<void> {
-    await this.db
-      .prepare(
-        "DELETE FROM notification_subscriptions WHERE household_id = ? AND member_id = ? AND session_hash = ?",
-      )
-      .bind(this.householdId, memberId, tokenHash)
-      .run();
+    await this.personalWrite(memberId, "notification_device_setup", [
+      this.db
+        .prepare(
+          "DELETE FROM notification_subscriptions WHERE household_id = ? AND member_id = ? AND session_hash = ?",
+        )
+        .bind(this.householdId, memberId, tokenHash),
+    ]);
   }
 
   async createReminder(
@@ -468,7 +523,7 @@ export class NotificationRepository {
   ): Promise<SubscriptionRow | null> {
     return this.db
       .prepare(
-        `SELECT s.*, a.expires_at AS session_expires_at FROM notification_subscriptions s
+        `SELECT s.*, CASE WHEN a.permanent = 1 THEN NULL ELSE a.expires_at END AS session_expires_at FROM notification_subscriptions s
       JOIN auth_sessions a ON a.token_hash = s.session_hash
       WHERE s.household_id = ? AND s.member_id = ? AND s.id = ?`,
       )
@@ -569,7 +624,7 @@ export class NotificationRepository {
           (SELECT 1 FROM auth_sessions s JOIN members m ON m.id = s.member_id JOIN auth_accounts a ON a.member_id = m.id
            WHERE s.token_hash = notification_subscriptions.session_hash AND s.member_id = notification_subscriptions.member_id
              AND m.household_id = notification_subscriptions.household_id AND m.archived_at IS NULL
-             AND s.credential_version = a.credential_version AND s.expires_at > ?))`,
+             AND s.credential_version = a.credential_version AND ${sessionLifetimeSQL("s")}))`,
         )
         .bind(this.householdId, Date.parse(now), now),
     ]);

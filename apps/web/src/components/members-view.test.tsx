@@ -1,4 +1,4 @@
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createMember, getMembers, resetMemberPassword, updateMember } from "@/lib/auth";
@@ -80,4 +80,26 @@ describe("MembersView", () => {
     await userEvent.click(screen.getByRole("button", { name: "Try again" }));
     expect(await screen.findByRole("article", { name: "Ravi" })).toBeInTheDocument();
   });
+});
+
+it("does not treat an accountless owner as replacement for the last usable owner", async () => {
+  vi.mocked(getMembers).mockResolvedValue([{ ...members[0], id: "usable", name: "Usable owner" }, { ...members[0], id: "accountless", name: "No login", hasLogin: false }]);
+  render(<MembersView currentUser={owner} />);
+  const usable = await screen.findByRole("article", { name: "Usable owner" });
+  expect(within(usable).queryByRole("button", { name: "Deactivate" })).not.toBeInTheDocument();
+  const accountless = screen.getByRole("article", { name: "No login" });
+  expect(within(accountless).getByRole("button", { name: "Deactivate" })).toBeEnabled();
+  await userEvent.click(within(accountless).getByRole("button", { name: "Edit" }));
+  expect(within(accountless).getByLabelText("Access")).toBeEnabled();
+});
+it("opens a member password handoff without changing credentials", async () => {
+  render(<MembersView currentUser={owner} action="reset-password" memberId="ravi" />);
+  const password = await screen.findByLabelText("New password for Ravi");
+  await waitFor(() => expect(password).toHaveFocus());
+  expect(resetMemberPassword).not.toHaveBeenCalled();
+});
+it("opens an owner member-creation handoff without creating anyone", async () => {
+  render(<MembersView currentUser={owner} action="create-member" />);
+  expect(await screen.findByRole("form", { name: "Add household member" })).toBeInTheDocument();
+  expect(createMember).not.toHaveBeenCalled();
 });

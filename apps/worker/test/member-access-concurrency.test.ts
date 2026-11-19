@@ -1,6 +1,6 @@
 import { env, exports } from "cloudflare:workers";
 import { beforeEach, describe, expect, it } from "vitest";
-import worker from "../src/index";
+import { app } from "../src/index";
 
 const origin = "https://home-os.test";
 const password = "member concurrency test password";
@@ -71,7 +71,7 @@ describe("member access updates", () => {
         return typeof value === "function" ? value.bind(target) : value;
       },
     });
-    const renamed = worker.fetch(request("/members/race", cookie, { name: "Renamed member" }, "PATCH"), { ...env, DB: database });
+    const renamed = app.fetch(request("/members/race", cookie, { name: "Renamed member" }, "PATCH"), { ...env, DB: database });
     await read;
     expect((await api("/members/race", cookie, { active: false, role: "viewer" }, "PATCH")).status).toBe(200);
     resumeRead();
@@ -127,7 +127,7 @@ describe("member access updates", () => {
         return typeof value === "function" ? value.bind(target) : value;
       },
     });
-    const response = await worker.fetch(request("/members/email-race/password", cookie, { password }), { ...env, DB: database });
+    const response = await app.fetch(request("/members/email-race/password", cookie, { password }), { ...env, DB: database });
     expect(response.status).toBe(200);
     expect(await env.DB.prepare("SELECT email FROM auth_accounts WHERE member_id = 'email-race'").first()).toEqual({ email: "after@example.com" });
     expect((await api("/auth/login", "", { email: "after@example.com", password, remember: false })).status).toBe(200);

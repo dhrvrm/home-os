@@ -1,7 +1,8 @@
+import type { HouseholdCommand } from "../platform/household-command";
 import type { CommandContext } from "../platform/context";
-import { ValidationError } from "../platform/errors";
+import { ConflictError, ValidationError } from "../platform/errors";
 import { createId } from "../platform/ids";
-import { attentionReasonsFor, calculateCadence, calculateForecast, calculateRestockDue } from "./forecast";
+import { enrichProjection, attentionReasonsFor, calculateCadence, calculateForecast, calculateRestockDue } from "./forecast";
 import type {
   ApplyStockEventInput,
   CreateItemInput,
@@ -48,7 +49,31 @@ export class InventoryService {
       ...filter,
       archived: filter.archived ?? "exclude",
     });
-    return Promise.all(items.map((item) => this.enrich(item)));
+    if (!this.repository.listHouseholdEvents || !this.repository.latestRestocks) return Promise.all(items.map(item => this.enrich(item)));
+    const now = this.now();
+    const [events, restocks] = await Promise.all([this.repository.listHouseholdEvents(householdId, new Date(now.getTime() - 90 * 86400000).toISOString()), this.repository.latestRestocks(householdId)]);
+    const byItem = new Map<string, StockEvent[]>();
+    for (const event of events) {
+      const entries = byItem.get(event.itemId) ?? [];
+      entries.push(event);
+      byItem.set(event.itemId, entries);
+    }
+    return Promise.all(items.map(item => this.enrich(item, { events: byItem.get(item.id) ?? [], restockedAt: restocks.get(item.id) ?? null, now })));
+  }
+
+  async listItemsPage(householdId: string, filter: InventoryFilter, page: import("./validation").PageInput = {}) {
+    if (!this.repository.listItemsPage || !this.repository.projections) throw new Error("Paged inventory reads require a bounded repository");
+    const result = await this.repository.listItemsPage(householdId, filter, page);
+    const now = this.now();
+    const stats = await this.repository.projections(householdId, result.items.map(item => item.id), new Date(now.getTime() - 90 * 86400000).toISOString(), now.toISOString());
+    return { ...result, items: result.items.map(item => enrichProjection(item, stats.get(item.id), now)) };
+  }
+
+  async listEventsPage(householdId: string, itemId: string | undefined, page: import("./validation").PageInput = {}) {
+    if (!this.repository.listEventsPage) throw new Error("Paged history requires a bounded repository");
+    if (itemId) await this.repository.getItem(householdId, itemId);
+    const result = await this.repository.listEventsPage(householdId, itemId, page);
+    return { events: result.items, nextCursor: result.nextCursor };
   }
 
   async getItem(householdId: string, itemId: string): Promise<InventoryItem> {
@@ -56,6 +81,8 @@ export class InventoryService {
   }
 
   async createItem(context: CommandContext, input: CreateItemInput): Promise<InventoryItem> {
+    const admission = await this.repository.beginMutation?.(context, "inventory.item.created", undefined, input);
+    if (admission?.replay) return this.enrich(admission.replay);
     const name = trimmed(input.name);
     if (!name) throw new ValidationError("name", "enter an item name");
     assertLength("name", name, 120);
@@ -132,6 +159,7 @@ export class InventoryService {
     return this.enrich(
       await this.repository.createItem(item, {
         context,
+        command: admission?.command,
         action: "inventory.item.created",
         expectedVersion: 0,
         changes: createdFields(item),
@@ -140,7 +168,12 @@ export class InventoryService {
   }
 
   async updateItem(context: CommandContext, itemId: string, input: UpdateItemInput): Promise<InventoryItem> {
+    const admission = await this.repository.beginMutation?.(context, "inventory.item.updated", itemId.trim(), input);
+    if (admission?.replay) return this.enrich(admission.replay);
     const current = await this.repository.getItem(context.householdId, itemId.trim());
+    if (context.expectedVersion !== undefined && context.expectedVersion !== current.version) {
+      throw new ConflictError("inventory_item", current.id, context.expectedVersion, current.version);
+    }
     const next = structuredClone(current);
 
     if (input.name !== undefined) {
@@ -201,7 +234,7 @@ export class InventoryService {
     ]);
     const updated = await this.repository.updateItem(
       next,
-      this.mutation(context, "inventory.item.updated", current.version, changes),
+      this.mutation(context, "inventory.item.updated", current.version, changes, admission?.command),
     );
     return this.enrich(updated);
   }
@@ -211,12 +244,17 @@ export class InventoryService {
     itemId: string,
     input: ApplyStockEventInput,
   ): Promise<InventoryItem> {
+    const admission = await this.repository.beginMutation?.(context, `inventory.stock.${input.type}`, itemId.trim(), input);
+    if (admission?.replay) return this.enrich(admission.replay);
     if (input.type !== "consume" && input.type !== "restock" && input.type !== "mark_level") {
       throw new ValidationError("type", "must be consume, restock, or mark_level");
     }
     const note = trimmed(input.note);
     assertLength("note", note, 240);
     const current = await this.repository.getItem(context.householdId, itemId.trim());
+    if (context.expectedVersion !== undefined && context.expectedVersion !== current.version) {
+      throw new ConflictError("inventory_item", current.id, context.expectedVersion, current.version);
+    }
     const next = structuredClone(current);
     let eventQuantity = input.quantity ?? 0;
 
@@ -273,7 +311,7 @@ export class InventoryService {
     const updated = await this.repository.applyStockEvent(
       next,
       event,
-      this.mutation(context, `inventory.stock.${input.type}`, current.version, changes),
+      this.mutation(context, `inventory.stock.${input.type}`, current.version, changes, admission?.command),
     );
     return this.enrich(updated);
   }
@@ -292,8 +330,16 @@ export class InventoryService {
   }
 
   private async setArchived(context: CommandContext, itemId: string, archived: boolean): Promise<InventoryItem> {
+    const admission = await this.repository.beginMutation?.(context, archived ? "inventory.item.archived" : "inventory.item.restored", itemId.trim(), {});
+    if (admission?.replay) return this.enrich(admission.replay);
     const current = await this.repository.getItem(context.householdId, itemId.trim());
-    if ((current.archivedAt !== null) === archived) return this.enrich(current);
+    if (context.expectedVersion !== undefined && context.expectedVersion !== current.version) {
+      throw new ConflictError("inventory_item", current.id, context.expectedVersion, current.version);
+    }
+    if ((current.archivedAt !== null) === archived) {
+      if (!admission) return this.enrich(current);
+      return this.enrich(await this.repository.setArchived(current, this.mutation(context, archived ? "inventory.item.archived" : "inventory.item.restored", current.version, [], admission.command)));
+    }
 
     const next = structuredClone(current);
     next.archivedAt = archived ? this.now().toISOString() : null;
@@ -306,6 +352,7 @@ export class InventoryService {
         archived ? "inventory.item.archived" : "inventory.item.restored",
         current.version,
         changedFields(current, next, ["archivedAt"]),
+        admission?.command,
       ),
     );
     return this.enrich(updated);
@@ -316,19 +363,25 @@ export class InventoryService {
     action: string,
     currentVersion: number,
     changes: AuditChange[],
+    command?: HouseholdCommand,
   ): InventoryMutation {
     return {
       context,
       action,
+      command,
       expectedVersion: context.expectedVersion ?? currentVersion,
       changes,
     };
   }
 
-  private async enrich(item: InventoryItem): Promise<InventoryItem> {
-    const now = this.now();
+  private async enrich(item: InventoryItem, projection?: { events: StockEvent[]; restockedAt: string | null; now: Date }): Promise<InventoryItem> {
+    const now = projection?.now ?? this.now();
     const since = new Date(now.getTime() - 90 * 24 * 60 * 60 * 1000).toISOString();
-    const events = await this.repository.listEvents(item.householdId, item.id, since);
+    if (!projection && this.repository.projections) {
+      const stats = await this.repository.projections(item.householdId, [item.id], since, now.toISOString());
+      return enrichProjection(item, stats.get(item.id), now);
+    }
+    const events = projection?.events ?? await this.repository.listEvents(item.householdId, item.id, since);
     const enriched = structuredClone(item);
     const forecast = calculateForecast(enriched, events, now);
     const cadence = calculateCadence(events, now);
@@ -337,7 +390,7 @@ export class InventoryService {
     if (cadence) enriched.cadence = cadence;
     else delete enriched.cadence;
     if (item.restockIntervalDays !== null) {
-      const lastRestockedAt = await this.repository.latestRestockAt(item.householdId, item.id);
+      const lastRestockedAt = projection ? projection.restockedAt : await this.repository.latestRestockAt(item.householdId, item.id);
       const restockDue = calculateRestockDue(enriched, lastRestockedAt, now);
       if (restockDue) enriched.restockDue = restockDue;
     } else {

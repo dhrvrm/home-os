@@ -1,6 +1,6 @@
 import { env, exports } from "cloudflare:workers";
 import { expect, it } from "vitest";
-import worker from "../src/index";
+import { app } from "../src/index";
 
 const origin = "https://home-os.test";
 const password = "password concurrency test original";
@@ -37,7 +37,7 @@ it("does not revoke the winning password change's session or audit a rejected st
       return typeof value === "function" ? value.bind(target) : value;
     },
   });
-  const stale = worker.fetch(request("/auth/password", { currentPassword: password, newPassword: "stale password change value" }, cookie), { ...env, DB: database });
+  const stale = app.fetch(request("/auth/password", { currentPassword: password, newPassword: "stale password change value" }, cookie), { ...env, DB: database });
   await read;
   const winner = await exports.default.fetch(request("/auth/password", { currentPassword: password, newPassword: "winning password change value" }, cookie));
   expect(winner.status).toBe(200);

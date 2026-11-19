@@ -203,6 +203,8 @@ async function runJourney() {
   });
   const auth = await request("/api/v1/auth/status");
   assert.equal(auth.session.user.id, "local-owner");
+  assert.equal(auth.session.expiresAt, null);
+  assert.match(auth.session.sessionId, /^[a-f0-9]{32}$/);
   assert.equal(auth.setupRequired, false);
   const manifestResponse = await fetch(`${webOrigin}/manifest.webmanifest`);
   assert.equal(manifestResponse.status, 200);

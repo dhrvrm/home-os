@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { beforeEach, describe, it, expect } from "vitest";
 import { countedD1 } from "./d1-budget";
 import { Hono } from "hono";
 import type { Env } from "../src/env";
@@ -16,10 +16,18 @@ import { ValidationError } from "../src/platform/errors";
 import { cookingInstant, menuBounds } from "../src/meals/time";
 import type { CommandContext } from "../src/platform/context";
 import { cookingApi, recipeInput } from "./cooking-fixture";
+const proofHash = await digest("a".repeat(64));
+beforeEach(async () => {
+  await env.DB.batch([
+    env.DB.prepare("INSERT OR IGNORE INTO auth_accounts (member_id, email, password_hash, updated_at) VALUES ('local-owner', 'cook-owner@example.test', 'fixture-verifier', CURRENT_TIMESTAMP)"),
+    env.DB.prepare("INSERT OR IGNORE INTO auth_sessions (token_hash, member_id, credential_version, expires_at, created_at) VALUES (?, 'local-owner', 1, '2099-01-01T00:00:00.000Z', CURRENT_TIMESTAMP)").bind(proofHash),
+  ]);
+});
 function context(version?: number, op = crypto.randomUUID()): CommandContext {
   return {
     householdId: "home",
     actorId: "local-owner",
+    authority: { householdId: "home", memberId: "local-owner", role: "owner", proof: { kind: "browser", tokenHash: proofHash, credentialVersion: 1 } },
     actorType: "member",
     source: "pwa",
     operationId: op,
@@ -327,6 +335,9 @@ describe("cooking rules against real D1", () => {
       "INSERT INTO members (id,household_id,display_name,role,created_at,updated_at) VALUES ('backup-cooking-owner','home','Backup','owner','2090-01-01','2090-01-01')",
     ).run();
     await env.DB.prepare(
+      "INSERT INTO auth_accounts (member_id,email,password_hash,updated_at) SELECT 'backup-cooking-owner','backup-cooking-owner@example.test',password_hash,CURRENT_TIMESTAMP FROM auth_accounts WHERE member_id='local-owner'",
+    ).run();
+    await env.DB.prepare(
       "UPDATE members SET role='viewer' WHERE id='local-owner'",
     ).run();
     expect(await eligible(2, "2090-01-01T11:30:00.000Z")).toBe(false);
@@ -389,7 +400,12 @@ describe("cooking rules against real D1", () => {
     await env.DB.prepare(
       "INSERT INTO members (id,household_id,display_name,role,created_at,updated_at) VALUES ('departed-cook','home','Departed','member','2090-01-01','2090-01-01')",
     ).run();
-    const memberContext = { ...context(), actorId: "departed-cook" };
+    const departedHash = await digest("b".repeat(64));
+    await env.DB.batch([
+      env.DB.prepare("INSERT INTO auth_accounts (member_id, email, password_hash, updated_at) VALUES ('departed-cook', 'departed@example.test', 'fixture-verifier', CURRENT_TIMESTAMP)"),
+      env.DB.prepare("INSERT INTO auth_sessions (token_hash, member_id, credential_version, expires_at, created_at) VALUES (?, 'departed-cook', 1, '2099-01-01T00:00:00.000Z', CURRENT_TIMESTAMP)").bind(departedHash),
+    ]);
+    const memberContext: CommandContext = { ...context(), actorId: "departed-cook", authority: { householdId: "home", memberId: "departed-cook", role: "member", proof: { kind: "browser", tokenHash: departedHash, credentialVersion: 1 } } };
     await service.respond(memberContext, m.id, {
       response: "yes",
       announcementVersion: 1,

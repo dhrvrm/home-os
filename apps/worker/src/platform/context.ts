@@ -1,7 +1,9 @@
+import type { VerifiedAuthority } from "../auth/authority";
 export type ActorType = "member" | "mcp" | "automation" | "import";
 export type CommandSource = "pwa" | "mcp" | "automation" | "import";
 
 export interface CommandContext {
+  authority?: VerifiedAuthority;
   householdId: string;
   actorId: string;
   actorType: ActorType;

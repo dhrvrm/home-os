@@ -205,7 +205,7 @@ export async function runNotificationTick(
                 currentTime(),
               )) ||
               delivery.cooking_at <= currentTime() ||
-              (fresh.session_expires_at !== undefined &&
+              (fresh.session_expires_at != null &&
                 fresh.session_expires_at <= currentTime()) ||
               (fresh.expiration_time !== null &&
                 fresh.expiration_time <= Date.parse(currentTime()))

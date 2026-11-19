@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, type FormEvent } from "react";
+import { readHouseholdLocation } from "@/lib/navigation";
 import { House } from "@phosphor-icons/react";
 import { login, setupOwner, type AuthSession } from "@/lib/auth";
 import { errorMessage, PasswordField } from "./auth-fields";
@@ -14,6 +15,7 @@ interface AuthScreenProps {
 }
 
 export function AuthScreen({ setupRequired, setupAvailable, message, onAuthenticated }: AuthScreenProps) {
+  const connecting = typeof window !== "undefined" && !!readHouseholdLocation(window.location.search).connect;
   const [signInInstead, setSignInInstead] = useState(false);
   const settingUp = setupRequired && !signInInstead;
   const [pending, setPending] = useState(false);
@@ -31,7 +33,7 @@ export function AuthScreen({ setupRequired, setupAvailable, message, onAuthentic
     setPending(true);
     setError(null);
     try {
-      const credentials = { email: String(values.get("email") ?? "").trim(), password, remember: values.get("remember") === "on" };
+      const credentials = { email: String(values.get("email") ?? "").trim(), password };
       const session = settingUp
         ? await setupOwner({ ...credentials, name: String(values.get("name") ?? "").trim(), setupToken: String(values.get("setupToken") ?? "") })
         : await login(credentials);
@@ -52,6 +54,7 @@ export function AuthScreen({ setupRequired, setupAvailable, message, onAuthentic
           <h1 id="auth-title">{settingUp ? "A place for everyone at home." : "Welcome home."}</h1>
           <p>{settingUp ? "Create the first owner account, then add the people you live with." : "Sign in to your household’s inventory and shared plans."}</p>
         </header>
+        {connecting && <p className="auth-notice">Sign in to review the assistant connection. Signing in does not approve access.</p>}
         {message && <p className="auth-notice" role="status">{message}</p>}
         {settingUp && !setupAvailable
           ? <p className="auth-notice" role="status">Home setup is not ready yet. Ask the person setting up Home OS to enable account setup, then reload this page.</p>
@@ -63,8 +66,7 @@ export function AuthScreen({ setupRequired, setupAvailable, message, onAuthentic
               <PasswordField label="Confirm password" name="confirmPassword" autoComplete="new-password" disabled={pending} />
               <div className="field auth-field"><label htmlFor="home-setup-code">Home setup code</label><input id="home-setup-code" name="setupToken" type="password" autoComplete="off" required maxLength={256} disabled={pending} aria-describedby="setup-code-help" /><small className="auth-help" id="setup-code-help">The private setup code from the person setting up this home. Used only for the first owner.</small></div>
             </>}
-            <label className="auth-check"><input name="remember" type="checkbox" defaultChecked disabled={pending} /><span>Keep me signed in</span></label>
-            <p className="auth-help auth-remember-help">For 30 days on this device. Leave unchecked on a shared device.</p>
+            <p className="auth-help">Stay signed in until you sign out or access is revoked. Clearing browser storage or device policy may require signing in again. Sign out on shared devices.</p>
             {error && <p className="form-error" role="alert">{error}</p>}
             <button type="submit" className="button button--primary auth-submit" disabled={pending}>{pending ? (settingUp ? "Setting up…" : "Signing in…") : (settingUp ? "Set up your home" : "Sign in")}</button>
             {!settingUp && <p className="auth-help">Need an account or a new password? Ask a household owner.</p>}

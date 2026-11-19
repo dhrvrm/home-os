@@ -9,17 +9,20 @@
     "deploy": "wrangler deploy",
     "dev": "wrangler dev",
     "lint": "tsc --noEmit",
+    "pretest": "npm run build --workspace @home-os/web",
     "test": "vitest run"
   },
   "dependencies": {
     "@block65/webcrypto-web-push": "2.0.0",
-    "@modelcontextprotocol/server": "2.0.0",
-    "agents": "0.21.0",
+    "@cloudflare/workers-oauth-provider": "1.2.4",
+    "@modelcontextprotocol/server": "2.4.0",
+    "agents": "0.32.0",
     "hono": "4.13.5",
     "zod": "4.4.3"
   },
   "devDependencies": {
     "@cloudflare/vitest-plugin": "1.1.1",
+    "@modelcontextprotocol/client": "2.4.0",
     "typescript": "5.9.2",
     "vitest": "4.1.11",
     "wrangler": "4.125.0"

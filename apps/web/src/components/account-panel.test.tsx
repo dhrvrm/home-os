@@ -5,8 +5,9 @@ import { changePassword } from "@/lib/auth";
 import { AccountPanel } from "./account-panel";
 
 vi.mock("@/lib/auth", () => ({ changePassword: vi.fn() }));
+vi.mock("@/auth/access-rosters", () => ({ AccessRosters: () => <div>Access rosters</div> }));
 vi.mock("./pwa-controls", () => ({ PWAControls: () => <div>Install Home OS</div> }));
-const session = { user: { id: "owner", householdId: "home", name: "Asha", email: "asha@example.com", role: "owner" as const }, expiresAt: "2027-01-01T00:00:00Z" };
+const session = { sessionId: "a".repeat(32), user: { id: "owner", householdId: "home", name: "Asha", email: "asha@example.com", role: "owner" as const }, expiresAt: "2027-01-01T00:00:00Z" };
 beforeEach(() => { vi.clearAllMocks(); vi.mocked(changePassword).mockResolvedValue(session); });
 afterEach(cleanup);
 
@@ -43,4 +44,19 @@ describe("AccountPanel", () => {
     expect(await screen.findByRole("status")).toHaveTextContent("Password changed");
     expect(screen.queryByLabelText("Current password")).not.toBeInTheDocument();
   });
+});
+
+it("opens and focuses the actual password handoff without changing credentials", () => {
+  render(<AccountPanel session={session} openPassword onLogout={vi.fn()} onSessionChange={vi.fn()} />);
+  expect(screen.getByLabelText("Current password")).toHaveFocus();
+  expect(changePassword).not.toHaveBeenCalled();
+});
+it("shows the canonical assistant address and personal role instructions", async () => {
+  const clipboard = { writeText: vi.fn().mockResolvedValue(undefined) };
+  Object.defineProperty(navigator, "clipboard", { configurable: true, value: clipboard });
+  render(<AccountPanel session={{ ...session, user: { ...session.user, role: "viewer" } }} onLogout={vi.fn()} onSessionChange={vi.fn()} />);
+  expect(screen.getByText("https://home.dhruvverma.dev/mcp")).toBeInTheDocument();
+  expect(screen.getByText(/Reads shared information and manages their own reminders/)).toBeInTheDocument();
+  await userEvent.click(screen.getByRole("button", { name: "Copy server address" }));
+  expect(clipboard.writeText).toHaveBeenCalledWith("https://home.dhruvverma.dev/mcp");
 });

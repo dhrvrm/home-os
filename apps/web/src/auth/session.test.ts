@@ -41,4 +41,27 @@ describe("remembered access evidence", () => {
     expect(localStorage.length).toBe(0);
     expect(sessionStorage.length).toBe(0);
   });
+  it("persists an explicit permanent snapshot across browser restart and former deadlines", () => {
+    const permanent = { ...session, expiresAt: null };
+    saveSession(permanent);
+    sessionStorage.clear();
+    expect(readSavedSession(Date.parse("2099-01-01"))).toEqual(permanent);
+  });
+
+  it.each([undefined, "", "bad", "1", "2026-11-18", 0, false])("never treats malformed deadline %s as permanent", (expiresAt) => {
+    localStorage.setItem("home-os:session:v1", JSON.stringify({ ...session, expiresAt }));
+    expect(readSavedSession()).toBeNull();
+  });
+
+});
+
+it("retains a valid public grant id while reading legacy snapshots compatibly", () => {
+  const modern = { ...session, expiresAt: null, sessionId: "a".repeat(32) };
+  saveSession(modern);
+  expect(readSavedSession()).toEqual(modern);
+});
+
+it.each(["", "A".repeat(32), "a".repeat(31), "../session", 123])("rejects malformed public session ids %s", sessionId => {
+  localStorage.setItem("home-os:session:v1", JSON.stringify({ ...session, expiresAt: null, sessionId }));
+  expect(readSavedSession()).toBeNull();
 });

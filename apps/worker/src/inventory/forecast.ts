@@ -19,17 +19,7 @@ export function calculateForecast(item: InventoryItem, events: StockEvent[], now
   );
   if (consumptions.length < 2) return undefined;
 
-  const total = consumptions.reduce((sum, event) => sum + event.quantity, 0);
-  const earliest = Math.min(...consumptions.map((event) => new Date(event.occurredAt).getTime()));
-  const days = Math.max(1, (now.getTime() - earliest) / DAY_MS);
-  const dailyUsage = total / days;
-  if (dailyUsage <= 0) return undefined;
-
-  return {
-    dailyUsage: roundOne(dailyUsage),
-    daysRemaining: roundOne(item.quantity / dailyUsage),
-    confidence: confidenceFor(consumptions.length),
-  };
+  return forecastFromSummary(item, consumptions.length, consumptions.reduce((sum, event) => sum + event.quantity, 0), Math.min(...consumptions.map(event => new Date(event.occurredAt).getTime())), now);
 }
 
 export function calculateCadence(events: StockEvent[], now: Date): Cadence | undefined {
@@ -39,16 +29,7 @@ export function calculateCadence(events: StockEvent[], now: Date): Cadence | und
     .sort((left, right) => left - right);
   if (times.length < 2) return undefined;
 
-  const spanDays = (times.at(-1)! - times[0]!) / DAY_MS;
-  if (spanDays <= 0) return undefined;
-  const averageIntervalDays = spanDays / (times.length - 1);
-
-  return {
-    averageIntervalDays: roundOne(averageIntervalDays),
-    eventsPerWeek: roundOne(7 / averageIntervalDays),
-    lastConsumedAt: new Date(times.at(-1)!).toISOString(),
-    confidence: confidenceFor(times.length),
-  };
+  return cadenceFromSummary(times.length, times[0]!, times.at(-1)!);
 }
 
 export const RESTOCK_DUE_SOON_FRACTION = 0.2;
@@ -91,4 +72,30 @@ function confidenceFor(count: number): Confidence {
 
 function roundOne(value: number): number {
   return Math.round(value * 10) / 10;
+}
+
+/** Aggregate projection preserves all observations without loading unbounded histories. */
+export function enrichProjection(item: InventoryItem, stats: import("./repository").InventoryProjection | undefined, now: Date): InventoryItem {
+  const result = structuredClone(item);
+  if (stats?.firstPositiveAt) result.forecast = forecastFromSummary(item, stats.positiveCount, stats.consumedQuantity, new Date(stats.firstPositiveAt).getTime(), now);
+  if (!result.forecast) delete result.forecast;
+  if (stats?.firstConsumedAt && stats.lastConsumedAt) result.cadence = cadenceFromSummary(stats.consumedCount, new Date(stats.firstConsumedAt).getTime(), new Date(stats.lastConsumedAt).getTime());
+  if (!result.cadence) delete result.cadence;
+  result.restockDue = calculateRestockDue(item, stats?.restockedAt ?? null, now);
+  if (!result.restockDue) delete result.restockDue;
+  result.attentionReasons = attentionReasonsFor(result.stockLevel, result.restockDue);
+  return result;
+}
+
+function forecastFromSummary(item: InventoryItem, count: number, quantity: number, earliest: number, now: Date): Forecast | undefined {
+  if (item.trackingMode !== "exact" || item.quantity <= 0 || count < 2) return undefined;
+  const usage = quantity / Math.max(1, (now.getTime() - earliest) / DAY_MS);
+  if (usage <= 0) return undefined;
+  return { dailyUsage: roundOne(usage), daysRemaining: roundOne(item.quantity / usage), confidence: confidenceFor(count) };
+}
+function cadenceFromSummary(count: number, earliest: number, latest: number): Cadence | undefined {
+  const span = (latest - earliest) / DAY_MS;
+  if (count < 2 || span <= 0) return undefined;
+  const interval = span / (count - 1);
+  return { averageIntervalDays: roundOne(interval), eventsPerWeek: roundOne(7 / interval), lastConsumedAt: new Date(latest).toISOString(), confidence: confidenceFor(count) };
 }

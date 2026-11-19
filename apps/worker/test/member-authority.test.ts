@@ -1,6 +1,6 @@
 import { env, exports } from "cloudflare:workers";
 import { beforeEach, describe, expect, it } from "vitest";
-import worker from "../src/index";
+import { app } from "../src/index";
 import { digest } from "../src/auth/crypto";
 
 const origin = "https://home-os.test";
@@ -44,6 +44,9 @@ async function seedOtherOwner() {
     "INSERT INTO members (id, household_id, display_name, email, role, created_at, updated_at) VALUES ('other-owner', 'home', 'Other owner', 'other@example.test', 'owner', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
   ).run();
   expect(response.meta.changes).toBe(1);
+  await env.DB.prepare(
+    "INSERT INTO auth_accounts (member_id, email, password_hash, updated_at) SELECT 'other-owner', 'other@example.test', password_hash, CURRENT_TIMESTAMP FROM auth_accounts WHERE member_id = 'local-owner'",
+  ).run();
 }
 function heldJSON(path: string, cookie: string, method: string, body: unknown) {
   let enter!: () => void;
@@ -66,7 +69,7 @@ function heldJSON(path: string, cookie: string, method: string, body: unknown) {
     { highWaterMark: 0 },
   );
   const headers = request(path, cookie).headers;
-  const response = worker.fetch(
+  const response = app.fetch(
     new Request(`${origin}/api/v1${path}`, { method, headers, body: stream }),
     env,
   );
@@ -162,7 +165,7 @@ describe("continuing owner authority at transaction commit", () => {
     const cookie = await ownerCookie();
     await seedOtherOwner();
     await env.DB.prepare(
-      "INSERT INTO auth_accounts (member_id, email, password_hash, updated_at) VALUES ('other-owner', 'other@example.test', 'unchanged-verifier', CURRENT_TIMESTAMP)",
+      "UPDATE auth_accounts SET password_hash = 'unchanged-verifier' WHERE member_id = 'other-owner'",
     ).run();
     const before = await env.DB.prepare(
       "SELECT password_hash, credential_version FROM auth_accounts WHERE member_id = 'other-owner'",
@@ -202,7 +205,7 @@ describe("continuing owner authority at transaction commit", () => {
         return typeof value === "function" ? value.bind(target) : value;
       },
     });
-    const response = await worker.fetch(
+    const response = await app.fetch(
       request(
         "/members/other-owner",
         cookie,
@@ -237,7 +240,7 @@ describe("continuing owner authority at transaction commit", () => {
       await held.entered;
       if (reason === "expired") {
         await env.DB.prepare(
-          "UPDATE auth_sessions SET expires_at = '2000-01-01T00:00:00.000Z' WHERE member_id = 'local-owner'",
+          "UPDATE auth_sessions SET permanent = 0, expires_at = '2000-01-01T00:00:00.000Z' WHERE member_id = 'local-owner'",
         ).run();
       } else {
         await env.DB.prepare(

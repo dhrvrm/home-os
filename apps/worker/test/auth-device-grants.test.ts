@@ -36,7 +36,7 @@ describe("continuing device authority", () => {
   it("expires device delivery at the exact session deadline", async () => {
     const hash = await seedOwner();
     const deadline = new Date().toISOString();
-    await env.DB.prepare("UPDATE auth_sessions SET expires_at = ? WHERE token_hash = ?").bind(deadline, hash).run();
+    await env.DB.prepare("UPDATE auth_sessions SET permanent = 0, expires_at = ? WHERE token_hash = ?").bind(deadline, hash).run();
     await expect(hasNotificationDeliveryAuthority(env.DB, "home", "local-owner", hash, deadline)).resolves.toBe(false);
   });
 
@@ -78,4 +78,15 @@ describe("continuing device authority", () => {
     expect((await send("/notifications/preferences", { "X-HomeOS-Member": "someone-else" })).status).toBe(409);
     expect((await send("/notifications/preferences", { "Content-Type": "text/plain" })).status).toBe(415);
   });
+});
+
+it("protects the session-management route and lists safe current public IDs", async () => {
+  expect((await exports.default.fetch(new Request(`${origin}/api/v1/auth/sessions`))).status).toBe(401);
+  const response = await authenticatedFetch(new Request(`${origin}/api/v1/auth/sessions`));
+  expect(response.status).toBe(200);
+  const result = await response.json<{ data: { sessions: { id: string; current: boolean }[] } }>();
+  expect(result.data.sessions).toHaveLength(1);
+  expect(result.data.sessions[0]!.id).toMatch(/^[a-f0-9]{32}$/);
+  expect(result.data.sessions[0]!.current).toBe(true);
+  expect(JSON.stringify(result)).not.toMatch(/token_hash|tokenHash|password_hash|user.agent/i);
 });

@@ -1,3 +1,5 @@
+import { assertAuthority } from "../auth/authority";
+import { commandContext } from "../http/request-context";
 import { Hono, type Context } from "hono";
 import { z } from "zod";
 import type { Env } from "../env";
@@ -5,10 +7,10 @@ import { D1InventoryRepository } from "../inventory/d1-repository";
 import { InventoryService } from "../inventory/service";
 import { listAuditEvents } from "../platform/audit";
 import type { CommandContext } from "../platform/context";
-import { ConflictError, HomeOSError, ValidationError } from "../platform/errors";
+import { ConflictError, HomeOSError, NotFoundError, ValidationError } from "../platform/errors";
 import { success } from "../http/envelope";
 import type { SyncConflictResult, SyncOperation, SyncResponse } from "./model";
-import { currentMember } from "../auth/session";
+import { currentAuthority, currentMember } from "../auth/session";
 
 const operationSchema = z.object({
   operationId: z.string().min(1).max(128),
@@ -28,7 +30,7 @@ const operationSchema = z.object({
 });
 const syncRequestSchema = z.object({
   cursor: z.number().int().nonnegative().default(0),
-  operations: z.array(operationSchema).max(50),
+  operations: z.array(operationSchema).max(2),
 });
 const createPayload = z.object({
   name: z.string(),
@@ -72,7 +74,8 @@ export function createSyncRoutes(): Hono<{ Bindings: Env }> {
       throw new ValidationError(issue?.path.join(".") || "body", issue?.message ?? "is invalid");
     }
     const householdId = context.env.HOMEOS_DEFAULT_HOUSEHOLD_ID;
-    const service = new InventoryService(new D1InventoryRepository(context.env.DB));
+    const repository = new D1InventoryRepository(context.env.DB);
+    const service = new InventoryService(repository);
     const results: SyncResponse["results"] = [];
 
     for (const operation of parsed.data.operations as SyncOperation[]) {
@@ -85,7 +88,7 @@ export function createSyncRoutes(): Hono<{ Bindings: Env }> {
         continue;
       }
       try {
-        await applyOperation(service, operation, currentMember(context).id);
+        await applyOperation(service, operation, currentMember(context).id, currentAuthority(context));
         results.push({ operationId: operation.operationId, status: "accepted" });
       } catch (error) {
         results.push(await operationError(service, operation, error));
@@ -94,13 +97,12 @@ export function createSyncRoutes(): Hono<{ Bindings: Env }> {
 
     const items = await service.listItems(householdId, { archived: "include" });
     const ninetyDaysAgo = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString();
-    const events = (
-      await Promise.all(items.map((item) => service.listEvents(householdId, item.id, ninetyDaysAgo)))
-    ).flat();
+    const events = await repository.listHouseholdEvents(householdId, ninetyDaysAgo);
     const audit = await listAuditEvents(context.env.DB, householdId, {
       after: parsed.data.cursor ? btoa(String(parsed.data.cursor)) : undefined,
       limit: 100,
     });
+    await assertAuthority(context.env.DB, commandContext(context), "inventory_list");
     const cursor = audit.events.at(-1)?.sequence ?? parsed.data.cursor;
     return success<SyncResponse>(context, { results, items, events, activity: audit.events, cursor });
   });
@@ -108,10 +110,11 @@ export function createSyncRoutes(): Hono<{ Bindings: Env }> {
   return routes;
 }
 
-async function applyOperation(service: InventoryService, operation: SyncOperation, actorId: string): Promise<void> {
+async function applyOperation(service: InventoryService, operation: SyncOperation, actorId: string, authority: CommandContext["authority"]): Promise<void> {
   const context: CommandContext = {
     householdId: operation.householdId,
     actorId,
+    authority,
     actorType: "member",
     source: "pwa",
     operationId: operation.operationId,
@@ -138,11 +141,14 @@ async function operationError(
   error: unknown,
 ): Promise<SyncConflictResult> {
   if (error instanceof ConflictError) {
+    let item;
+    try { item = await service.getItem(operation.householdId, operation.entityId); }
+    catch (readError) { if (!(readError instanceof NotFoundError)) throw readError; }
     return {
       operationId: operation.operationId,
       status: "conflict",
       error: { code: error.code, message: error.message },
-      item: await service.getItem(operation.householdId, operation.entityId),
+      ...(item ? { item } : {}),
     };
   }
   if (error instanceof HomeOSError) {

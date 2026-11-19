@@ -1,5 +1,6 @@
+import { pageLimit, readCursor, writeCursor, type PageInput } from "../../inventory/validation";
+import { beginCommand, replayCommand, commitCommand } from "../../platform/household-command";
 import { ConflictError, NotFoundError } from "../../platform/errors";
-import { createId } from "../../platform/ids";
 import type { CadenceUnit, ExpenseFilter, StoredExpenseParticipant, StoredExpenseRule } from "./model";
 import type { ExpenseMutation, ExpenseRepository } from "./repository";
 
@@ -30,15 +31,18 @@ interface MemberRow {
   archived_at: string | null;
 }
 
-interface ProcessedRow {
-  result_json: string;
-}
 
 const RULE_COLUMNS = `id, household_id, name, amount_minor, currency, cadence_unit,
                       cadence_interval, anchor_date, version, created_at, updated_at, archived_at`;
 
 export class D1ExpenseRepository implements ExpenseRepository {
   constructor(private readonly database: D1Database) {}
+
+  async beginMutation(context: import("../../platform/context").CommandContext, action: string, entityId: string | undefined, input: unknown) {
+    const command = await beginCommand(this.database, context, "expense_rule", action, entityId, input);
+    return { command, replay: await replayCommand<StoredExpenseRule>(this.database, command) };
+  }
+
 
   async listRules(householdId: string, filter: ExpenseFilter): Promise<StoredExpenseRule[]> {
     const result = await this.database
@@ -61,6 +65,15 @@ export class D1ExpenseRepository implements ExpenseRepository {
     return rows.map((row) => mapRule(row, participants.get(row.id) ?? []));
   }
 
+  async listRulesPage(householdId: string, filter: ExpenseFilter, page: PageInput) {
+    const limit = pageLimit(page), cursor = readCursor(page.cursor);
+    const archived = filter.archived === 'only' ? 'AND archived_at IS NOT NULL' : filter.archived === 'include' ? '' : 'AND archived_at IS NULL';
+    const result = await this.database.prepare(`SELECT ${RULE_COLUMNS} FROM expense_rules WHERE household_id = ? ${archived} AND id > ? ORDER BY id ASC LIMIT ?`).bind(householdId, cursor[0] ?? '', limit + 1).all<RuleRow>();
+    const rows = result.results.slice(0, limit);
+    const participants = rows.length ? await this.participantsFor(rows.map(row => row.id)) : new Map();
+    return { items: rows.map(row => mapRule(row, participants.get(row.id) ?? [])), nextCursor: result.results.length > limit ? writeCursor(rows.at(-1)!.id) : null };
+  }
+
   async getRule(householdId: string, ruleId: string): Promise<StoredExpenseRule> {
     const row = await this.database
       .prepare(`SELECT ${RULE_COLUMNS} FROM expense_rules WHERE household_id = ? AND id = ?`)
@@ -80,8 +93,6 @@ export class D1ExpenseRepository implements ExpenseRepository {
   }
 
   async createRule(rule: StoredExpenseRule, mutation: ExpenseMutation): Promise<StoredExpenseRule> {
-    const replay = await this.replayedRule(mutation);
-    if (replay) return replay;
     return this.executeMutation(
       [
         this.database
@@ -106,17 +117,13 @@ export class D1ExpenseRepository implements ExpenseRepository {
             rule.archivedAt,
           ),
         ...this.participantStatements(rule, false),
-        this.processedStatement(rule, mutation),
-        this.auditStatement(rule, mutation),
-      ],
+          ],
       rule,
       mutation,
     );
   }
 
   async updateRule(rule: StoredExpenseRule, mutation: ExpenseMutation): Promise<StoredExpenseRule> {
-    const replay = await this.replayedRule(mutation);
-    if (replay) return replay;
     return this.executeMutation(
       [
         this.guardStatement(rule, mutation),
@@ -141,9 +148,7 @@ export class D1ExpenseRepository implements ExpenseRepository {
             mutation.expectedVersion,
           ),
         ...this.participantStatements(rule, true),
-        this.processedStatement(rule, mutation),
-        this.auditStatement(rule, mutation),
-        this.releaseGuardStatement(rule, mutation),
+            this.releaseGuardStatement(rule, mutation),
       ],
       rule,
       mutation,
@@ -151,8 +156,6 @@ export class D1ExpenseRepository implements ExpenseRepository {
   }
 
   async setArchived(rule: StoredExpenseRule, mutation: ExpenseMutation): Promise<StoredExpenseRule> {
-    const replay = await this.replayedRule(mutation);
-    if (replay) return replay;
     return this.executeMutation(
       [
         this.guardStatement(rule, mutation),
@@ -170,9 +173,7 @@ export class D1ExpenseRepository implements ExpenseRepository {
             rule.id,
             mutation.expectedVersion,
           ),
-        this.processedStatement(rule, mutation),
-        this.auditStatement(rule, mutation),
-        this.releaseGuardStatement(rule, mutation),
+            this.releaseGuardStatement(rule, mutation),
       ],
       rule,
       mutation,
@@ -250,81 +251,20 @@ export class D1ExpenseRepository implements ExpenseRepository {
       .bind(rule.householdId, mutation.context.operationId);
   }
 
-  private processedStatement(rule: StoredExpenseRule, mutation: ExpenseMutation): D1PreparedStatement {
-    return this.database
-      .prepare(
-        `INSERT INTO processed_operations (
-           household_id, operation_id, entity_type, entity_id, result_json, processed_at
-         ) VALUES (?, ?, 'expense_rule', ?, ?, ?)`,
-      )
-      .bind(
-        rule.householdId,
-        mutation.context.operationId,
-        rule.id,
-        JSON.stringify(rule),
-        rule.updatedAt,
-      );
-  }
-
-  private auditStatement(rule: StoredExpenseRule, mutation: ExpenseMutation): D1PreparedStatement {
-    const context = mutation.context;
-    return this.database
-      .prepare(
-        `INSERT INTO audit_events (
-           id, household_id, entity_type, entity_id, action, actor_id, actor_type,
-           source, device_id, operation_id, client_time, server_time, changes_json,
-           mcp_client_id, mcp_tool
-         ) VALUES (?, ?, 'expense_rule', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .bind(
-        createId(),
-        rule.householdId,
-        rule.id,
-        mutation.action,
-        context.actorId,
-        context.actorType,
-        context.source,
-        context.deviceId ?? null,
-        context.operationId,
-        context.clientTime ?? null,
-        rule.updatedAt,
-        JSON.stringify(mutation.changes),
-        context.mcpClientId ?? null,
-        context.mcpTool ?? null,
-      );
-  }
-
-  private async replayedRule(mutation: ExpenseMutation): Promise<StoredExpenseRule | null> {
-    const row = await this.database
-      .prepare("SELECT result_json FROM processed_operations WHERE household_id = ? AND operation_id = ?")
-      .bind(mutation.context.householdId, mutation.context.operationId)
-      .first<ProcessedRow>();
-    return row ? (JSON.parse(row.result_json) as StoredExpenseRule) : null;
-  }
-
   private async executeMutation(
     statements: D1PreparedStatement[],
     rule: StoredExpenseRule,
     mutation: ExpenseMutation,
   ): Promise<StoredExpenseRule> {
-    try {
-      await this.database.batch(statements);
-      return structuredClone(rule);
-    } catch (error) {
-      const replay = await this.replayedRule(mutation);
-      if (replay) return replay;
-      const current = await this.database
-        .prepare("SELECT version FROM expense_rules WHERE household_id = ? AND id = ?")
-        .bind(rule.householdId, rule.id)
-        .first<{ version: number }>();
+    if (!mutation.command) throw new Error("Mutation requires verified command admission");
+    mutation.command.changes = mutation.changes;
+    return commitCommand(this.database, mutation.command, rule, rule.id, rule.updatedAt, statements, async () => {
+      const current = await this.database.prepare("SELECT version FROM expense_rules WHERE household_id = ? AND id = ?").bind(rule.householdId, rule.id).first<{ version: number }>();
       if (mutation.expectedVersion > 0) {
         if (!current) throw new NotFoundError("expense_rule", rule.id);
-        if (current.version !== mutation.expectedVersion) {
-          throw new ConflictError("expense_rule", rule.id, mutation.expectedVersion, current.version);
-        }
+        if (current.version !== mutation.expectedVersion) throw new ConflictError("expense_rule", rule.id, mutation.expectedVersion, current.version);
       }
-      throw error;
-    }
+    });
   }
 }
 

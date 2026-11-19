@@ -11,6 +11,14 @@ definition: >
   materializes this rule per period. Without this subsystem the division of
   shared household costs has no shared source of truth.
 inputs:
+  - name: protected-action-admission
+    description: >
+      The household access decision for this action, with the verified active
+      person, household, and current role, restricted by any connection's
+      approved ceiling. Required before disclosure or change so direct and
+      connected callers share one authority boundary. Owners and members
+      maintain shared facts; viewers inspect them. Claimed actor information
+      never substitutes for this decision.
   - name: expense-command
     description: >
       An intent to create, revise, archive, or restore a recurring expense

@@ -12,6 +12,14 @@ definition: >
   split cannot be resolved. Without it there is nothing to which a split
   applies.
 inputs:
+  - name: protected-action-admission
+    description: >
+      The household access decision for this action, with the verified active
+      person, household, and current role, restricted by any connection's
+      approved ceiling. Required before disclosure or change so direct and
+      connected callers share one authority boundary. Owners and members
+      maintain shared facts; viewers inspect them. Claimed actor information
+      never substitutes for this decision.
   - name: expense-command
     description: >
       An intent to create, revise, archive, or restore a rule, carrying

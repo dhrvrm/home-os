@@ -9,7 +9,7 @@ import type { AuthSession } from "@/lib/auth";
 import { createLocalItem } from "@/offline/commands";
 import * as pwaState from "./pwa-state";
 
-const memberSession: AuthSession = { user: { id: "alice", householdId: "home", name: "Alice", email: "alice@example.com", role: "member" }, expiresAt: "2099-12-01T00:00:00.000Z" };
+const memberSession: AuthSession = { sessionId: "a".repeat(32), user: { id: "alice", householdId: "home", name: "Alice", email: "alice@example.com", role: "member" }, expiresAt: "2099-12-01T00:00:00.000Z" };
 
 const soap: InventoryItem = {
   id: "soap",

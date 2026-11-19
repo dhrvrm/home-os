@@ -11,10 +11,12 @@ permissions:
 jobs:
   verify:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -52,4 +54,26 @@ jobs:
         with:
           name: household-browser-evidence
           path: test-results/household/
+          if-no-files-found: ignore
+
+      - name: Verify personal MCP and browser session boundaries
+        run: npm run smoke:mcp
+        env:
+          HOMEOS_SKIP_BUILD: "1"
+          HOMEOS_BROWSER_CHANNEL: chromium
+
+      - name: Verify installed PWA upgrade preserves queued work
+        run: npm run smoke:upgrade
+        env:
+          HOMEOS_SKIP_BUILD: "1"
+          HOMEOS_BROWSER_CHANNEL: chromium
+
+      - name: Upload access and PWA upgrade evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: access-upgrade-evidence
+          path: |
+            test-results/mcp-browser/
+            test-results/pwa-upgrade/
           if-no-files-found: ignore

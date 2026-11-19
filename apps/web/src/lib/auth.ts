@@ -1,3 +1,5 @@
+import { captureAccessProof, signalSessionExpired } from "@/auth/work";
+import { canCoordinateBrowserAuth, withBrowserAuthHandshake } from "@/auth/browser-handshake";
 import { request } from "./api";
 
 export interface AuthUser {
@@ -7,7 +9,7 @@ export interface AuthUser {
   email: string;
   role: "owner" | "member" | "viewer";
 }
-export interface AuthSession { user: AuthUser; expiresAt: string }
+export interface AuthSession { user: AuthUser; expiresAt: string | null; sessionId?: string }
 export interface AuthStatus { setupRequired: boolean; setupAvailable: boolean; session: AuthSession | null }
 export interface MemberAccount {
   id: string;
@@ -18,16 +20,22 @@ export interface MemberAccount {
   hasLogin: boolean;
 }
 
-export function getAuthStatus(): Promise<AuthStatus> { return request("/api/v1/auth/status"); }
-export function login(input: { email: string; password: string; remember: boolean }): Promise<AuthSession> {
-  return request("/api/v1/auth/login", { method: "POST", body: JSON.stringify(input) });
+export function getAuthStatus(): Promise<AuthStatus> {
+  if (!canCoordinateBrowserAuth()) return request("/api/v1/auth/status");
+  return withBrowserAuthHandshake(() => request("/api/v1/auth/status", { headers: { "X-HomeOS-Session-Renew": "1" } }), false);
 }
-export function setupOwner(input: { name: string; email: string; password: string; setupToken: string; remember: boolean }): Promise<AuthSession> {
-  return request("/api/v1/auth/setup", { method: "POST", body: JSON.stringify(input) });
+export function login(input: { email: string; password: string }): Promise<AuthSession> {
+  return withBrowserAuthHandshake(() => request("/api/v1/auth/login", { method: "POST", body: JSON.stringify(input) }));
 }
-export async function logout(): Promise<void> { await request("/api/v1/auth/logout", { method: "POST", body: "{}" }); }
+export function setupOwner(input: { name: string; email: string; password: string; setupToken: string }): Promise<AuthSession> {
+  return withBrowserAuthHandshake(() => request("/api/v1/auth/setup", { method: "POST", body: JSON.stringify(input) }));
+}
+export async function logout(input: { expectedSessionId: string }): Promise<void> {
+  if (!/^[a-f0-9]{32}$/.test(input.expectedSessionId)) throw new Error("Check your sign-in before signing out. Connect and retry.");
+  await request("/api/v1/auth/logout", { method: "POST", body: JSON.stringify(input) });
+}
 export function changePassword(input: { currentPassword: string; newPassword: string }): Promise<AuthSession> {
-  return request("/api/v1/auth/password", { method: "POST", body: JSON.stringify(input) });
+  return withBrowserAuthHandshake(() => request("/api/v1/auth/password", { method: "POST", body: JSON.stringify(input) }));
 }
 export async function getMembers(): Promise<MemberAccount[]> {
   return (await request<{ members: MemberAccount[] }>("/api/v1/members")).members;
@@ -40,4 +48,25 @@ export async function updateMember(id: string, input: { name?: string; email?: s
 }
 export async function resetMemberPassword(id: string, password: string): Promise<void> {
   await request(`/api/v1/members/${encodeURIComponent(id)}/password`, { method: "POST", body: JSON.stringify({ password }) });
+}
+
+export interface BrowserSessionAccess {
+  id: string;
+  memberId: string;
+  createdAt: string;
+  expiresAt: string | null;
+  current: boolean;
+}
+export function listBrowserSessions(input: { memberId?: string; limit?: number; cursor?: string } = {}): Promise<{ sessions: BrowserSessionAccess[]; nextCursor: string | null }> {
+  const query = new URLSearchParams();
+  if (input.memberId !== undefined) query.set("memberId", input.memberId);
+  if (input.limit !== undefined) query.set("limit", String(input.limit));
+  if (input.cursor !== undefined) query.set("cursor", input.cursor);
+  return request(`/api/v1/auth/sessions${query.size ? `?${query}` : ""}`);
+}
+export async function revokeBrowserSession(id: string): Promise<{ id: string; revoked: true; current: boolean }> {
+  const proof = captureAccessProof();
+  const result = await request<{ id: string; revoked: true; current: boolean }>(`/api/v1/auth/sessions/${encodeURIComponent(id)}/revoke`, { method: "POST", body: "{}" });
+  if (result.current) signalSessionExpired(proof);
+  return result;
 }
