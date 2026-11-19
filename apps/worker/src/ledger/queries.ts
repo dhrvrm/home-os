@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { digest } from '../auth/crypto';
 import type { Action } from '../auth/permissions';
 import type { CommandContext } from '../platform/context';
 import { HomeOSError, NotFoundError, ValidationError } from '../platform/errors';
@@ -94,8 +95,7 @@ export class LedgerQueries {
   private async page<T extends QueryItem>(context: CommandContext, kind: QueryKind, action: Action, query: QueryFilter & { limit: number; cursor?: string }) {
     await this.repository.authorize(context, action);
     const { limit, cursor: token, ...filter } = query;
-    const bindingBytes = await crypto.subtle.digest('SHA-256', bytes(DOMAIN + canonical({ actorId: context.actorId, householdId: context.householdId, kind, filter: canonical(filter), limit })));
-    const binding = Array.from(new Uint8Array(bindingBytes), v => v.toString(16).padStart(2, '0')).join('');
+    const binding = await digest(DOMAIN + canonical({ actorId: context.actorId, householdId: context.householdId, kind, filter: canonical(filter), limit }));
     const cursor = token ? await this.readCursor(token, binding, kind === 'comments') : undefined;
     try {
       const snapshot = await this.repository.read(context, { kind, filter, limit, offset: cursor?.offset ?? 0, ...(cursor?.after ? { afterComment: cursor.after } : {}) }, action);

@@ -4,33 +4,15 @@ import type { LedgerCommand } from '../ledger/model';
 import type { Action } from '../auth/permissions';
 import { assertAuthority } from '../auth/authority';
 import type { Env } from '../env';
-import { resolveExpense } from '../ledger/allocation';
-import { D1LedgerRepository } from '../ledger/d1-repository';
-import { D1LedgerQueryRepository } from '../ledger/d1-query-repository';
-import { LedgerQueries } from '../ledger/queries';
 import { parseQuery } from '../ledger/query-validation';
-import { LedgerService } from '../ledger/service';
-import { expenseInput, financialInput, ledgerCommandInput, ledgerId } from '../ledger/validation';
+import { financialInput, ledgerCommandInput } from '../ledger/validation';
 import type { CommandContext } from '../platform/context';
 import { ValidationError } from '../platform/errors';
-import { boundedLedgerJSON } from '../mcp/results';
+import { boundedLedgerJSON } from './body';
 import { commandContext, requiredOperationCommandContext } from './request-context';
 import { success } from './envelope';
+import { ledgerQueries, ledgerService, previewLedger } from '../ledger/application';
 
-export const rulePreviewInput = z.object({ kind: z.literal('rule-posting'), ruleId: ledgerId, expectedRuleVersion: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER), period: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER) }).strict();
-export const ledgerPreviewInput = z.union([expenseInput, rulePreviewInput]);
-/** Both transports use current read admission around calculation/current recurring lookup. */
-export async function previewLedger(env: Env, command: CommandContext, raw: unknown) {
-  await assertAuthority(env.DB, command, 'ledger_get');
-  try {
-    const input = parseQuery(ledgerPreviewInput, raw);
-    return input.kind === 'rule-posting'
-      ? { source: await new D1LedgerRepository(env.DB).postingBasis(command.householdId, input.ruleId, input.expectedRuleVersion, input.period) }
-      : { allocation: resolveExpense(input) };
-  } finally { await assertAuthority(env.DB, command, 'ledger_get'); }
-}
-export function ledgerQueries(env: Env) { return new LedgerQueries(new D1LedgerQueryRepository(env.DB), env.HOMEOS_PASSWORD_PEPPER ?? ''); }
-export function ledgerService(env: Env) { return new LedgerService(new D1LedgerRepository(env.DB)); }
 export async function executeLedger(env: Env, command: CommandContext, input: LedgerCommand) {
   const actions: Record<LedgerCommand['action'], Action> = { create: 'ledger_create', correct: 'ledger_correct', void: 'ledger_void', restore: 'ledger_restore', comment: 'ledger_comment', post: 'ledger_post' };
   const action = actions[input.action];

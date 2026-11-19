@@ -46,7 +46,7 @@ export class ExpenseService {
     const rule = await this.repository.getRule(householdId, ruleId);
     if (rule.version !== expectedVersion) throw new ConflictError('expense_rule', ruleId, expectedVersion, rule.version, rule);
     if (rule.archivedAt !== null) throw new ValidationError('ruleId', 'Archived rules cannot be posted');
-    const members = await this.memberIndex(householdId);
+    const members = await this.memberIndex(householdId, rule.participants.map(p => p.memberId));
     if (rule.participants.some(p => members.get(p.memberId) !== true)) throw new ValidationError('participants', 'Review departed rule participants before posting');
     const resolved = resolveShares(splitRequest(rule));
     if (!resolved.ok) throw new ValidationError('participants', 'The current rule shares cannot be resolved');
@@ -231,8 +231,8 @@ export class ExpenseService {
     };
   }
 
-  private async memberIndex(householdId: string): Promise<MemberIndex> {
-    const members = await this.repository.listMembers(householdId);
+  private async memberIndex(householdId: string, selectedIds?: readonly string[]): Promise<MemberIndex> {
+    const members = await this.repository.listMembers(householdId, selectedIds);
     return new Map(members.map((member) => [member.id, member.active]));
   }
 }

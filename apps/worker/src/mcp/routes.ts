@@ -1,5 +1,5 @@
 import { createMcpHandler } from "agents/mcp/server";
-import { boundedLedgerBody } from "./results";
+import { boundedLedgerBody } from "../http/body";
 import { HomeOSError } from "../platform/errors";
 import type { Env } from "../env";
 import type { VerifiedAuthority } from "../auth/authority";

@@ -1,5 +1,5 @@
 import type { z } from "zod";
-import { ValidationError } from "../platform/errors";
+import { HomeOSError, ValidationError } from "../platform/errors";
 import type { commandContext } from "./request-context";
 import { validate } from "./validation";
 
@@ -47,4 +47,28 @@ export async function parsedJSON<T extends z.ZodType>(
     throw new ValidationError("body", "must contain valid JSON");
   }
   return validate(schema, body);
+}
+
+/** Bound raw bytes before any JSON parser, including chunked and escaped input. */
+export async function boundedLedgerBody(request: Request): Promise<Uint8Array<ArrayBuffer>> {
+  const maximum = 64 * 1024;
+  const tooLarge = () => new HomeOSError('Ledger requests must be at most 64 KiB', 'payload_too_large', 413);
+  if (Number(request.headers.get('content-length')) > maximum) throw tooLarge();
+  const bytes = new Uint8Array(maximum);
+  const reader = request.body?.getReader();
+  let length = 0;
+  if (reader) try {
+    for (;;) {
+      const chunk = await reader.read();
+      if (chunk.done) break;
+      if (length + chunk.value.byteLength > maximum) { await reader.cancel(); throw tooLarge(); }
+      bytes.set(chunk.value, length); length += chunk.value.byteLength;
+    }
+  } finally { reader.releaseLock(); }
+  return bytes.slice(0, length);
+}
+export async function boundedLedgerJSON(request: Request, allowEmpty = false): Promise<unknown> {
+  const bytes = await boundedLedgerBody(request);
+  try { return allowEmpty && bytes.byteLength === 0 ? {} : JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)); }
+  catch { throw new ValidationError('body', 'must contain valid JSON'); }
 }
