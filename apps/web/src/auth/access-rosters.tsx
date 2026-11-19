@@ -13,36 +13,54 @@ type Page<T> = { rows: T[]; cursor: string | null };
 function AccessRoster({ kind, memberId, online, hasPendingChanges }: { kind: "sessions" | "connections"; memberId: string; online: boolean; hasPendingChanges: boolean }) {
   const [page, setPage] = useState<Page<BrowserSessionAccess | AssistantConnection>>({ rows: [], cursor: null });
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
+  const [loaded, setLoaded] = useState(false);
+  const [loadError, setLoadError] = useState("");
+  const [revokeError, setRevokeError] = useState("");
   const [notice, setNotice] = useState("");
   const [pending, setPending] = useState<string | null>(null);
   const busy = useRef(false);
   const active = useRef(true);
+  const deferredRefresh = useRef<(() => void) | null>(null);
+  const finishRequest = useCallback(() => {
+    busy.current = false;
+    const refresh = deferredRefresh.current;
+    deferredRefresh.current = null;
+    if (!active.current) return;
+    if (refresh) refresh();
+    else setLoading(false);
+  }, []);
   const load = useCallback(async (cursor?: string) => {
-    if (!online || busy.current) { setLoading(false); return; }
+    if (!online) { setLoading(false); return; }
+    if (busy.current) return;
     busy.current = true;
     const proof = captureAccessProof();
-    setLoading(true); setError("");
+    setLoading(true); setLoadError("");
     try {
       const input = { memberId, limit: 10, ...(cursor ? { cursor } : {}) };
       const data = kind === "sessions" ? await listBrowserSessions(input) : await listConnections(input);
-      if (!active.current || !isCurrentAccessProof(proof)) return;
+      if (!active.current || !isCurrentAccessProof(proof) || deferredRefresh.current) return;
       const rows = "sessions" in data ? data.sessions : data.connections;
       setPage(previous => ({ rows: cursor ? [...previous.rows, ...rows] : rows, cursor: data.nextCursor }));
+      setLoaded(true);
     } catch (failure) {
-      if (active.current && isCurrentAccessProof(proof)) setError(failure instanceof Error ? failure.message : "Access could not be loaded. Try again.");
-    } finally { busy.current = false; if (active.current) setLoading(false); }
-  }, [kind, memberId, online]);
+      if (active.current && isCurrentAccessProof(proof) && !deferredRefresh.current) setLoadError(failure instanceof Error ? failure.message : "Access could not be loaded. Try again.");
+    } finally { finishRequest(); }
+  }, [kind, memberId, online, finishRequest]);
   useEffect(() => {
     active.current = true;
     let mounted = true;
-    queueMicrotask(() => { if (mounted) void load(); });
+    queueMicrotask(() => {
+      if (!mounted) return;
+      const refresh = () => { if (mounted) void load(); };
+      if (busy.current) deferredRefresh.current = refresh;
+      else refresh();
+    });
     return () => { mounted = false; active.current = false; };
   }, [load]);
 
   async function revoke(row: BrowserSessionAccess | AssistantConnection) {
     if (busy.current || !online || ("current" in row && row.current && hasPendingChanges)) return;
-    busy.current = true; setPending(row.id); setError(""); setNotice("");
+    busy.current = true; setPending(row.id); setRevokeError(""); setNotice("");
     const proof = captureAccessProof();
     try {
       if ("current" in row && row.current && await homeOSDatabase.outbox.count() > 0) throw new Error("Sync your saved changes before ending this browser’s access. Your changes are kept on this device.");
@@ -53,8 +71,8 @@ function AccessRoster({ kind, memberId, online, hasPendingChanges }: { kind: "se
       setPage(previous => ({ ...previous, rows: kind === "sessions" ? previous.rows.filter(item => item.id !== row.id) : previous.rows.map(item => item.id === row.id ? { ...item, status: "ended" as const } : item) }));
       setNotice("Access ended.");
     } catch (failure) {
-      if (active.current && isCurrentAccessProof(proof)) setError(failure instanceof Error ? failure.message : "Access could not be ended. Try again.");
-    } finally { busy.current = false; if (active.current) setPending(null); }
+      if (active.current && isCurrentAccessProof(proof)) setRevokeError(failure instanceof Error ? failure.message : "Access could not be ended. Try again.");
+    } finally { if (active.current) setPending(null); finishRequest(); }
   }
   const title = kind === "sessions" ? "Browser sessions" : "Assistant connections";
   return <section className="account-section" aria-label={title}>
@@ -62,9 +80,10 @@ function AccessRoster({ kind, memberId, online, hasPendingChanges }: { kind: "se
     <p className="account-description">{kind === "sessions" ? "Each sign-in is separate. Ending one also ends its push notification access." : "Each assistant acts within its approved role and your current access. Reconnect from your assistant to approve a broader role."}</p>
     {!online && <p className="account-offline">Connect to check or end access. Previously loaded records may have changed.</p>}
     {loading && <p role="status">Loading {title.toLowerCase()}…</p>}
-    {error && <div className="access-feedback"><p role="alert" className="form-error">{error}</p><button className="button button--quiet" disabled={!online || loading || !!pending} onClick={() => void load()}>Retry {title.toLowerCase()}</button></div>}
+    {loadError && <div className="access-feedback"><p role="alert" className="form-error">{loadError}</p><button className="button button--quiet" disabled={!online || loading || !!pending} onClick={() => void load()}>Retry {title.toLowerCase()}</button></div>}
+    {revokeError && <p role="alert" className="form-error">{revokeError}</p>}
     {notice && <p role="status" className="account-success">{notice}</p>}
-    {!loading && !error && online && !page.rows.length && <p className="account-description access-empty">No {title.toLowerCase()} to show.</p>}
+    {loaded && !loading && !loadError && online && !page.rows.length && <p className="account-description access-empty">No {title.toLowerCase()} to show.</p>}
     <ul className="access-list">{page.rows.map(row => <li className="access-row" key={row.id}>
       <div className="access-row__detail">
         <strong>{"clientName" in row ? row.clientName : row.current ? "This browser" : "Other browser"}</strong>

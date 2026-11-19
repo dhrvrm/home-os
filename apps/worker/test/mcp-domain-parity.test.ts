@@ -261,6 +261,67 @@ it('retains Unicode names, aliases and locations across HTTP and SQL-paged searc
   }
 });
 
+it('matches cross-field phrases in declared order through bounded empty inventory pages', async () => {
+  const oauth = await personalOAuth('member', 'phrase-writer'), token = oauth.tokens.access_token;
+  await invoke(token, 'inventory_create', { operationId: 'phrase-unrelated', id: 'phrase-00', name: 'Tea', categories: ['Drinks'], location: 'Shelf' });
+  const plain = (await invoke(token, 'inventory_create', { operationId: 'phrase-plain', id: 'phrase-10', name: 'Milk', categories: ['Dairy'], location: 'Fridge' })).structuredContent.item;
+  const ordered = (await invoke(token, 'inventory_create', { operationId: 'phrase-ordered', id: 'phrase-20', name: 'Milk', alternativeNames: ['White'], categories: ['Z pantry', 'Dairy'], location: 'Fridge' })).structuredContent.item;
+  expect(plain.alternativeNames).toEqual([]);
+  expect(ordered.categories).toEqual(['Z pantry', 'Dairy']);
+  for (const [query, expectedId] of [['Milk Dairy', plain.id], ['Milk White Z pantry Dairy Fridge', ordered.id]]) {
+    const http = await data<{ items: { id: string }[] }>(await realFetch(browserRequest(oauth.browser, `/api/v1/items?q=${encodeURIComponent(query)}`)));
+    expect(http.items.map((item: { id: string }) => item.id)).toEqual([expectedId]);
+    const seen: string[] = [];
+    let cursor: string | undefined, first = true;
+    do {
+      const measured = measuredFetch();
+      const response = await invoke(token, 'inventory_list', { query, limit: 1, ...(cursor ? { cursor } : {}) }, measured.fetch);
+      expect(response.isError).not.toBe(true);
+      const page = response.structuredContent;
+      expect(page.items.length).toBeLessThanOrEqual(1);
+      expect(page.count).toBe(page.items.length);
+      if (first) {
+        expect(page.items).toEqual([]);
+        expect(page.nextCursor).toEqual(expect.any(String));
+        first = false;
+      }
+      seen.push(...page.items.map((item: { id: string }) => item.id));
+      cursor = page.nextCursor ?? undefined;
+      expect(measured.requests.d1 + measured.requests.kv).toBeLessThanOrEqual(50);
+    } while (cursor);
+    expect(seen).toEqual([expectedId]);
+  }
+  expect(await invoke(token, 'inventory_list', { query: 'Milk Dairy', category: 'Dairy', stockLevel: 'okay' })).toMatchObject({ structuredContent: { items: [{ id: plain.id }] } });
+});
+
+it.each([{ limit: undefined, expected: 50 }, { limit: 100, expected: 100 }])('retains activity page size $expected and legacy after continuation over OAuth', async ({ limit, expected }) => {
+  const oauth = await personalOAuth('viewer', 'activity-reader'), now = new Date().toISOString();
+  await env.DB.batch(Array.from({ length: 107 }, (_, index) => env.DB.prepare(`INSERT INTO audit_events
+    (id,household_id,entity_type,entity_id,action,actor_id,actor_type,source,operation_id,server_time,changes_json)
+    VALUES (?, 'home', 'legacy_activity_fixture', 'legacy-feed', 'fixture.created', 'local-owner', 'member', 'pwa', ?, ?, '[]')`)
+    .bind(`legacy-feed-${index}`, `legacy-feed-op-${index}`, now)));
+  const seen: string[] = [];
+  let after: string | undefined, first = true;
+  do {
+    const measured = measuredFetch();
+    const response = await invoke(oauth.tokens.access_token, 'activity_list', {
+      entityType: 'legacy_activity_fixture', ...(limit === undefined ? {} : { limit }), ...(after ? { after } : {}),
+    }, measured.fetch);
+    expect(response.isError).not.toBe(true);
+    const page = response.structuredContent;
+    if (first) {
+      expect(page.events).toHaveLength(expected);
+      expect(page.nextCursor).toEqual(expect.any(String));
+      first = false;
+    }
+    seen.push(...page.events.map((event: { id: string }) => event.id));
+    after = page.nextCursor ?? undefined;
+    expect(measured.requests.d1 + measured.requests.kv).toBeLessThanOrEqual(50);
+  } while (after);
+  expect(seen).toEqual(Array.from({ length: 107 }, (_, index) => `legacy-feed-${index}`));
+  expect(new Set(seen).size).toBe(107);
+});
+
 it('returns canonical split/minor-unit validation and never leaks binding diagnostics', async () => {
   const oauth = await personalOAuth('member','validation-writer'), token = oauth.tokens.access_token;
   const base = { name:'Split rule',amountMinor:101,currency:'INR',cadence:{unit:'month',interval:1,anchorDate:'2026-01-01'},participants:[{memberId:'validation-writer'}] };

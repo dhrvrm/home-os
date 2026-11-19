@@ -8,7 +8,7 @@ import { getAuthStatus, logout, type AuthSession, type AuthStatus } from "@/lib/
 import { clearInventoryCache, loadInventoryCache } from "@/lib/inventory-cache";
 import { homeOSDatabase } from "@/offline/db";
 import { sessionIsCurrent, clearDataOwner, clearSavedSession, readDataOwner, readSavedSession, saveSession, setDataOwner } from "./session";
-import { ACCESS_BOUNDARY_KEY, boundaryMember, boundaryState, captureAccessProof, drainHouseholdWork, isCurrentAccessProof, lockHouseholdWork, publishAccessBoundary, readAccessBoundary, resumeHouseholdWork, setActiveMemberId, type AccessProof } from "./work";
+import { ACCESS_BOUNDARY_KEY, activeMemberId, boundaryMember, boundaryState, captureAccessProof, drainHouseholdWork, isCurrentAccessProof, lockHouseholdWork, publishAccessBoundary, readAccessBoundary, resumeHouseholdWork, setActiveMemberId, type AccessProof } from "./work";
 import "@/components/auth.css";
 
 type GateState =
@@ -109,7 +109,7 @@ export function AuthGate() {
     const ticket = ++sequence.current;
     const current = sessionRef.current;
     const sharedMember = boundaryMember();
-    const background = !!current && sessionIsCurrent(current) && boundaryState() === "ready"
+    const background = !!current && activeMemberId() === current.user.id && sessionIsCurrent(current) && boundaryState() === "ready"
       && (!sharedMember || (sharedMember.id === current.user.id && sharedMember.householdId === current.user.householdId));
     if (!background) {
       lockHouseholdWork();

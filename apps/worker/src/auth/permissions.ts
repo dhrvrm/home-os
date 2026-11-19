@@ -141,6 +141,8 @@ export function capabilities(
 }
 
 export function httpAction(method: string, path: string): Action | undefined {
+  // Hono dispatches HEAD through its GET handler while preserving the raw method.
+  if (method === "HEAD") method = "GET";
   const route = path.replace(/^\/api\/v1/, "");
   if (route === "/sync")
     return method === "POST" ? "inventory_update" : undefined;

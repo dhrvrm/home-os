@@ -61,3 +61,54 @@ it("rechecks queued work at the current-session revoke gesture", async () => {
   expect(await screen.findByRole("alert")).toHaveTextContent("Sync your saved changes");
   expect(revokeBrowserSession).not.toHaveBeenCalled();
 });
+
+it("refreshes an unsettled list after reconnect instead of retaining its stale response", async () => {
+  let finish!: (value: Awaited<ReturnType<typeof listConnections>>) => void;
+  vi.mocked(listConnections).mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }))
+    .mockResolvedValue({ connections: [{ ...connection, status: "ended" }], nextCursor: null });
+  const view = show();
+  await waitFor(() => expect(listConnections).toHaveBeenCalledOnce());
+  view.rerender(<AccessRosters session={session} online={false} hasPendingChanges={false} />);
+  view.rerender(<AccessRosters session={session} online hasPendingChanges={false} />);
+  await act(async () => finish({ connections: [connection], nextCursor: null }));
+  await waitFor(() => expect(listConnections).toHaveBeenCalledTimes(2));
+  expect(await screen.findByText("Ended")).toBeInTheDocument();
+  expect(screen.queryByText("Authorized")).not.toBeInTheDocument();
+});
+
+it("does not report an empty roster before its first successful response", async () => {
+  let finish!: (value: Awaited<ReturnType<typeof listConnections>>) => void;
+  vi.mocked(listConnections).mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+  const view = show();
+  await waitFor(() => expect(listConnections).toHaveBeenCalledOnce());
+  view.rerender(<AccessRosters session={session} online={false} hasPendingChanges={false} />);
+  view.rerender(<AccessRosters session={session} online hasPendingChanges={false} />);
+  await act(async () => { await Promise.resolve(); });
+  try {
+    expect(screen.queryByText("No assistant connections to show.")).not.toBeInTheDocument();
+  } finally {
+    await act(async () => finish({ connections: [connection], nextCursor: null }));
+  }
+});
+
+it.each(["accepted", "refused"] as const)("refreshes after reconnect during a %s revocation and preserves its outcome", async outcome => {
+  let finish!: (value: { id: string; revoked: true }) => void;
+  let fail!: (error: Error) => void;
+  vi.mocked(revokeConnection).mockImplementationOnce(() => new Promise((resolve, reject) => { finish = resolve; fail = reject; }));
+  vi.mocked(listConnections).mockResolvedValueOnce({ connections: [connection], nextCursor: null })
+    .mockResolvedValue({ connections: [{ ...connection, id: "f".repeat(32), clientName: "Current assistant" }], nextCursor: null });
+  const view = show();
+  fireEvent.click(await screen.findByRole("button", { name: "End access for My assistant" }));
+  expect(revokeConnection).toHaveBeenCalledOnce();
+  view.rerender(<AccessRosters session={session} online={false} hasPendingChanges={false} />);
+  view.rerender(<AccessRosters session={session} online hasPendingChanges={false} />);
+  await act(async () => {
+    if (outcome === "accepted") finish({ id: connection.id, revoked: true });
+    else fail(new Error("Access could not be ended. Try again."));
+  });
+  await waitFor(() => expect(listConnections).toHaveBeenCalledTimes(2));
+  expect(await screen.findByText("Current assistant")).toBeInTheDocument();
+  if (outcome === "accepted") expect(screen.getByText("Access ended.")).toBeInTheDocument();
+  else expect(screen.getByRole("alert")).toHaveTextContent("Access could not be ended");
+  expect(revokeConnection).toHaveBeenCalledOnce();
+});

@@ -377,6 +377,40 @@ describe("member access gate", () => {
     expect(readAccessBoundary()).toBe(boundary);
   });
 
+  it("resumes household work after a same-member grant supersedes an older sign-out", async () => {
+    const replacement = { ...alice, sessionId: "c".repeat(32) };
+    vi.mocked(getAuthStatus).mockResolvedValue({ setupRequired: false, setupAvailable: true, session: alice });
+    let finish!: () => void;
+    vi.mocked(logout).mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    render(<AuthGate />);
+    expect(await screen.findByText("Open Alice")).toBeInTheDocument();
+    await queueAliceWork();
+    const original = (await homeOSDatabase.outbox.toArray())[0];
+    const originalItem = (await homeOSDatabase.items.toArray())[0];
+    saveInventoryCache([originalItem]);
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    fireEvent.click(screen.getByText("Sign out test"));
+    await waitFor(() => expect(logout).toHaveBeenCalledOnce());
+    vi.mocked(getAuthStatus).mockResolvedValue({ setupRequired: false, setupAvailable: true, session: replacement });
+    saveSession(replacement);
+    publishAccessBoundary("ready", alice.user);
+    const boundary = readAccessBoundary();
+    fireEvent(window, new StorageEvent("storage", { key: ACCESS_BOUNDARY_KEY, newValue: boundary }));
+    try {
+      await waitFor(() => expect(getAuthStatus).toHaveBeenCalledTimes(2));
+      await waitFor(() => expect(readSavedSession()?.sessionId).toBe(replacement.sessionId));
+      expect(await screen.findByText("Open Alice")).toBeInTheDocument();
+      await expect(runHouseholdWork(async lease => { lease.check(); return "new grant work"; })).resolves.toBe("new grant work");
+    } finally {
+      await act(async () => finish());
+    }
+    expect(readSavedSession()?.sessionId).toBe(replacement.sessionId);
+    expect(readAccessBoundary()).toBe(boundary);
+    expect((await homeOSDatabase.outbox.toArray())[0]?.operationId).toBe(original.operationId);
+    expect((await homeOSDatabase.items.get(originalItem.id))?.name).toBe("Alice soap");
+    expect(loadInventoryCache()?.items[0]?.id).toBe(originalItem.id);
+  });
+
   it("preserves a captured null boundary when another tab publishes between comparison and admission", async () => {
     const item = await createLocalItem(homeOSDatabase, { name: "Bob established inventory" });
     await homeOSDatabase.outbox.clear();

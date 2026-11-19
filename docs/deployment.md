@@ -102,7 +102,75 @@ After deployment, check `/api/v1/auth/status` has `setupAvailable: true`, comple
 
 ## Personal MCP and continuing-access release
 
-Back up D1 before applying `0008_continuing_access.sql`, `0009_mcp_connections.sql`, and `0010_usable_owner.sql`. They add session policy/public IDs, OAuth connection and consent state, and protection for the last owner who can sign in. They do not rebuild the session table referenced by notification devices. Preserve the existing password pepper, setup key, and VAPID pair. Configure the persistent `OAUTH_KV` namespace before deploying the new Worker.
+Back up D1 before applying `0008_continuing_access.sql` through `0011_deactivation_grants.sql`. They add session policy/public IDs, OAuth connection and consent state, protection for the last owner who can sign in, and durable connection revocation when a member leaves. They preserve the referenced session table. Migration 0008 intentionally deletes invalid grants and cascades their notification subscriptions/deliveries. Preserve the existing password pepper, setup key, and VAPID pair. Configure the persistent `OAUTH_KV` namespace before deploying the new Worker.
+
+Before migration, export D1 to a private file outside the checkout and save aggregate baselines using `wrangler d1 execute home-os --remote --config apps/worker/wrangler.jsonc --file <audit.sql>`. The export includes authentication verifiers and push state; it does not include OAuth KV. Run these read-only queries against the previous schema:
+
+```sql
+WITH clock AS (SELECT strftime('%Y-%m-%dT%H:%M:%fZ','now') AS checked_at),
+grants AS (
+  SELECT s.token_hash, s.member_id,
+    CASE WHEN m.id IS NULL OR m.archived_at IS NOT NULL
+      OR a.member_id IS NULL OR a.credential_version <> s.credential_version
+      THEN 'delete-invalid'
+      WHEN s.expires_at > clock.checked_at THEN 'promote-if-still-live'
+      ELSE 'retain-expired' END AS outcome
+  FROM auth_sessions s CROSS JOIN clock
+  LEFT JOIN members m ON m.id = s.member_id
+  LEFT JOIN auth_accounts a ON a.member_id = s.member_id
+)
+SELECT g.outcome, COUNT(DISTINCT g.token_hash) AS sessions,
+  COUNT(DISTINCT n.id) AS subscriptions, COUNT(d.id) AS deliveries
+FROM grants g
+LEFT JOIN notification_subscriptions n ON n.session_hash = g.token_hash AND n.member_id = g.member_id
+LEFT JOIN notification_deliveries d ON d.subscription_id = n.id
+GROUP BY g.outcome;
+
+SELECT h.id AS household, CASE WHEN b.household_id IS NULL THEN 0 ELSE 1 END AS bootstrapped,
+  COUNT(a.member_id) AS usable_owners
+FROM households h
+LEFT JOIN auth_bootstrap b ON b.household_id = h.id
+LEFT JOIN members m ON m.household_id = h.id AND m.role = 'owner' AND m.archived_at IS NULL
+LEFT JOIN auth_accounts a ON a.member_id = m.id
+WHERE h.id = 'home' GROUP BY h.id, b.household_id;
+```
+
+An empty grant result means zero sessions. The household query must return one row. A bootstrapped household needs at least one usable owner. Zero owners is expected only while first-owner setup is pending; never create that owner as a deployment fixture. If an established household has no usable owner, stop and verify an existing person's identity before operator-assisted recovery of their existing member/account. Preserve member IDs and revoked-grant history. Review the `delete-invalid` baseline as the expected irreversible cascade.
+
+After applying migrations, verify all four migration entries, compare retained session/device counts with the baseline, and run:
+
+```sql
+SELECT name FROM d1_migrations WHERE name IN (
+  '0008_continuing_access.sql','0009_mcp_connections.sql',
+  '0010_usable_owner.sql','0011_deactivation_grants.sql'
+) ORDER BY name;
+SELECT COUNT(*) AS invalid_sessions FROM auth_sessions s
+WHERE NOT EXISTS (
+  SELECT 1 FROM members m JOIN auth_accounts a ON a.member_id = m.id
+  WHERE m.id = s.member_id AND m.archived_at IS NULL
+    AND a.credential_version = s.credential_version
+);
+SELECT COUNT(*) AS invalid_public_ids FROM auth_sessions
+WHERE public_id IS NULL OR length(public_id) <> 32 OR public_id GLOB '*[^0-9a-f]*';
+SELECT COUNT(*) AS nonpermanent_live_sessions FROM auth_sessions
+WHERE permanent = 0 AND expires_at > strftime('%Y-%m-%dT%H:%M:%fZ','now');
+SELECT permanent, COUNT(DISTINCT s.token_hash) AS sessions,
+  COUNT(DISTINCT n.id) AS subscriptions, COUNT(d.id) AS deliveries
+FROM auth_sessions s
+LEFT JOIN notification_subscriptions n ON n.session_hash = s.token_hash AND n.member_id = s.member_id
+LEFT JOIN notification_deliveries d ON d.subscription_id = n.id
+GROUP BY permanent;
+SELECT COUNT(*) AS orphan_subscriptions FROM notification_subscriptions n
+WHERE NOT EXISTS (SELECT 1 FROM auth_sessions s WHERE s.token_hash = n.session_hash AND s.member_id = n.member_id);
+SELECT COUNT(*) AS orphan_deliveries FROM notification_deliveries d
+WHERE NOT EXISTS (SELECT 1 FROM notification_subscriptions n WHERE n.id = d.subscription_id);
+SELECT COUNT(*) AS departed_connections FROM mcp_connections c JOIN members m ON m.id = c.member_id
+WHERE m.archived_at IS NOT NULL AND c.status IN ('active','pending');
+```
+
+Expect four migration entries and zero invalid IDs/sessions, live finite grants, orphaned children, or departed connections. Repeat the usable-owner query. Reconcile count differences caused by concurrent login, revocation, reminder pruning, or a deadline crossing during migration; unexplained loss is a stop condition.
+
+Prefer a forward correction that retains the current access policy. A Worker-only rollback to the predecessor is partial: it ignores permanence, and login deletes sessions whose legacy timestamps have passed, cascading their device records. It also restores shared operator bearer acceptance if that secret remains configured. Do not present such a rollback as preserving continuing access. Forward-only migrations remain applied. A full database restore would lose later household writes and could resurrect subsequently revoked grants; it is not a routine rollback. Inspect recovery in a separate database, reconcile household writes and revocations, and require fresh sign-in/device enrollment where needed.
 
 The Worker must run before static assets for `/mcp`, OAuth discovery, `/api/oauth/*`, `/api/app`, and protected API paths. Keep `global_fetch_strictly_public` enabled for Client ID Metadata Document fetches. Canonical issuer/resource values come from trusted configuration, never an incoming Host header. Ordinary fallback app/health requests still work; alternate-origin OAuth requests are refused.
 
@@ -112,7 +180,7 @@ Every connection uses scope `home:access`; effective permission is the person's 
 
 Connection revocation is supported in Account and through the permitted MCP revoke command. Optional RFC7009 token revocation is omitted from discovery and rejected; do not configure clients or monitoring to depend on it. Anonymous registration and consent admission are bounded, and abandoned records are cleaned through bounded lifecycle maintenance without expanding the notification cron.
 
-Existing shared-token clients must reconnect at the canonical MCP URL. Password/account setup and native notification enrollment remain app interactions; tools return a trusted `requires_user_action` destination. An older installed PWA can open `https://home.dhruvverma.dev/api/app` for the current document without forced service-worker activation or queue deletion. Consent documents under `/api/oauth/consent` also bypass the old shell's navigation cache. Actual HTML and JSON access responses use no-store and anti-framing headers.
+Existing shared-token clients must reconnect at the canonical MCP URL. Password/account setup and native notification enrollment remain app interactions; tools return a trusted `requires_user_action` destination. Share the [current app document](https://home.dhruvverma.dev/api/app) with existing household members before cutover. The legacy installed shell cannot parse a permanent null deadline and cannot upload more than two operations at once. It may show a sign-in error or remain offline with its ordinary update control unavailable. Open that link in the same browser/profile, sign in as the same member if needed, let saved edits sync, then choose **Account → Update and reload**. Keep browser storage intact. This preserves queued and previously-sending operations without forced service-worker activation or queue deletion. Consent documents under `/api/oauth/consent` also bypass the old shell's navigation cache. Actual HTML and JSON access responses use no-store and anti-framing headers.
 
 Release evidence must include the deployed version/SHA, public health/readiness/PWA checks, metadata/challenge checks, and local real-provider/browser verification. Use an existing controlled production identity for an authorized live flow only when one exists. Never create the household's first owner or choose their password for testing. If setup is still pending, record that live authorized verification was unavailable and leave setup to the owner.
 

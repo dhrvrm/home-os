@@ -16,7 +16,7 @@ const temporary = await mkdtemp(path.join(os.tmpdir(), 'homeos-old-upgrade-'));
 const evidence = path.join(root, 'test-results/pwa-upgrade');
 const state = path.join(temporary, 'state'), oldRoot = path.join(temporary, 'old'), newRoot = root;
 const node = process.execPath, setupToken = 'upgrade-fixture-setup-code', password = 'upgrade fixture owner passphrase';
-let worker, context, logs = '', page;
+let worker, context, logs = '', page, releaseLegacyStatus;
 const errors = [];
 async function run(command, args, cwd = root) {
     const child = spawn(command, args, {
@@ -188,14 +188,21 @@ try {
     const oldVersion = await page.evaluate(async () => ({ keys: localStorage.getItem('home-os:session:v1') || sessionStorage.getItem('home-os:session:v1'), caches: await caches.keys() }));
     assert.equal(typeof JSON.parse(oldVersion.keys).expiresAt, 'string');
     await context.setOffline(true);
-    await page.getByRole('button', { name: 'Add item', exact: true }).filter({ visible: true }).first().click();
-    await page.getByLabel('Item name', { exact: true }).fill('Offline upgrade rice');
-    await page.getByRole('button', { name: 'Save item', exact: true }).click();
-    await expect(page.getByRole('dialog')).toHaveCount(0);
-    await expect.poll(async () => (await stored()).operations.length).toBe(1);
-    const before = await stored(), queued = before.operations[0];
-    assert.equal(before.items.find(i => i.id === queued.entityId)?.name, 'Offline upgrade rice');
-    console.log('[upgrade] old installed SW controlled; one stable offline operation queued');
+    const names = ['Offline upgrade rice', 'Offline upgrade salt', 'Offline upgrade oil'];
+    for (const name of names) {
+        await page.getByRole('button', { name: 'Add item', exact: true }).filter({ visible: true }).first().click();
+        await page.getByLabel('Item name', { exact: true }).fill(name);
+        await page.getByRole('button', { name: 'Save item', exact: true }).click();
+        await expect(page.getByRole('dialog')).toHaveCount(0);
+    }
+    await expect.poll(async () => (await stored()).operations.length).toBe(3);
+    const before = await stored();
+    const queued = before.operations.map(operation => ({
+        entityId: operation.entityId, operationId: operation.operationId,
+        name: before.items.find(item => item.id === operation.entityId)?.name,
+    }));
+    assert.deepEqual(queued.map(operation => operation.name).sort(), [...names].sort());
+    console.log('[upgrade] old installed SW controlled; three stable offline operations queued');
     await page.screenshot({ path: path.join(evidence, 'old-offline.png'), fullPage: true });
     await stopWorker();
     console.log('[upgrade] migrating same D1 to new archive');
@@ -203,20 +210,50 @@ try {
     const newConfig = await configure(newRoot, origin);
     console.log('[upgrade] starting new HTTPS Worker');
     await startWorker(newRoot, newConfig, port, keyPath, certPath);
-    console.log('[upgrade] new Worker ready; fresh document navigation');
+    console.log('[upgrade] old document reconnects before fresh-document recovery');
+    // Let the legacy sync finish before status validation unmounts the old UI.
+    // Both are real requests; this selects an ordinary slower-status ordering.
+    const legacyStatusGate = new Promise(resolve => { releaseLegacyStatus = resolve; });
+    await page.route(origin + '/api/v1/auth/status', async route => {
+        await legacyStatusGate;
+        await route.continue();
+    });
+    const legacyStatus = page.waitForResponse(response => response.url() === origin + '/api/v1/auth/status');
+    const legacySync = page.waitForResponse(response => response.url() === origin + '/api/v1/sync'
+        && response.request().method() === 'POST');
     await context.setOffline(false);
+    const refusedLegacySync = await legacySync;
+    assert.equal(refusedLegacySync.request().postDataJSON().operations.length, 3);
+    assert.equal(refusedLegacySync.status(), 400);
+    // The legacy bundle cannot upload this batch or parse the permanent session.
+    // Its stored intent survives; the current document resets sending rows too.
+    assert.deepEqual((await stored()).operations.map(operation => operation.operationId).sort(),
+        queued.map(operation => operation.operationId).sort());
+    releaseLegacyStatus();
+    assert.equal((await (await legacyStatus).json()).data.session.expiresAt, null);
+    await expect(page.getByRole('button', { name: 'Add item', exact: true }).filter({ visible: true })).toHaveCount(0);
+    await page.unroute(origin + '/api/v1/auth/status');
+    assert.equal(await oldWorker.evaluate('BUILD.version'), oldBuild);
+    await page.screenshot({ path: path.join(evidence, 'legacy-reconnect.png'), fullPage: true });
     await page.goto(origin + '/api/app?view=inventory');
     await expect(page.getByRole('button', { name: 'Add item', exact: true }).filter({ visible: true }).first()).toBeVisible();
     await expect.poll(async () => (await stored()).operations.length).toBe(0);
     const after = await stored();
-    assert.ok(after.items.some(i => i.id === queued.entityId && i.name === 'Offline upgrade rice'));
+    for (const operation of queued) {
+        assert.ok(after.items.some(item => item.id === operation.entityId && item.name === operation.name));
+    }
     const savedSnapshot = await page.evaluate(() => JSON.parse(localStorage.getItem('home-os:session:v1') || sessionStorage.getItem('home-os:session:v1')));
     assert.equal(savedSnapshot.expiresAt, null);
     assert.equal(savedSnapshot.user.id, 'local-owner');
-    const accepted = await page.evaluate(async ({ entityId, operationId }) => { const response = await fetch('/api/v1/items/' + encodeURIComponent(entityId) + '/activity'); const body = await response.json(); return { status: response.status, data: body.data, operationId }; }, { entityId: queued.entityId, operationId: queued.operationId });
-    assert.equal(accepted.status, 200);
-    const audit = Array.isArray(accepted.data) ? accepted.data : (accepted.data.events ?? accepted.data.items ?? []);
-    assert.equal(audit.filter(event => event.operationId === queued.operationId).length, 1);
+    for (const operation of queued) {
+        const accepted = await page.evaluate(async ({ entityId }) => {
+            const response = await fetch('/api/v1/items/' + encodeURIComponent(entityId) + '/activity');
+            return { status: response.status, data: (await response.json()).data };
+        }, operation);
+        assert.equal(accepted.status, 200);
+        const audit = Array.isArray(accepted.data) ? accepted.data : (accepted.data.events ?? accepted.data.items ?? []);
+        assert.equal(audit.filter(event => event.operationId === operation.operationId).length, 1);
+    }
     await page.screenshot({ path: path.join(evidence, 'fresh-preserved.png'), fullPage: true });
     console.log('[upgrade] old active worker waits for explicit update after pending work settles');
     assert.equal(await oldWorker.evaluate('BUILD.version'), oldBuild);
@@ -236,10 +273,10 @@ try {
     await expect(page.getByRole('heading', { name: 'Connect an assistant', exact: true })).toBeVisible();
     await expect.poll(async () => oldWorker.evaluate('BUILD.version').catch(() => null)).toBe(null);
     await page.goto(origin + '/?view=inventory');
-    await expect(page.getByText('Offline upgrade rice', { exact: true }).first()).toBeVisible();
+    for (const name of names) await expect(page.getByText(name, { exact: true }).first()).toBeVisible();
     await context.setOffline(true);
     await page.reload();
-    await expect(page.getByText('Offline upgrade rice', { exact: true }).first()).toBeVisible();
+    for (const name of names) await expect(page.getByText(name, { exact: true }).first()).toBeVisible();
     assert.equal((await stored()).operations.length, 0);
     await page.screenshot({ path: path.join(evidence, 'updated-offline.png'), fullPage: true });
     assert.deepEqual(errors, []);
@@ -247,11 +284,12 @@ try {
         oldRef, newRef,
         checks: [
             'faithful old build+actual old controlled SW',
-            'old finite session snapshot and one actual offline queued create',
+            'old finite session snapshot and three actual offline queued creates',
             'same local D1+HTTPS origin forward migration',
+            'ordinary old-document reconnect refuses oversized batch while preserving every operation ID',
             'fresh /api/app navigation bypasses old SW root cache',
             'permanent null session admitted without clearing same-member queue',
-            'same operationId/entityId accepted exactly once and item retained',
+            'all three operationId/entityId pairs accepted exactly once and items retained',
             'old active worker remains while new worker waits',
             'explicit Update and reload only after queue clears activates new build',
             'updated installed shell reopens offline with same owner and item',
@@ -269,6 +307,7 @@ catch (error) {
     process.exitCode = 1;
 }
 finally {
+    releaseLegacyStatus?.();
     await context?.close().catch(() => {});
     await stopWorker();
     await rm(temporary, { recursive: true, force: true });

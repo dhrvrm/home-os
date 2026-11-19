@@ -64,6 +64,8 @@ export class D1InventoryRepository implements InventoryRepository {
     const items = await this.selectItems(householdId, filter, { limit: limit + 1, after: cursor[0] ?? "" });
     const hasMore = items.length > limit;
     const selected = items.slice(0, limit);
+    // Refine the bounded page with the direct reader's exact field order and
+    // Unicode normalization; an empty filtered page can still have continuation.
     return { items: selected.filter(item => matches(item, filter)), nextCursor: hasMore ? writeCursor(selected.at(-1)!.id) : null };
   }
 
@@ -74,12 +76,6 @@ export class D1InventoryRepository implements InventoryRepository {
     if (filter.stockLevel) { clauses.push("i.stock_level = ?"); values.push(filter.stockLevel); }
     if (filter.category?.trim()) {
       clauses.push("(EXISTS (SELECT 1 FROM inventory_item_categories ic JOIN categories c ON c.id = ic.category_id WHERE ic.item_id = i.id AND c.normalized_name = ?) OR (? = 'other' AND NOT EXISTS (SELECT 1 FROM inventory_item_categories ic WHERE ic.item_id = i.id)))"); values.push(normalize(filter.category), normalize(filter.category));
-    }
-    if (filter.query?.trim()) {
-      // SQLite lower() handles ASCII only. Unicode locations remain bounded candidates
-      // and use the same JavaScript normalizer as the direct experience after SQL paging.
-      clauses.push(`(instr(i.normalized_name || ' ' || COALESCE((SELECT group_concat(n.normalized_name, ' ') FROM inventory_alternative_names n WHERE n.item_id = i.id ORDER BY n.position), '') || ' ' || COALESCE((SELECT group_concat(c.normalized_name, ' ') FROM inventory_item_categories ic JOIN categories c ON c.id = ic.category_id WHERE ic.item_id = i.id ORDER BY ic.position), 'other') || ' ' || lower(i.location), ?) > 0 OR i.location GLOB '*[^ -~]*')`);
-      values.push(normalize(filter.query));
     }
     if (page) { clauses.push("i.id > ?"); values.push(page.after, page.limit); }
     const result = await this.database.prepare(`SELECT i.* FROM inventory_items i WHERE ${clauses.join(" AND ")} ORDER BY ${page ? "i.id ASC LIMIT ?" : "i.updated_at DESC, i.id ASC"}`).bind(...values).all<ItemRow>();
