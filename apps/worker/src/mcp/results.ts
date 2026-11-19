@@ -87,33 +87,37 @@ export function failure(error: unknown) {
 }
 
 /** Services retain subject-specific checks and atomic acceptance; this covers transport admission. */
-export function registerTool<T extends z.ZodRawShape>(
+export function registerTool<T extends z.ZodType>(
   server: McpServer,
   context: ToolContext,
   action: Action,
   description: string,
-  schema: z.ZodObject<T>,
+  schema: T,
   readOnly: boolean,
-  execute: (input: z.output<z.ZodObject<T>>, command: CommandContext) => Promise<Record<string, unknown>>,
+  execute: (input: z.output<T>, command: CommandContext) => Promise<Record<string, unknown>>,
+  options: { name?: string; destructive?: boolean } = {},
 ) {
   if (!permitted(context, action)) return;
-  server.registerTool(action, {
-    title: action.replaceAll("_", " "),
+  const tool = options.name ?? action;
+  server.registerTool(tool, {
+    title: tool.replaceAll("_", " "),
     description,
-    inputSchema: schema.strict(),
+    inputSchema: schema instanceof z.ZodObject ? schema.strict() : schema,
     annotations: readOnly ? readOnlyAnnotations : {
       readOnlyHint: false,
-      destructiveHint: /_(update|stock|archive|cancel|revoke)$/.test(action),
+      destructiveHint: options.destructive ?? /_(update|stock|archive|cancel|revoke)$/.test(action),
       idempotentHint: true,
       openWorldHint: false,
     },
-  }, async input => {
+  }, async (input: unknown) => {
     const values = input as { operationId?: string; expectedVersion?: number };
-    const command = commandContext(context, action, values);
+    const command = commandContext(context, tool, values);
     try {
       await assertAuthority(context.env.DB, command, action);
-      const data = await execute(input, command);
-      if (readOnly) await assertAuthority(context.env.DB, command, action);
+      const data = await execute(schema.parse(input), command);
+      // Financial acknowledgements include current-authorized replay. Existing access
+      // commands may intentionally end their own authority and acknowledge that once.
+      if (readOnly || action.startsWith('ledger_')) await assertAuthority(context.env.DB, command, action);
       return result(data);
     } catch (error) {
       // A changed authority cannot inspect even a stale version or previous receipt outcome.
@@ -125,4 +129,28 @@ export function registerTool<T extends z.ZodRawShape>(
       return failure(error);
     }
   });
+}
+
+/** Bound raw bytes before any JSON parser, including chunked and escaped input. */
+export async function boundedLedgerBody(request: Request): Promise<Uint8Array<ArrayBuffer>> {
+  const maximum = 64 * 1024;
+  const tooLarge = () => new HomeOSError('Ledger requests must be at most 64 KiB', 'payload_too_large', 413);
+  if (Number(request.headers.get('content-length')) > maximum) throw tooLarge();
+  const bytes = new Uint8Array(maximum);
+  const reader = request.body?.getReader();
+  let length = 0;
+  if (reader) try {
+    for (;;) {
+      const chunk = await reader.read();
+      if (chunk.done) break;
+      if (length + chunk.value.byteLength > maximum) { await reader.cancel(); throw tooLarge(); }
+      bytes.set(chunk.value, length); length += chunk.value.byteLength;
+    }
+  } finally { reader.releaseLock(); }
+  return bytes.slice(0, length);
+}
+export async function boundedLedgerJSON(request: Request, allowEmpty = false): Promise<unknown> {
+  const bytes = await boundedLedgerBody(request);
+  try { return allowEmpty && bytes.byteLength === 0 ? {} : JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)); }
+  catch { throw new ValidationError('body', 'must contain valid JSON'); }
 }

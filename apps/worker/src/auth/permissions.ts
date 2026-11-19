@@ -156,6 +156,27 @@ export function httpAction(method: string, path: string): Action | undefined {
   // Hono dispatches HEAD through its GET handler while preserving the raw method.
   if (method === "HEAD") method = "GET";
   const route = path.replace(/^\/api\/v1/, "");
+  if (route.startsWith("/ledger/")) {
+    const part = route.slice('/ledger'.length);
+    if (method === 'POST' && part === '/preview') return 'ledger_get';
+    if (method === 'GET') {
+      if (part === '/entries' || part === '/summaries') return 'ledger_list';
+      if (part === '/balances' || part === '/repayments') return 'ledger_balances';
+      if (part === '/statements') return 'ledger_statements';
+      if (part === '/export') return 'ledger_export';
+      if (/^\/entries\/[^/]+\/history$/.test(part)) return 'ledger_history';
+      if (/^\/(?:entries\/[^/]+(?:\/comments)?|operations\/[^/]+)$/.test(part)) return 'ledger_get';
+    }
+    if (method === 'PUT' && /^\/entries\/[^/]+$/.test(part)) return 'ledger_correct';
+    if (method === 'POST') {
+      if (['/expenses', '/refunds', '/payments'].includes(part)) return 'ledger_create';
+      if (part === '/rule-postings') return 'ledger_post';
+      if (/^\/entries\/[^/]+\/comments$/.test(part)) return 'ledger_comment';
+      if (/^\/entries\/[^/]+\/void$/.test(part)) return 'ledger_void';
+      if (/^\/entries\/[^/]+\/restore$/.test(part)) return 'ledger_restore';
+    }
+    return undefined;
+  }
   if (route === "/sync")
     return method === "POST" ? "inventory_update" : undefined;
   if (route === "/auth/password") return "account_password_change";

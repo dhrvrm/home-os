@@ -88,3 +88,14 @@ it("retries a failed preview without approving anything", async () => {
   expect(await screen.findByRole("button", { name: "Allow" })).toBeEnabled();
   expect(decideConsent).not.toHaveBeenCalled();
 });
+
+it.each([false, true])('explains shared financial %s rights without blocking known permission approval', async writer => {
+  vi.mocked(getConsent).mockResolvedValue({ ...preview, capabilities: ['ledger_list', 'ledger_get', 'ledger_history', 'ledger_balances', 'ledger_statements', 'ledger_export', ...(writer ? ['ledger_create','ledger_correct','ledger_void','ledger_restore','ledger_comment','ledger_post'] : [])] });
+  show();
+  const summary = await screen.findByRole('list', { name: 'Permission summary' });
+  expect(within(summary).getByText(`${writer ? 'Read and maintain' : 'Read'} shared finances, including balances, statements and exports`)).toBeVisible();
+  expect(screen.getByRole('button', { name: 'Allow' })).toBeEnabled();
+  const permissions = screen.getByRole('list', { name: 'Full permissions' });
+  expect(permissions).toHaveTextContent('Export financial statements');
+  if (writer) expect(permissions).toHaveTextContent('Void financial entries with reversing history');
+});
