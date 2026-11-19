@@ -109,3 +109,10 @@ it("retains editable input and focuses an ordinary initial validation refusal", 
   expect(await screen.findByRole("alert")).toHaveTextContent("Review this description"); expect(screen.getByRole("alert")).toHaveFocus();
   expect(screen.getByLabelText("Description")).toHaveValue("Dinner"); expect(screen.getByLabelText("Bill amount")).toHaveValue("100"); expect(screen.getByRole("button", { name: "Save expense" })).toBeEnabled();
 });
+
+it("uses selected currency for a new draft while retaining observed currency on a copied expense", async () => {
+  const {unmount}=render(<EntryDialog user={user} members={members} initialCurrency="USD" onAccepted={vi.fn()} onClose={vi.fn()}/>);
+  expect(await screen.findByLabelText("Currency")).toHaveValue("USD");unmount();
+  const entry:LedgerEntry={id:"old",householdId:"home",version:1,lifecycle:"effective",intent:{kind:"expense",date:"2026-01-01",description:"Rupee bill",currency:"INR",totalMinor:10000,payers:[{memberId:"alice",amountMinor:10000}],allocation:{kind:"split",split:{mode:"equal",participants:[{memberId:"alice",kind:"equal"}]}}},payers:[{memberId:"alice",amountMinor:10000}],shares:[{memberId:"alice",amountMinor:10000}],createdAt:"2026-01-01T00:00:00Z",updatedAt:"2026-01-01T00:00:00Z"};
+  render(<EntryDialog user={user} members={members} entry={entry} duplicate initialCurrency="USD" onAccepted={vi.fn()} onClose={vi.fn()}/>);expect(await screen.findByLabelText("Currency")).toHaveValue("INR");
+});

@@ -68,7 +68,7 @@ function activeAndArchived(active: ExpenseRule[], archived: ExpenseRule[] = []) 
 
 async function renderReady() {
   render(<ExpensesView />);
-  await screen.findByRole("heading", { name: "Recurring expenses" });
+  await screen.findByRole("heading", { name: "Recurring rules" });
 }
 
 beforeEach(() => {
@@ -100,8 +100,8 @@ describe("ExpensesView", () => {
     activeAndArchived([]);
     await renderReady();
 
-    expect(screen.getByText("No recurring expenses yet")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Add your first expense" })).toBeTruthy();
+    expect(screen.getByText("No recurring rules yet")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Add your first recurring rule" })).toBeTruthy();
   });
 
   it("renders an error state with a retry that reloads", async () => {
@@ -118,10 +118,10 @@ describe("ExpensesView", () => {
   it("previews the split locally and creates the rule with minor-unit amounts", async () => {
     activeAndArchived([]);
     await renderReady();
-    await userEvent.click(screen.getByRole("button", { name: "Add your first expense" }));
+    await userEvent.click(screen.getByRole("button", { name: "Add your first recurring rule" }));
 
     const dialog = screen.getByRole("dialog");
-    await userEvent.type(within(dialog).getByLabelText("Expense name"), "Water");
+    await userEvent.type(within(dialog).getByLabelText("Rule name"), "Water");
     await userEvent.type(within(dialog).getByLabelText("Amount"), "1000");
     await userEvent.clear(within(dialog).getByLabelText("Starting from"));
     await userEvent.type(within(dialog).getByLabelText("Starting from"), "2026-10-01");
@@ -141,7 +141,7 @@ describe("ExpensesView", () => {
     const created: ExpenseRule = { ...electricity, id: "water", name: "Water", amountMinor: 100000 };
     createExpenseMock.mockResolvedValue(created);
     activeAndArchived([created]);
-    await userEvent.click(within(dialog).getByRole("button", { name: "Save expense" }));
+    await userEvent.click(within(dialog).getByRole("button", { name: "Save recurring rule" }));
 
     await waitFor(() => expect(createExpenseMock).toHaveBeenCalled());
     expect(createExpenseMock.mock.calls[0]![0]).toEqual({
@@ -161,17 +161,17 @@ describe("ExpensesView", () => {
   it("refuses to submit a split the server would reject", async () => {
     activeAndArchived([]);
     await renderReady();
-    await userEvent.click(screen.getByRole("button", { name: "Add your first expense" }));
+    await userEvent.click(screen.getByRole("button", { name: "Add your first recurring rule" }));
 
     const dialog = screen.getByRole("dialog");
-    await userEvent.type(within(dialog).getByLabelText("Expense name"), "Water");
+    await userEvent.type(within(dialog).getByLabelText("Rule name"), "Water");
     await userEvent.type(within(dialog).getByLabelText("Amount"), "1000");
     await userEvent.click(within(dialog).getByLabelText("Asha"));
     await userEvent.selectOptions(within(dialog).getByLabelText("Split for Asha"), "fixed");
     await userEvent.type(within(dialog).getByLabelText("Fixed amount for Asha"), "2000");
 
     expect(within(dialog).getByText("The fixed and percentage shares add up to more than the total.")).toBeTruthy();
-    expect(within(dialog).getByRole("button", { name: "Save expense" }).hasAttribute("disabled")).toBe(true);
+    expect(within(dialog).getByRole("button", { name: "Save recurring rule" }).hasAttribute("disabled")).toBe(true);
     expect(createExpenseMock).not.toHaveBeenCalled();
   });
 
@@ -181,34 +181,38 @@ describe("ExpensesView", () => {
     await userEvent.click(within(row).getByRole("button", { name: "Edit Electricity" }));
 
     const dialog = screen.getByRole("dialog");
-    expect((within(dialog).getByLabelText("Expense name") as HTMLInputElement).value).toBe("Electricity");
+    expect((within(dialog).getByLabelText("Rule name") as HTMLInputElement).value).toBe("Electricity");
     expect((within(dialog).getByLabelText("Amount") as HTMLInputElement).value).toBe("5000.00");
 
     updateExpenseMock.mockResolvedValue({ ...electricity, version: 4 });
-    await userEvent.click(within(dialog).getByRole("button", { name: "Save expense" }));
+    await userEvent.click(within(dialog).getByRole("button", { name: "Save recurring rule" }));
 
     await waitFor(() => expect(updateExpenseMock).toHaveBeenCalled());
     expect(updateExpenseMock.mock.calls[0]![0]).toBe("electricity");
     expect(updateExpenseMock.mock.calls[0]![2]).toMatchObject({ expectedVersion: 3 });
   });
 
-  it("keeps the dialog open on a conflict and rebases onto the refreshed version", async () => {
+  it("keeps the observed version frozen on conflict until explicit latest-rule review", async () => {
     await renderReady();
     await userEvent.click(within(screen.getByRole("article", { name: "Electricity" })).getByRole("button", { name: "Edit Electricity" }));
 
     const dialog = screen.getByRole("dialog");
-    await userEvent.clear(within(dialog).getByLabelText("Expense name"));
-    await userEvent.type(within(dialog).getByLabelText("Expense name"), "Power bill");
+    await userEvent.clear(within(dialog).getByLabelText("Rule name"));
+    await userEvent.type(within(dialog).getByLabelText("Rule name"), "Power bill");
 
     updateExpenseMock.mockRejectedValueOnce(new APIError("This expense changed elsewhere.", "conflict"));
     activeAndArchived([{ ...electricity, version: 7 }, internet]);
-    await userEvent.click(within(dialog).getByRole("button", { name: "Save expense" }));
+    await userEvent.click(within(dialog).getByRole("button", { name: "Save recurring rule" }));
 
     await within(dialog).findByText("This expense changed elsewhere.");
-    expect((within(dialog).getByLabelText("Expense name") as HTMLInputElement).value).toBe("Power bill");
+    expect((within(dialog).getByLabelText("Rule name") as HTMLInputElement).value).toBe("Power bill");
 
+    await userEvent.click(within(dialog).getByRole("button", { name: "Save recurring rule" }));
+    expect(updateExpenseMock).toHaveBeenCalledTimes(1);
+    await userEvent.click(screen.getByRole("button", { name: "Review latest rule" }));
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Review latest rule" })).toBeNull());
     updateExpenseMock.mockResolvedValue({ ...electricity, name: "Power bill", version: 8 });
-    await userEvent.click(within(dialog).getByRole("button", { name: "Save expense" }));
+    await userEvent.click(within(dialog).getByRole("button", { name: "Save recurring rule" }));
 
     await waitFor(() => expect(updateExpenseMock).toHaveBeenCalledTimes(2));
     expect(updateExpenseMock.mock.calls[1]![2]).toMatchObject({ expectedVersion: 7 });
@@ -235,4 +239,15 @@ describe("ExpensesView", () => {
     await waitFor(() => expect(restoreExpenseMock).toHaveBeenCalledWith("electricity", expect.anything()));
     confirmSpy.mockRestore();
   });
+});
+
+it("keeps the operation identity stable for an identical recurring rule retry after a network failure",async()=>{
+  await renderReady(); await userEvent.click(within(screen.getByRole("article",{name:"Electricity"})).getByRole("button",{name:"Edit Electricity"}));
+  updateExpenseMock.mockRejectedValueOnce(new APIError("Network unavailable.","network_error"));
+  await userEvent.click(screen.getByRole("button",{name:"Save recurring rule"}));
+  await within(screen.getByRole("dialog")).findByText("Network unavailable.");
+  updateExpenseMock.mockResolvedValue({...electricity,version:4});
+  await userEvent.click(screen.getByRole("button",{name:"Save recurring rule"}));await waitFor(()=>expect(updateExpenseMock).toHaveBeenCalledTimes(2));
+  expect(updateExpenseMock.mock.calls[1]![2]?.operationId).toBe(updateExpenseMock.mock.calls[0]![2]?.operationId);
+  expect(updateExpenseMock.mock.calls[1]![2]?.expectedVersion).toBe(3);
 });

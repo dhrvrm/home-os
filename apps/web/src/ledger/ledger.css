@@ -28,3 +28,23 @@
 .ledger-composer p, .ledger-composer small, .ledger-recovery { overflow-wrap: anywhere; }
 .ledger-composer .dialog__actions { flex-wrap: wrap; }
 @media (max-width: 680px) { .ledger-composer { padding: 20px 16px; } .ledger-columns { grid-template-columns: minmax(0, 1fr); } .ledger-group { padding: 12px; } .ledger-amount__input { align-items: stretch; flex-wrap: wrap; } .ledger-amount__input input { flex-basis: 100%; } .ledger-money-row output { margin-left: auto; } }
+.ledger-panel, .ledger-detail { display: grid; gap: 24px; min-width: 0; }
+.ledger-panel h2, .ledger-panel h3, .ledger-panel p { margin: 0; }
+.ledger-toolbar { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 16px; align-items: center; }
+.ledger-tools { display: flex; flex-wrap: wrap; gap: 14px; align-items: end; }
+.ledger-total { font-size: clamp(1.4rem, 3vw, 2rem); font-variant-numeric: tabular-nums; font-family: var(--font-mono); overflow-wrap: anywhere; }
+.ledger-tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+.ledger-tabs button { padding: 14px 18px; color: var(--text-muted); background: transparent; border: 0; border-bottom: 2px solid transparent; font: inherit; cursor: pointer; }
+.ledger-tabs .is-active { color: var(--accent); border-bottom-color: var(--accent); }
+.ledger-filters { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; align-items: end; }
+.ledger-record { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 12px; padding: 18px 0; border-bottom: 1px solid var(--line); min-width: 0; align-items: baseline; }
+.ledger-record button { display: grid; gap: 8px; text-align: left; background: transparent; color: inherit; border: 0; cursor: pointer; padding: 0; font: inherit; min-width: 0; overflow-wrap: anywhere; }
+.ledger-record output { font-family: var(--font-mono); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.ledger-record small, .ledger-history small { color: var(--text-muted); }
+.ledger-balance, .ledger-comment, .ledger-history { border-bottom: 1px solid var(--line); padding: 20px 0; display: grid; gap: 12px; }
+.ledger-breakdown { display: grid; gap: 10px; margin: 0; }
+.ledger-breakdown > div { display: flex; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+.ledger-breakdown dd { margin: 0; font-family: var(--font-mono); overflow-wrap: anywhere; }
+.ledger-prose { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
+.ledger-panel button:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
+@media (max-width: 680px) { .ledger-filters { grid-template-columns: minmax(0,1fr); } .ledger-record { grid-template-columns: minmax(0,1fr); } .ledger-record output { justify-self: end; } .ledger-tools { width: 100%; } .ledger-tabs button { padding: 12px 10px; } }

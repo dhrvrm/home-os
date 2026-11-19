@@ -53,8 +53,8 @@ export function AttemptRecovery({ attempt, pending, connected, onCheck, onReplay
 }
 interface Draft { date: string; description: string; currency: Currency; category: string; notes: string; mode: "split" | "itemized"; amount: string; payers: { memberId: string; value: string }[]; split: SplitDraft; participantOrder: string[]; items: ItemDraft[]; discount: AdjustmentDraft; tax: AdjustmentDraft; tip: AdjustmentDraft }
 export function todayLedgerDate(): string { const date = new Date(); return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`; }
-function initialDraft(user: AuthUser, entry?: LedgerEntry, duplicate?: boolean): Draft {
-  const input = entry?.intent.kind === "expense" ? entry.intent : undefined; const currency = input?.currency ?? "INR";
+function initialDraft(user: AuthUser, entry?: LedgerEntry, duplicate?: boolean, initialCurrency: Currency = "INR"): Draft {
+  const input = entry?.intent.kind === "expense" ? entry.intent : undefined; const currency = input?.currency ?? initialCurrency;
   const items = input?.allocation.kind === "itemized" ? input.allocation : undefined;
   return { date: !input || duplicate ? todayLedgerDate() : input.date, description: input?.description ?? "", currency, category: input?.category ?? "", notes: input?.notes ?? "", mode: input?.allocation.kind ?? "split", amount: input ? decimalMoney(input.totalMinor, currency) : "", payers: input ? input.payers.map(p => ({ memberId: p.memberId, value: decimalMoney(p.amountMinor, currency) })) : [{ memberId: user.id, value: "" }], split: input?.allocation.kind === "split" ? splitDraft(input.allocation.split, currency) : emptySplit(), participantOrder: items?.participantOrder ?? [], items: items ? items.items.map(item => itemDraft(item, currency)) : [emptyItem()], discount: adjustmentDraft(items?.discount, currency), tax: adjustmentDraft(items?.tax, currency), tip: adjustmentDraft(items?.tip, currency) };
 }
@@ -64,11 +64,11 @@ function previewDraft(draft: Draft): ResolvedExpense {
   const itemized = previewItemizedBill({ participantOrder: draft.participantOrder, items: draft.items.map(item => itemValue(item, draft.currency)), discount: adjustmentValue(draft.discount, draft.currency), tax: adjustmentValue(draft.tax, draft.currency), tip: adjustmentValue(draft.tip, draft.currency) });
   return { totalMinor: itemized.totalMinor, shares: itemized.shares, payers, itemized };
 }
-export interface EntryDialogProps { user: AuthUser; members: Member[]; entry?: LedgerEntry; duplicate?: boolean; onAccepted: OnLedgerAccepted; onClose: () => void; onDirtyChange?: (guarded: boolean) => void }
-export function EntryDialog({ user, members, entry: suppliedEntry, duplicate = false, onAccepted, onClose, onDirtyChange }: EntryDialogProps) {
+export interface EntryDialogProps { user: AuthUser; members: Member[]; entry?: LedgerEntry; duplicate?: boolean; initialCurrency?: Currency; onAccepted: OnLedgerAccepted; onClose: () => void; onDirtyChange?: (guarded: boolean) => void }
+export function EntryDialog({ user, members, entry: suppliedEntry, duplicate = false, initialCurrency, onAccepted, onClose, onDirtyChange }: EntryDialogProps) {
   // Source refreshes cannot silently rebase a correction or reorder its rounding ties.
   const [entry] = useState(suppliedEntry);
-  const [draft, setDraft] = useState(() => initialDraft(user, entry, duplicate)); const [initial] = useState(() => JSON.stringify(draft));
+  const [draft, setDraft] = useState(() => initialDraft(user, entry, duplicate, initialCurrency)); const [initial] = useState(() => JSON.stringify(draft));
   const [discard, setDiscard] = useState(false); const [currencyReview, setCurrencyReview] = useState(false);
   const save = useFinancialAttempt(user, (reference, result) => { onDirtyChange?.(false); return onAccepted(reference, result); }); const connected = useOnline();
   const errorSummary = useRef<HTMLParagraphElement>(null);

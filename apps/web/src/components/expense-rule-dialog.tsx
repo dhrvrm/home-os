@@ -142,7 +142,7 @@ export function ExpenseRuleDialog({ rule, members, pending, error, onClose, onSu
         </header>
         <form className="item-form" onSubmit={submit}>
           <label className="field field--wide">
-            <span>Expense name</span>
+            <span>Rule name</span>
             <input value={name} onChange={(event) => setName(event.target.value)} autoFocus required maxLength={120} />
           </label>
           <AmountField label="Amount" value={amountText} currency={currency as Currency} onChange={setAmountText} />
@@ -208,7 +208,7 @@ export function ExpenseRuleDialog({ rule, members, pending, error, onClose, onSu
           {error && <p className="form-error" role="alert">{error}</p>}
           <footer className="dialog__actions field--wide">
             <button className="button button--quiet" type="button" onClick={onClose} disabled={pending}>Cancel</button>
-            <button className="button button--primary" type="submit" disabled={pending || !submittable}>{pending ? "Saving..." : "Save expense"}</button>
+            <button className="button button--primary" type="submit" disabled={pending || !submittable}>{pending ? "Saving..." : "Save recurring rule"}</button>
           </footer>
         </form>
       </section>
