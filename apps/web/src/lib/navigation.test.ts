@@ -28,3 +28,9 @@ it("allowlists personal action and consent intents and returns from fresh aliase
   expect(readHouseholdLocation("?connect=evil").connect).toBeUndefined();
   expect(householdDestination("https://home.example/api/oauth/consent?connect=" + "a".repeat(32), "inventory")).toBe("/?view=inventory");
 });
+
+it("preserves ledger statement scope and an entry return route through URLs", () => {
+  const url = householdDestination("https://home.example/?view=inventory", "expenses", { ledgerTab: "balances", currency: "JPY", statementMemberId: "departed", from: "2026-01-01", to: "2026-12-31", entryId: "bill", ledgerCursor: "cursor.1" });
+  expect(readHouseholdLocation(`?${url.split("?")[1]}`)).toMatchObject({ view: "expenses", ledgerTab: "balances", currency: "JPY", statementMemberId: "departed", from: "2026-01-01", to: "2026-12-31", entryId: "bill", ledgerCursor: "cursor.1" });
+  expect(householdDestination(`https://home.example${url}`, "inventory")).toBe("/?view=inventory");
+});

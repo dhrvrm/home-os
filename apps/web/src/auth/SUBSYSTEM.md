@@ -76,6 +76,9 @@ outputs:
       before mounting or resuming, including when another view signs out or
       the authority refuses access. Disconnected retained views remain tied
       to the last accepted identity and cannot establish new shared authority.
+      Financial snapshots, statement exports retained by the app, and
+      unsaved financial input share this person boundary; no delayed money
+      response may repopulate the previous person's state after clearing.
   - name: member-access-presentation
     description: >
       The person's access state, role-appropriate actions, consent details,

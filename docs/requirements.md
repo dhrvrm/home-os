@@ -85,9 +85,12 @@ This ledger defines the intended Home OS product and the measurable behavior of 
 
 | ID | Requirement | Acceptance | Release state |
 |---|---|---|---|
-| FR-MNY-01 | Record shared expenses with payer, participants, currency, date, category, notes, and receipt. | Equal, exact, percentage, and share-based splits sum exactly using integer minor units and reject invalid allocations. | Planned — iteration 5 |
-| FR-MNY-02 | Calculate balances and simplify settlements without changing the ledger. | Balances equal the sum of immutable expense/settlement entries; simplification is a derived suggestion and never rewrites history. | Planned — iteration 5 |
-| FR-MNY-03 | Record settlements, corrections, recurring bills, and exports. | Settlements/corrections append events, recurring instances are idempotent, and CSV/JSON exports reconcile to displayed balances. | Recurring expense rules with deterministic splits shipped; actual period charges, payments, settlements, and ledger exports remain planned — iteration 5 |
+| FR-MNY-01 | Record actual expenses and itemized bills with multiple payers, beneficiaries, dates, category and notes. | Equal, exact, percentage, weighted and mixed splits conserve integer minor units; items/discount/tax/tip explain each share. Calculator Apply never saves. Receipt attachments remain planned. | Current iteration |
+| FR-MNY-02 | Explain per-person balances separately by currency. | Complete contribution/share/payment/refund effects conserve each currency; deterministic suggestions neither rewrite facts nor execute transfers. Departed people remain identifiable. | Current iteration |
+| FR-MNY-03 | Preserve financial lifecycle and recurring source identity. | Positive linked credits respect overall/per-person caps; correction/void/restore retain revisions. Explicit observed rule-period posting creates at most one original forever; `/expenses` remains the recurring catalog. | Current iteration |
+| FR-MNY-04 | Find, explain and export accepted financial facts. | Bounded entries/detail/comments/history, complete spending summaries and member statements share one current-effective revision; stale cursors require restart. Actual complete CSV/JSON downloads reconcile opening + movements = closing within one currency and date scope, including empty scopes; at most 10,000 rows/8 MiB. | Current iteration |
+| FR-MNY-05 | Recover uncertain money under current authority. | Owners/members maintain facts, Viewers inspect; HTTP and 19 MCP primitives enforce exact current actor/grant/ceiling. Identical authorized replay accepts once; changed intent refuses. Retained attempts and caches are person-bound, writes require connectivity, no financial offline queue or automatic resend. | Current iteration |
+| FR-MNY-06 | Preserve installed app and bounded operations. | Inventory queues, continuing sessions, personal OAuth, recurring rules and notifications survive additive migration. `smoke:ledger` adds real Chrome deployed-8f45806 compatibility and financial proof; frozen102af58 gate remains. Worst bounded success/refusal/replay uses at most 50 combined conservative D1/OAuth KV calls. | Current iteration |
 
 ### Chores, maintenance, calendar, and automation
 
@@ -139,4 +142,4 @@ This ledger defines the intended Home OS product and the measurable behavior of 
 | FR-MEAL, FR-CON, FR-NTF-02/03/04 | `apps/worker/src/meals`, `contacts`, `notifications`, `apps/web/src/household`, service worker | Domain/API/scheduler/crypto/component tests; real Worker HTTP and browser journeys |
 | Planned module groups | `docs/product-architecture.md` iteration boundaries | Each owning iteration adds domain, adapter, offline, authorization, audit, and acceptance tests before status changes |
 
-Release verification is `npm test && npm run lint && npm run build && npm run smoke && npm run smoke:browser`, followed by production health/readiness/API/MCP checks. A requirement moves to **Shipped** only in the same commit series that contains its passing acceptance evidence.
+Release verification is `npm test && npm run lint && npm run build && npm run smoke && npm run smoke:browser && npm run smoke:mcp && npm run smoke:upgrade && npm run smoke:ledger`, followed by production health/readiness/API/MCP checks. A requirement moves to **Shipped** only in the same commit series that contains its passing acceptance evidence.

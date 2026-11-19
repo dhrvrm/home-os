@@ -19,5 +19,5 @@ export interface ExpenseRepository {
   createRule(rule: StoredExpenseRule, mutation: ExpenseMutation): Promise<StoredExpenseRule>;
   updateRule(rule: StoredExpenseRule, mutation: ExpenseMutation): Promise<StoredExpenseRule>;
   setArchived(rule: StoredExpenseRule, mutation: ExpenseMutation): Promise<StoredExpenseRule>;
-  listMembers(householdId: string): Promise<Array<{ id: string; active: boolean }>>;
+  listMembers(householdId: string, selectedIds?: readonly string[]): Promise<Array<{ id: string; active: boolean }>>;
 }

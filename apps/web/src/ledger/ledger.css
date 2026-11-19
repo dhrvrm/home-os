@@ -1,0 +1,50 @@
+.ledger-composer { display: grid; gap: 20px; min-width: 0; padding: 24px 26px 26px; }
+.ledger-composer form, .ledger-fields { display: grid; gap: 20px; min-width: 0; }
+.ledger-fields { border: 0; padding: 0; margin: 0; }
+.hh-dialog .ledger-fields { border: 0; padding: 0; }
+.ledger-columns { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.ledger-group { min-width: 0; border: 1px solid var(--line); border-radius: 14px; padding: 16px; margin: 0; display: grid; gap: 14px; }
+.ledger-group legend { padding: 0 6px; font-weight: 600; }
+.ledger-person { display: grid; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--line); min-width: 0; }
+.ledger-person:last-of-type { border-bottom: 0; }
+.ledger-person__name { display: flex; align-items: center; gap: 10px; overflow-wrap: anywhere; }
+.ledger-person__name input { width: 18px; height: 18px; flex-shrink: 0; }
+.ledger-person__controls, .ledger-items { display: grid; gap: 12px; min-width: 0; }
+.ledger-adjustments { display: grid; gap: 12px; }
+.ledger-amount { min-width: 0; }
+.ledger-amount > label, .ledger-calculator > label { font-size: 13px; font-weight: 600; }
+.ledger-amount__input { display: flex; gap: 8px; align-items: center; min-width: 0; }
+.ledger-amount__input input { min-width: 0; flex: 1; width: 100%; }
+.ledger-calculator { display: grid; gap: 12px; padding: 14px 0; border-bottom: 1px solid var(--line); min-width: 0; }
+.ledger-calculator__operators { display: flex; gap: 6px; flex-wrap: wrap; }
+.ledger-calculator__operators button { min-width: 36px; padding: 8px 12px; }
+.ledger-review, .ledger-recovery { display: grid; gap: 12px; padding: 18px 0; border-top: 1px solid var(--line); }
+.ledger-money-row { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--line); }
+.ledger-money-row > span { overflow-wrap: anywhere; min-width: 0; }
+.ledger-money-row output { font-family: var(--font-mono); font-variant-numeric: tabular-nums; text-align: right; }
+.ledger-money-row > small { flex-basis: 100%; color: var(--text-muted); }
+.ledger-unsaved { color: var(--text-muted); font-size: 0.875rem; }
+.ledger-notice { border-left: 3px solid var(--accent); padding-left: 14px; display: grid; gap: 10px; }
+.ledger-composer p, .ledger-composer small, .ledger-recovery { overflow-wrap: anywhere; }
+.ledger-composer .dialog__actions { flex-wrap: wrap; }
+@media (max-width: 680px) { .ledger-composer { padding: 20px 16px; } .ledger-columns { grid-template-columns: minmax(0, 1fr); } .ledger-group { padding: 12px; } .ledger-amount__input { align-items: stretch; flex-wrap: wrap; } .ledger-amount__input input { flex-basis: 100%; } .ledger-money-row output { margin-left: auto; } }
+.ledger-panel, .ledger-detail { display: grid; gap: 24px; min-width: 0; }
+.ledger-panel h2, .ledger-panel h3, .ledger-panel p { margin: 0; }
+.ledger-toolbar { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 16px; align-items: center; }
+.ledger-tools { display: flex; flex-wrap: wrap; gap: 14px; align-items: end; }
+.ledger-total { font-size: clamp(1.4rem, 3vw, 2rem); font-variant-numeric: tabular-nums; font-family: var(--font-mono); overflow-wrap: anywhere; }
+.ledger-tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+.ledger-tabs button { padding: 14px 18px; color: var(--text-muted); background: transparent; border: 0; border-bottom: 2px solid transparent; font: inherit; cursor: pointer; }
+.ledger-tabs .is-active { color: var(--accent); border-bottom-color: var(--accent); }
+.ledger-filters { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; align-items: end; }
+.ledger-record { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 12px; padding: 18px 0; border-bottom: 1px solid var(--line); min-width: 0; align-items: baseline; }
+.ledger-record button { display: grid; gap: 8px; text-align: left; background: transparent; color: inherit; border: 0; cursor: pointer; padding: 0; font: inherit; min-width: 0; overflow-wrap: anywhere; }
+.ledger-record output { font-family: var(--font-mono); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.ledger-record small, .ledger-history small { color: var(--text-muted); }
+.ledger-balance, .ledger-comment, .ledger-history { border-bottom: 1px solid var(--line); padding: 20px 0; display: grid; gap: 12px; }
+.ledger-breakdown { display: grid; gap: 10px; margin: 0; }
+.ledger-breakdown > div { display: flex; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+.ledger-breakdown dd { margin: 0; font-family: var(--font-mono); overflow-wrap: anywhere; }
+.ledger-prose { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
+.ledger-panel button:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
+@media (max-width: 680px) { .ledger-filters { grid-template-columns: minmax(0,1fr); } .ledger-record { grid-template-columns: minmax(0,1fr); } .ledger-record output { justify-self: end; } .ledger-tools { width: 100%; } .ledger-tabs button { padding: 12px 10px; } }

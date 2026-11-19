@@ -84,10 +84,10 @@ export class D1ExpenseRepository implements ExpenseRepository {
     return mapRule(row, participants.get(row.id) ?? []);
   }
 
-  async listMembers(householdId: string): Promise<Array<{ id: string; active: boolean }>> {
+  async listMembers(householdId: string, selectedIds?: readonly string[]): Promise<Array<{ id: string; active: boolean }>> {
     const result = await this.database
-      .prepare("SELECT id, archived_at FROM members WHERE household_id = ? ORDER BY id ASC")
-      .bind(householdId)
+      .prepare(`SELECT id, archived_at FROM members WHERE household_id = ?${selectedIds ? " AND id IN (SELECT value FROM json_each(?))" : ""} ORDER BY id ASC`)
+      .bind(householdId, ...(selectedIds ? [JSON.stringify(selectedIds)] : []))
       .all<MemberRow>();
     return result.results.map((row) => ({ id: row.id, active: row.archived_at === null }));
   }

@@ -185,7 +185,8 @@ try {
     client = new Client({ name: 'home-os-browser-proof', version: '1.0.0' });
     await client.connect(transport);
     const tools = await client.listTools();
-    assert.equal(tools.tools.length, 50);
+    assert.equal(tools.tools.filter(tool => !tool.name.startsWith('ledger_')).length, 50);
+    assert.equal(tools.tools.filter(tool => tool.name.startsWith('ledger_')).length, 19);
     const call = async (name, arguments_ = {}) => {
         const result = await client.callTool({ name, arguments: arguments_ });
         assert.notEqual(result.isError, true, name + ': ' + JSON.stringify(result.structuredContent));
@@ -378,7 +379,8 @@ try {
     client = new Client({ name: 'home-os-viewer-proof', version: '1.0.0' });
     await client.connect(transport);
     const viewerTools = await client.listTools();
-    assert.equal(viewerTools.tools.length, 26);
+    assert.equal(viewerTools.tools.filter(tool => !tool.name.startsWith('ledger_')).length, 26);
+    assert.equal(viewerTools.tools.filter(tool => tool.name.startsWith('ledger_')).length, 11);
     assert.equal((await call('home_context')).member.role, 'viewer');
     assert.ok((await call('contacts_list')).contacts.some(entry => entry.id === contact.id));
     const exclusiveTo = new Date(cookingDate + 'T00:00:00Z');

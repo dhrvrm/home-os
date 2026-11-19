@@ -79,6 +79,22 @@ inputs:
       An accepted expense rule, current conflicting rule, or reason for
       refusal supplied by recurring expenses. Required so connected editing
       retains the same conflict and share semantics as direct editing.
+  - name: ledger-state
+    description: >
+      Accepted expenses, refunds, repayments, item allocations, attributed
+      comments, financial revisions, member statements, scoped totals and
+      balances, and derived repayment suggestions supplied by the household
+      expense ledger. Required for connected financial inspection and
+      exports with the same household visibility and separate currencies
+      as the app. Continuation and snapshot scope remain explicit; a page
+      is not a complete balance and a suggestion is not a bank transfer.
+  - name: ledger-command-outcome
+    description: >
+      The ledger's accepted financial fact or comment, current conflicting
+      state, or refusal. Required for connected recording, corrections,
+      reversals, and explicit recurring-period posting to retain the same
+      exact allocations, idempotency, refund bounds, and durable history as
+      direct editing. A tool invocation alone cannot establish acceptance.
   - name: recipe-catalog
     description: >
       Reusable dishes, instructions, ingredients, serving basis, lifecycle,
@@ -187,6 +203,23 @@ outputs:
       The admitted reader's selection of recurring expense rules and
       archived state supplied to recurring expenses. Required to expose
       existing rules and resolved shares.
+  - name: ledger-command
+    description: >
+      The admitted person's expense, itemized bill, linked refund,
+      repayment, comment, correction, void, restoration, or explicit
+      recurring-period posting with complete intent, operation identity,
+      and observed version. Supplied to the household expense ledger so
+      every connected financial write uses the same current authority,
+      conservation, acceptance, and history boundary as the app. Caller
+      supplied identity cannot impersonate a payer's assent or a comment
+      author, and recording money does not execute a payment.
+  - name: ledger-query
+    description: >
+      The admitted reader's bounded financial record, search, comment,
+      revision, balance, repayment-suggestion, member-statement, or export
+      interests. Supplied to the household expense ledger so all active
+      users can inspect permitted household finances within their approved
+      connection ceiling without assuming access to other households.
   - name: recipe-maintenance-intent
     description: >
       The admitted person's proposed reusable dish, ingredients,

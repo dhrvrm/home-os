@@ -37,6 +37,11 @@ inputs:
       The per-member amounts that a rule's split yields for its total, or
       the reason the split is unresolvable. Required to reject incoherent
       splits on write and to present shares on read.
+  - name: recurring-posting-query
+    description: >
+      A chosen rule, its observed version, and intended cadence period.
+      Required to establish a current active rule and valid participant
+      basis for an explicit actual expense without changing the rule.
 outputs:
   - name: split-request
     description: >
@@ -55,4 +60,11 @@ outputs:
     description: >
       Which rule changed, how, by whom, through which source, for every
       accepted command.
+  - name: recurring-posting-basis
+    description: >
+      The current rule version, active lifecycle, currency, exact total,
+      valid cadence period, and resolved participant shares, or the reason
+      this basis cannot be posted. Required to make a later actual expense
+      attributable to the rule and period that the person selected, without
+      letting later rule changes rewrite that expense.
 ---

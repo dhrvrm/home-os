@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
 import type { AuthSession } from "@/lib/auth";
 import { ConnectionConsent } from "@/auth/connection-consent";
@@ -11,7 +11,7 @@ import { MenuView } from "@/household/menu-view";
 import { RecipesView } from "@/household/recipes-view";
 import { ContactsView } from "@/household/contacts-view";
 import { NotificationsView } from "@/household/notifications-view";
-import { householdDestination, readHouseholdLocation, type HomeView, type HouseholdLocation } from "@/lib/navigation";
+import { householdDestination, readHouseholdLocation, type HomeView, type HouseholdLocation, type LedgerLocation } from "@/lib/navigation";
 import "@/household/household.css";
 import {
   ArrowClockwise,
@@ -52,6 +52,9 @@ import { ItemEditDialog } from "./item-edit-dialog";
 import { ItemForm } from "./item-form";
 import { ItemRow } from "./item-row";
 import { ExpensesView } from "./expenses-view";
+import { LedgerView } from "@/ledger/ledger-view";
+import { MoneyLifetimeProvider } from "@/ledger/money-lifetime";
+import type { AcceptedReference } from "@/ledger/types";
 import { ShoppingView } from "./shopping-view";
 import { StockDialog } from "./stock-dialog";
 
@@ -64,6 +67,9 @@ export function InventoryApp({ session, onLogout, onSessionChange }: {
   onSessionChange?: (session: AuthSession) => void;
 } = {}) {
   const readOnly = session?.user.role === "viewer";
+  const moneyIdentity = session ? `${session.user.householdId}:${session.user.id}:${session.user.role}` : "";
+  const [recordedMoney,setRecordedMoney] = useState<{identity:string;reference:AcceptedReference}>();
+  const recordMoney = useCallback((reference:AcceptedReference) => setRecordedMoney({identity:moneyIdentity,reference}),[moneyIdentity]);
   const pendingCount = useLiveQuery(() => homeOSDatabase.outbox.where("state").anyOf("pending", "sending").count(), [], 0);
   const inventory = useInventory();
   const items = useMemo(() => sortItems(inventory.items), [inventory.items]);
@@ -88,9 +94,18 @@ export function InventoryApp({ session, onLogout, onSessionChange }: {
   const [pendingItem, setPendingItem] = useState<string | null>(null);
   const [assistant] = useState(() => new BrowserAssistant());
 
-  function setView(next: PrimaryView, detail: { mealId?: string; recipeId?: string } = {}) {
+  const moneyGuard = useRef(false);
+  const currentDestination = useRef<string | null>(null);
+  const setMoneyGuard = useCallback((guarded: boolean) => { moneyGuard.current = guarded; }, []);
+  const allowMoneyNavigation = useCallback(() => !moneyGuard.current || window.confirm("Leave this financial editor? Unsaved input will be discarded. Any uncertain save stays retained for recovery."), []);
+
+  function setView(next: PrimaryView, detail: LedgerLocation & { mealId?: string; recipeId?: string } = {}) {
     const destination = householdDestination(window.location.href, next, detail);
+    if (moneyGuard.current && next === "expenses" && destination === `${window.location.pathname}${window.location.search}`) return;
+    if (!allowMoneyNavigation()) return;
+    moneyGuard.current = false;
     if (`${window.location.pathname}${window.location.search}` !== destination) window.history.pushState(null, "", destination);
+    currentDestination.current = `${window.location.pathname}${window.location.search}`;
     setNavigation(readHouseholdLocation(window.location.search));
     setShowMore(false);
     setShowForm(false);
@@ -105,6 +120,14 @@ export function InventoryApp({ session, onLogout, onSessionChange }: {
     let active = true;
     const restore = () => {
       if (!active) return;
+      const destination = `${window.location.pathname}${window.location.search}`;
+      if (moneyGuard.current && destination === currentDestination.current && readHouseholdLocation(window.location.search).view === "expenses") return;
+      if (!allowMoneyNavigation()) {
+        if (currentDestination.current) window.history.pushState(null, "", currentDestination.current);
+        return;
+      }
+      moneyGuard.current = false;
+      currentDestination.current = `${window.location.pathname}${window.location.search}`;
       setNavigation(readHouseholdLocation(window.location.search));
       setShowMore(false);
       setShowForm(false);
@@ -116,7 +139,7 @@ export function InventoryApp({ session, onLogout, onSessionChange }: {
     queueMicrotask(restore);
     window.addEventListener("popstate", restore);
     return () => { active = false; window.removeEventListener("popstate", restore); };
-  }, []);
+  }, [allowMoneyNavigation]);
 
   useEffect(() => {
     let active = true;
@@ -295,7 +318,7 @@ export function InventoryApp({ session, onLogout, onSessionChange }: {
       case "shopping":
         return <ShoppingView items={items} pendingItem={pendingItem} disabled={readOnly} onRestock={(item) => item.trackingMode === "exact" ? setStockDialog({ item, action: "restock" }) : void runAction(item, { type: "restock" })} />;
       case "expenses":
-        return <ExpensesView readOnly={readOnly} />;
+        return session ? <LedgerView key={`${session.user.householdId}:${session.user.id}:${session.user.role}:${JSON.stringify(navigation)}`} user={session.user} location={navigation} acceptedReference={recordedMoney?.identity === moneyIdentity ? recordedMoney.reference : undefined} onNavigate={(detail) => setView("expenses", detail)} /> : <ExpensesView readOnly={readOnly} />;
       case "members":
         return session ? <MembersView key={`${navigation.action}:${navigation.memberId}`} currentUser={session.user} action={navigation.action} memberId={navigation.memberId} /> : null;
       case "account":
@@ -314,6 +337,7 @@ export function InventoryApp({ session, onLogout, onSessionChange }: {
   }
 
   return (
+    <MoneyLifetimeProvider key={moneyIdentity} user={session?.user} onRecorded={recordMoney} onGuardChange={setMoneyGuard}>
     <div className="app-shell">
       <aside className="sidebar">
         <a className="brand" href="#main" aria-label="Home OS inventory home">
@@ -439,6 +463,7 @@ export function InventoryApp({ session, onLogout, onSessionChange }: {
       {editingItem && !readOnly && <ItemEditDialog item={editingItem} pending={pendingItem === editingItem.id} error={mutationError} onClose={() => { setEditingItem(null); setMutationError(null); }} onSubmit={saveItemEdit} />}
       {stockDialog && !readOnly && <StockDialog item={stockDialog.item} action={stockDialog.action} pending={pendingItem === stockDialog.item.id} error={mutationError} onClose={() => { setStockDialog(null); setMutationError(null); }} onSubmit={(input) => runAction(stockDialog.item, input)} />}
     </div>
+    </MoneyLifetimeProvider>
   );
 }
 

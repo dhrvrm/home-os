@@ -87,33 +87,37 @@ export function failure(error: unknown) {
 }
 
 /** Services retain subject-specific checks and atomic acceptance; this covers transport admission. */
-export function registerTool<T extends z.ZodRawShape>(
+export function registerTool<T extends z.ZodType>(
   server: McpServer,
   context: ToolContext,
   action: Action,
   description: string,
-  schema: z.ZodObject<T>,
+  schema: T,
   readOnly: boolean,
-  execute: (input: z.output<z.ZodObject<T>>, command: CommandContext) => Promise<Record<string, unknown>>,
+  execute: (input: z.output<T>, command: CommandContext) => Promise<Record<string, unknown>>,
+  options: { name?: string; destructive?: boolean } = {},
 ) {
   if (!permitted(context, action)) return;
-  server.registerTool(action, {
-    title: action.replaceAll("_", " "),
+  const tool = options.name ?? action;
+  server.registerTool(tool, {
+    title: tool.replaceAll("_", " "),
     description,
-    inputSchema: schema.strict(),
+    inputSchema: schema instanceof z.ZodObject ? schema.strict() : schema,
     annotations: readOnly ? readOnlyAnnotations : {
       readOnlyHint: false,
-      destructiveHint: /_(update|stock|archive|cancel|revoke)$/.test(action),
+      destructiveHint: options.destructive ?? /_(update|stock|archive|cancel|revoke)$/.test(action),
       idempotentHint: true,
       openWorldHint: false,
     },
-  }, async input => {
+  }, async (input: unknown) => {
     const values = input as { operationId?: string; expectedVersion?: number };
-    const command = commandContext(context, action, values);
+    const command = commandContext(context, tool, values);
     try {
       await assertAuthority(context.env.DB, command, action);
-      const data = await execute(input, command);
-      if (readOnly) await assertAuthority(context.env.DB, command, action);
+      const data = await execute(schema.parse(input), command);
+      // Financial acknowledgements include current-authorized replay. Existing access
+      // commands may intentionally end their own authority and acknowledge that once.
+      if (readOnly || action.startsWith('ledger_')) await assertAuthority(context.env.DB, command, action);
       return result(data);
     } catch (error) {
       // A changed authority cannot inspect even a stale version or previous receipt outcome.

@@ -26,6 +26,18 @@ export const ACTIONS = {
   inventory_archive: write,
   inventory_restore: write,
   activity_list: read,
+  ledger_list: read,
+  ledger_get: read,
+  ledger_history: read,
+  ledger_balances: read,
+  ledger_statements: read,
+  ledger_export: read,
+  ledger_create: write,
+  ledger_correct: write,
+  ledger_void: write,
+  ledger_restore: write,
+  ledger_comment: write,
+  ledger_post: write,
   expenses_list: read,
   expenses_get: read,
   expenses_create: write,
@@ -144,6 +156,27 @@ export function httpAction(method: string, path: string): Action | undefined {
   // Hono dispatches HEAD through its GET handler while preserving the raw method.
   if (method === "HEAD") method = "GET";
   const route = path.replace(/^\/api\/v1/, "");
+  if (route.startsWith("/ledger/")) {
+    const part = route.slice('/ledger'.length);
+    if (method === 'POST' && part === '/preview') return 'ledger_get';
+    if (method === 'GET') {
+      if (part === '/entries' || part === '/summaries') return 'ledger_list';
+      if (part === '/balances' || part === '/repayments') return 'ledger_balances';
+      if (part === '/statements') return 'ledger_statements';
+      if (part === '/export') return 'ledger_export';
+      if (/^\/entries\/[^/]+\/history$/.test(part)) return 'ledger_history';
+      if (/^\/(?:entries\/[^/]+(?:\/comments)?|operations\/[^/]+)$/.test(part)) return 'ledger_get';
+    }
+    if (method === 'PUT' && /^\/entries\/[^/]+$/.test(part)) return 'ledger_correct';
+    if (method === 'POST') {
+      if (['/expenses', '/refunds', '/payments'].includes(part)) return 'ledger_create';
+      if (part === '/rule-postings') return 'ledger_post';
+      if (/^\/entries\/[^/]+\/comments$/.test(part)) return 'ledger_comment';
+      if (/^\/entries\/[^/]+\/void$/.test(part)) return 'ledger_void';
+      if (/^\/entries\/[^/]+\/restore$/.test(part)) return 'ledger_restore';
+    }
+    return undefined;
+  }
   if (route === "/sync")
     return method === "POST" ? "inventory_update" : undefined;
   if (route === "/auth/password") return "account_password_change";
@@ -198,6 +231,12 @@ export function httpAction(method: string, path: string): Action | undefined {
   return undefined;
 }
 export function commandAction(entityType: string, action: string): Action {
+  if (entityType === "ledger_comment") return "ledger_comment";
+  if (entityType === "ledger_entry") {
+    const verb = action.split(".").at(-1)!;
+    const actionMap: Record<string, Action> = { created: "ledger_create", corrected: "ledger_correct", voided: "ledger_void", restored: "ledger_restore", posted: "ledger_post" };
+    return actionMap[verb] ?? ("unknown" as Action);
+  }
   const verb = action.split(".").at(-1)!;
   const suffix = (
     {

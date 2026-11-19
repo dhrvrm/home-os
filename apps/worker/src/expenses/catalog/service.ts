@@ -1,3 +1,4 @@
+import type { Currency, RecurringPostingSource } from "../../ledger/model";
 import type { HouseholdCommand } from "../../platform/household-command";
 import type { CommandContext } from "../../platform/context";
 import { ConflictError, ValidationError } from "../../platform/errors";
@@ -40,6 +41,20 @@ interface ExpenseServiceOptions {
 }
 
 export class ExpenseService {
+  /** Internal posting basis; ledger admission and atomic acceptance guard disclosure/writes. */
+  async postingBasis(householdId: string, ruleId: string, expectedVersion: number, period: number): Promise<RecurringPostingSource> {
+    const rule = await this.repository.getRule(householdId, ruleId);
+    if (rule.version !== expectedVersion) throw new ConflictError('expense_rule', ruleId, expectedVersion, rule.version, rule);
+    if (rule.archivedAt !== null) throw new ValidationError('ruleId', 'Archived rules cannot be posted');
+    const members = await this.memberIndex(householdId, rule.participants.map(p => p.memberId));
+    if (rule.participants.some(p => members.get(p.memberId) !== true)) throw new ValidationError('participants', 'Review departed rule participants before posting');
+    const resolved = resolveShares(splitRequest(rule));
+    if (!resolved.ok) throw new ValidationError('participants', 'The current rule shares cannot be resolved');
+    return { ruleId: rule.id, ruleVersion: rule.version, period,
+      periodStart: cadenceBoundary(rule.cadence, period), periodEnd: cadenceBoundary(rule.cadence, BigInt(period) + BigInt(1)),
+      snapshot: { name: rule.name, currency: rule.currency as Currency, totalMinor: rule.amountMinor, cadence: { ...rule.cadence }, shares: resolved.shares.map(p => ({ memberId: p.memberId, amountMinor: p.amountMinor })) } };
+  }
+
   private readonly now: () => Date;
   private readonly newId: () => string;
 
@@ -216,8 +231,8 @@ export class ExpenseService {
     };
   }
 
-  private async memberIndex(householdId: string): Promise<MemberIndex> {
-    const members = await this.repository.listMembers(householdId);
+  private async memberIndex(householdId: string, selectedIds?: readonly string[]): Promise<MemberIndex> {
+    const members = await this.repository.listMembers(householdId, selectedIds);
     return new Map(members.map((member) => [member.id, member.active]));
   }
 }
@@ -309,4 +324,25 @@ function createdFields(rule: StoredExpenseRule): AuditChange[] {
     "participants",
   ];
   return fields.map((field) => ({ op: "add", path: `/${field}`, value: rule[field] }));
+}
+
+/** Clamp each boundary directly from the anchor, never from an earlier clamp. */
+function cadenceBoundary(cadence: StoredExpenseRule['cadence'], ordinal: number | bigint): string {
+  if ((typeof ordinal === 'number' && !Number.isSafeInteger(ordinal)) || BigInt(ordinal) < BigInt(0)) throw new ValidationError('period', 'Choose a nonnegative safe ordinal');
+  const steps = BigInt(ordinal) * BigInt(cadence.interval);
+  const [year, month, day] = cadence.anchorDate.split('-').map(Number) as [number, number, number];
+  let date: Date;
+  if (cadence.unit === 'month' || cadence.unit === 'year') {
+    const months = BigInt(year * 12 + month - 1) + steps * BigInt(cadence.unit === 'year' ? 12 : 1);
+    if (months > BigInt(9999 * 12 + 11)) throw new ValidationError('period', 'Period exceeds the supported calendar');
+    const y = Number(months / BigInt(12)), m = Number(months % BigInt(12));
+    date = new Date(0); date.setUTCFullYear(y, m + 1, 0);
+    const clamped = Math.min(day, date.getUTCDate()); date.setUTCFullYear(y, m, clamped);
+  } else {
+    const days = steps * BigInt(cadence.unit === 'week' ? 7 : 1);
+    if (days > BigInt(3660000)) throw new ValidationError('period', 'Period exceeds the supported calendar');
+    date = new Date(cadence.anchorDate + 'T00:00:00Z'); date.setUTCDate(date.getUTCDate() + Number(days));
+  }
+  if (!Number.isFinite(date.getTime()) || date.getUTCFullYear() > 9999) throw new ValidationError('period', 'Period exceeds the supported calendar');
+  return date.toISOString().slice(0,10);
 }

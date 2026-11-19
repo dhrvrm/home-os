@@ -14,7 +14,8 @@
     "test": "npm run test --workspace @home-os/web && npm run test --workspace @home-os/worker",
     "smoke:browser": "node scripts/household-browser-smoke.mjs",
     "smoke:mcp": "node scripts/mcp-browser-smoke.mjs",
-    "smoke:upgrade": "node scripts/pwa-upgrade-smoke.mjs"
+    "smoke:upgrade": "node scripts/pwa-upgrade-smoke.mjs",
+    "smoke:ledger": "node scripts/ledger-browser-smoke.mjs"
   },
   "engines": {
     "node": ">=22.18.0"

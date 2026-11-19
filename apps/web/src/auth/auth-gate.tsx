@@ -10,6 +10,7 @@ import { homeOSDatabase } from "@/offline/db";
 import { sessionIsCurrent, clearDataOwner, clearSavedSession, readDataOwner, readSavedSession, saveSession, setDataOwner } from "./session";
 import { ACCESS_BOUNDARY_KEY, activeMemberId, boundaryMember, boundaryState, captureAccessProof, drainHouseholdWork, isCurrentAccessProof, lockHouseholdWork, publishAccessBoundary, readAccessBoundary, resumeHouseholdWork, setActiveMemberId, type AccessProof } from "./work";
 import "@/components/auth.css";
+import { countPendingMoneyAttempts } from "@/ledger/attempt-state";
 
 type GateState =
   | { kind: "checking" }
@@ -70,9 +71,10 @@ export function AuthGate() {
 
     if (switching) {
       const queued = await homeOSDatabase.outbox.count();
-      if (queued > 0) {
+      const money = await countPendingMoneyAttempts();
+      if (queued > 0 || money > 0) {
         if (!interactive) throw new AccountSwitchRequired("Saved changes belong to another member. Sign in as that member to sync them, or sign in with another account and explicitly discard them.");
-        if (!window.confirm("This device has unsynced changes from another member. Switching accounts will discard those changes and remove their saved household data. Switch accounts?")) {
+        if (!window.confirm(`This device has retained work from another member. Switching accounts will discard unsynced changes and saved household data.${money > 0 ? " A financial save may already have been recorded. Discarding recovery information does not undo it." : ""} Switch accounts?`)) {
           checkBoundary();
           if (!session.sessionId) throw new Error("Check your sign-in before ending this account switch. Connect and retry.");
           await logout({ expectedSessionId: session.sessionId });
@@ -272,8 +274,9 @@ export function AuthGate() {
       await drainHouseholdWork();
       check();
       const queued = await homeOSDatabase.outbox.count();
+      const money = await countPendingMoneyAttempts();
       check();
-      if (queued > 0 && !window.confirm("You have unsynced changes on this device. Signing out will discard them. Sign out anyway?")) {
+      if ((queued > 0 || money > 0) && !window.confirm(`You have retained work on this device. Signing out will discard unsynced changes.${money > 0 ? " A financial save may already have been recorded. Discarding recovery information does not undo it." : ""} Sign out anyway?`)) {
         throw new Error("Sign-out cancelled. Sync your changes before signing out to keep them.");
       }
       check();

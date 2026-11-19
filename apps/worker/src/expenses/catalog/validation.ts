@@ -69,8 +69,9 @@ const cadence = z.object({
   anchorDate: z.string(),
 });
 
+export const expenseRuleId = z.string().min(1);
 export const createExpenseInput = z.object({
-  id: z.string().min(1).optional(),
+  id: expenseRuleId.optional(),
   name: z.string(),
   amountMinor: z.number(),
   currency: z.string().optional(),

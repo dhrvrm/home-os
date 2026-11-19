@@ -1,12 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
   ACTIONS,
+  httpAction,
   permits,
   permitsHandoff,
   type Action,
   type Role,
 } from "../src/auth/permissions";
 const reads = [
+  "ledger_list", "ledger_get", "ledger_history", "ledger_balances", "ledger_statements", "ledger_export",
   "inventory_list",
   "inventory_attention",
   "inventory_get",
@@ -169,4 +171,18 @@ describe("single household action policy", () => {
       ),
     ).toBe(false);
   });
+});
+
+it('maps every ledger route to its exact action, including read-only POST preview and HEAD', () => {
+  for (const [method,path,action] of [
+    ['POST','/preview','ledger_get'], ['GET','/entries','ledger_list'], ['HEAD','/entries','ledger_list'],
+    ['GET','/entries/id','ledger_get'], ['GET','/entries/id/comments','ledger_get'], ['GET','/entries/id/history','ledger_history'],
+    ['GET','/balances','ledger_balances'], ['GET','/repayments','ledger_balances'], ['GET','/summaries','ledger_list'],
+    ['GET','/statements','ledger_statements'], ['GET','/export','ledger_export'], ['GET','/operations/id','ledger_get'],
+    ['POST','/expenses','ledger_create'], ['POST','/refunds','ledger_create'], ['POST','/payments','ledger_create'],
+    ['PUT','/entries/id','ledger_correct'], ['POST','/entries/id/void','ledger_void'], ['POST','/entries/id/restore','ledger_restore'],
+    ['POST','/entries/id/comments','ledger_comment'], ['POST','/rule-postings','ledger_post'],
+  ]) expect(httpAction(method, `/api/v1/ledger${path}`)).toBe(action);
+  expect(httpAction('DELETE', '/api/v1/ledger/entries/id')).toBeUndefined();
+  expect(httpAction('POST', '/api/v1/ledger/summaries')).toBeUndefined();
 });

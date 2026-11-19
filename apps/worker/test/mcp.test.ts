@@ -51,7 +51,9 @@ describe("personally authorized MCP server", () => {
     expect(listed.status).toBe(200);
     const body = await jsonRpc<{ result: { tools: Array<{ name: string; annotations: { readOnlyHint: boolean } }> } }>(listed);
     expect(body.result.tools.map((tool) => tool.name).sort()).toEqual([
+      "ledger_entries_list", "ledger_entry_get", "ledger_preview", "ledger_comments_list", "ledger_history_list", "ledger_balances", "ledger_repayments", "ledger_summaries", "ledger_statement", "ledger_export", "ledger_operation_status",
       "activity_list",
+      "ledger_expense_create", "ledger_refund_create", "ledger_payment_create", "ledger_entry_correct", "ledger_entry_void", "ledger_entry_restore", "ledger_comment_add", "ledger_rule_post",
       "expenses_archive", "expenses_create", "expenses_get", "expenses_list", "expenses_restore", "expenses_update",
       "inventory_archive", "inventory_attention", "inventory_create", "inventory_events", "inventory_export", "inventory_get", "inventory_list", "inventory_restore", "inventory_stock", "inventory_update",
       "home_context", "recipes_list", "recipes_get", "recipes_create", "recipes_update", "recipes_archive", "recipes_restore",
@@ -100,6 +102,7 @@ it("connects and reads the existing MCP surface using the official 2.4 client tr
   try {
     await client.connect(transport);
     expect((await client.listTools()).tools.map(tool => tool.name).sort()).toEqual([
+      "ledger_entries_list", "ledger_entry_get", "ledger_preview", "ledger_comments_list", "ledger_history_list", "ledger_balances", "ledger_repayments", "ledger_summaries", "ledger_statement", "ledger_export", "ledger_operation_status",
       "activity_list", "expenses_get", "expenses_list", "inventory_attention", "inventory_events", "inventory_export", "inventory_get", "inventory_list",
       "home_context", "recipes_list", "recipes_get", "meals_list", "meals_get", "contacts_list", "contacts_get",
       "notifications_list", "notifications_mark_read", "notification_preferences_get", "notification_preferences_set", "notification_device_setup",

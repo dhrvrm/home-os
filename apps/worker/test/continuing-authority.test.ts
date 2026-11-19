@@ -568,3 +568,25 @@ it.each(["revoked", "replaced", "deactivated"])(
     ).toBeNull();
   },
 );
+
+it('rechecks exact authority before disclosing a legacy operation collision on replay',async()=>{
+ const {digest}=await import('../src/auth/crypto');
+ const {beginCommand,replayCommand}=await import('../src/platform/household-command');
+ await env.DB.prepare("INSERT INTO processed_operations(household_id,operation_id,entity_type,entity_id,result_json,processed_at) VALUES('home','legacy-replay-authority','inventory_item','old','{}',CURRENT_TIMESTAMP)").run();
+ const context:import('../src/platform/context').CommandContext={householdId:'home',actorId:'local-owner',actorType:'member',source:'pwa',operationId:'legacy-replay-authority',authority:{householdId:'home',memberId:'local-owner',role:'owner',proof:{kind:'browser',tokenHash:await digest(cookie.split('=')[1]!),credentialVersion:1}}};
+ const command=await beginCommand(env.DB,context,'inventory_item','inventory.item.created',undefined,{name:'Rice'});
+ const db=new Proxy(env.DB,{get(target,key){
+  if(key==='prepare')return(sql:string)=>{
+   const statement=target.prepare(sql);if(!sql.includes('processed_operations'))return statement;
+   return new Proxy(statement,{get(st,property){
+    if(property==='bind')return(...values:unknown[])=>{const bound=st.bind(...values);return new Proxy(bound,{get(b,p){
+     if(p==='first')return async()=>{await env.DB.prepare('DELETE FROM auth_sessions').run();return b.first();};
+     const value=Reflect.get(b,p,b);return typeof value==='function'?value.bind(b):value;
+    }});};
+    const value=Reflect.get(st,property,st);return typeof value==='function'?value.bind(st):value;
+   }});
+  };
+  const value=Reflect.get(target,key,target);return typeof value==='function'?value.bind(target):value;
+ }});
+ await expect(replayCommand(db,command)).rejects.toMatchObject({status:403,code:'forbidden'});
+});

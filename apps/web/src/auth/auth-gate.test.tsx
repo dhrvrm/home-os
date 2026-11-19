@@ -35,6 +35,18 @@ async function queueAliceWork() {
 }
 
 describe("member access gate", () => {
+  it("requires explicit discard for a retained uncertain financial save even with an empty inventory outbox", async () => {
+    setDataOwner(alice.user);
+    await homeOSDatabase.householdCache.put({ key: JSON.stringify(["home", "alice", "ledger:attempt:v1"]), householdId: "home", memberId: "alice", data: { phase: "unknown", command: { action: "comment", operationId: "money-op", entryId: "e", expectedVersion: 1, text: "Dinner" } }, savedAt: new Date().toISOString() });
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    vi.mocked(getAuthStatus).mockResolvedValue({ setupRequired: false, setupAvailable: true, session: null });
+    render(<AuthGate />);
+    fireEvent.click(await screen.findByText("Sign in Bob"));
+    await waitFor(() => expect(confirm).toHaveBeenCalled());
+    expect(confirm.mock.calls[0]?.[0]).toMatch(/does not undo|may already/i);
+    expect(screen.queryByText("Open Bob")).not.toBeInTheDocument();
+    expect(await homeOSDatabase.householdCache.count()).toBe(1);
+  });
   it("opens an unexpired same-member offline copy after a transport failure", async () => {
     saveSession(alice); setDataOwner(alice.user); publishAccessBoundary("ready");
     vi.mocked(getAuthStatus).mockRejectedValue(new APIError("Offline", "offline"));
