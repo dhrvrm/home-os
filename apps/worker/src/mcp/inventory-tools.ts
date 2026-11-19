@@ -46,6 +46,7 @@ export function registerInventoryTools(server: McpServer, context: ToolContext) 
     try {
       await assertAuthority(context.env.DB, commandContext(context, 'inventory_list'), 'inventory_list');
       const page = await service.listItemsPage(household, { archived: 'exclude' }, { limit: 25 });
+      await assertAuthority(context.env.DB, commandContext(context, 'inventory_list'), 'inventory_list');
       return { contents: [{ uri: uri.href, mimeType: 'application/json', text: JSON.stringify({ ...page, count: page.items.length, limit: 25, continuationTool: 'inventory_list' }) }] };
     } catch (error) { throw new Error(String(failure(error).structuredContent.message)); }
   });
