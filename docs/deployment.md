@@ -104,7 +104,7 @@ After deployment, check `/api/v1/auth/status` has `setupAvailable: true`, comple
 
 Back up D1 before applying `0008_continuing_access.sql` through `0011_deactivation_grants.sql`. They add session policy/public IDs, OAuth connection and consent state, protection for the last owner who can sign in, and durable connection revocation when a member leaves. They preserve the referenced session table. Migration 0008 intentionally deletes invalid grants and cascades their notification subscriptions/deliveries. Preserve the existing password pepper, setup key, and VAPID pair. Configure the persistent `OAUTH_KV` namespace before deploying the new Worker.
 
-Before migration, export D1 to a private file outside the checkout and save aggregate baselines using `wrangler d1 execute home-os --remote --config apps/worker/wrangler.jsonc --file <audit.sql>`. The export includes authentication verifiers and push state; it does not include OAuth KV. Run these read-only queries against the previous schema:
+Before migration, export D1 to a private file outside the checkout and save aggregate baseline rows using `wrangler d1 execute home-os --remote --config apps/worker/wrangler.jsonc --json --command "<literal audit SELECT SQL>"`. The export includes authentication verifiers and push state; it does not include OAuth KV. Run these read-only queries against the previous schema:
 
 ```sql
 WITH clock AS (SELECT strftime('%Y-%m-%dT%H:%M:%fZ','now') AS checked_at),
@@ -230,3 +230,28 @@ The PWA JSON export is useful for household portability but is not a full audit/
 ## Security boundary
 
 The deployment serves one configured household with Owner, Member, and Viewer roles. Owners manage membership and household access. Owners and members maintain shared facts and answer attendance only for themselves. Viewers read shared facts and control their own notification preferences/read state, sessions, and connections. MCP uses the same action policy and domain services, with a consent ceiling and implicit actor/household. Passwords, raw tokens, proof hashes, and push receiving secrets are excluded from MCP parameters and results. Domain mutations recheck exact current authority in the acceptance transaction, including receipt replays. Access changes are audited with non-secret actor, source, client/tool, and operation metadata.
+
+## Actual expense ledger release
+
+Migration `0012_expense_ledger.sql` is additive. Apply it before deploying the ledger Worker; it adds no binding, secret, financial notification, inventory sync operation or automatic recurring posting. Keep the existing D1/KV identities, canonical MCP resource, setup/password-pepper/VAPID configuration and notification schedule. Do not create a production household or first-owner account for release QA. If no existing controlled identity is available, record that authenticated production verification remains unavailable; anonymous health/readiness/challenge checks alone do not prove financial acceptance.
+
+Preflight uses the exact candidate Node22.23.5 environment and all gates: `npm test`, `npm run lint`, `npm run build`, `npm run smoke`, `npm run smoke:browser`, `npm run smoke:mcp`, `npm run smoke:upgrade`, and `npm run smoke:ledger`. Existing gates remain required. The ledger gate uses disposable local D1, TLS certificates, persistent Chrome profiles, the official personal OAuth client, a faithful deployed `8f45806` build and current assets. It leaves evidence in `test-results/ledger/`, then removes its temporary profile/archive/database and closes its processes/listeners. The separate `102af58` nullable-session fixture remains frozen. Real phone installation, virtual-keyboard behavior, push receipt and screen-reader speech still need their appropriate device checks.
+
+Capture aggregate rows before and after migration. For SELECT results, pass SQL as one literal `--command` argument with `--json`; the installed Wrangler's `--file` execution output reports execution counts and is unsuitable as aggregate evidence. A script should use `execFile`/`spawn` argument arrays. For an operator shell, use a quoted SQL argument (no credential/session/token columns):
+
+```sh
+npx wrangler d1 execute home-os --remote --config apps/worker/wrangler.jsonc --json --command 'SELECT COUNT(*) AS inventory_items FROM inventory_items; SELECT COUNT(*) AS members FROM members; SELECT COUNT(*) AS recurring_rules FROM expense_rules; SELECT COUNT(*) AS browser_sessions FROM auth_sessions; SELECT COUNT(*) AS connections FROM mcp_connections;'
+```
+
+After migration, check the migration and financial invariants. These commands read counts/totals only; they do not create or repair financial facts:
+
+```sh
+npx wrangler d1 execute home-os --remote --config apps/worker/wrangler.jsonc --json --command "SELECT name FROM d1_migrations WHERE name='0012_expense_ledger.sql'; SELECT COUNT(*) AS ledger_entries FROM ledger_entries; SELECT COUNT(*) AS ledger_comments FROM ledger_comments; SELECT COUNT(*) AS source_identities FROM ledger_sources; SELECT COUNT(*) AS orphan_heads FROM ledger_entries h WHERE NOT EXISTS (SELECT 1 FROM ledger_revisions r WHERE r.household_id=h.household_id AND r.entry_id=h.id AND r.version=h.version);"
+npx wrangler d1 execute home-os --remote --config apps/worker/wrangler.jsonc --json --command "SELECT h.household_id,h.currency,SUM(e.amount_minor) AS net_minor FROM ledger_entries h JOIN ledger_effects e ON e.household_id=h.household_id AND e.entry_id=h.id AND e.version=h.version AND e.effect_kind='snapshot' WHERE h.lifecycle='effective' GROUP BY h.household_id,h.currency; SELECT household_id,rule_id,period_start,COUNT(*) AS originals FROM ledger_sources GROUP BY household_id,rule_id,period_start HAVING COUNT(*)>1;"
+```
+
+Expect one `0012` migration row, zero orphan heads, per-household/currency net 0 and no duplicate source rows. An empty ledger returns no currency groups, rather than fabricated zero-valued records. Compare existing-domain counts with the captured baseline and explain legitimate concurrent writes. Use integer `SUM`, not floating `TOTAL`, and never aggregate all historical transition effects as current balances.
+
+With an existing controlled member, verify one real intended household expense/payment only when already authorized as ordinary use; do not insert release fixtures. Inspect its current balance, detail/history and own operation receipt through HTTP and personal MCP, check Viewer refusal, and reconcile actual downloaded statements at one revision/scope/currency. Existing installations should open `/api/app` in the same browser/profile, preserve inventory queues/session identity, sync supported inventory work and explicitly choose **Update and reload**. Keep local storage intact. Financial cached reads reopen offline; financial writes stay disabled and reconnect never posts a retained attempt by itself.
+
+Use forward correction for a bad accepted fact: correct, void or restore through the current-authorized ledger command, retaining its receipt/history. Resolve linked credits before voiding their original; voiding a recurring original never releases its source period. A Worker-only rollback is partial and must be checked against the migrated schema and current authority policy. A routine database restore would discard later accepted ledger facts/receipts and could resurrect revoked grants. Investigate recovery in a separate database and reconcile later writes; do not restore over live accepted money.

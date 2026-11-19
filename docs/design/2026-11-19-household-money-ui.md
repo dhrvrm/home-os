@@ -1,6 +1,6 @@
 # Household money UI intent
 
-Date: 2026-11-19. Status: written intent before U6/U7 UI implementation; browser verification pending.
+Date: 2026-11-19. Status: written intent before U6/U7 implementation; U8 browser evidence recorded below, with device-specific checks still pending.
 
 Reading this as: an extension of Home OS for household members reviewing shared money, with the existing quiet green product language and predictable forms.
 
@@ -144,19 +144,23 @@ Cached data identifies its offline/stale status and currency/scope. A failed ref
 
 Bound cached copies to the plan's latest 20 query pages and 10 entry details per person. Do not expose cache implementation terms in ordinary copy. Statement preparation and delayed network results remain bound to the current admitted identity and work lease.
 
-## Definition-of-Done self-critique: pending actual UI
+## Definition-of-Done self-critique: U8 browser evidence
 
-This document records design intent and a source audit only. No implementation, browser screenshot, keyboard journey or visual pass is claimed. U6/U7 implementation and U8 integrated proof must supply evidence before marking these checks complete.
+U8 drives a real isolated Chrome persistent profile, migrated local Worker/D1 and the official OAuth client. Captures live under `test-results/ledger/`; `summary.json` names the actual completed journeys and `cleanup.json` records teardown. This is the native fallback after the supplied UI/UX named presets were unavailable; no unsupported preset or serving-model attestation is claimed.
 
-| Check | Intended outcome | Evidence still required |
-| --- | --- | --- |
-| Squint | One money surface; personal balance and primary action dominate; aligned rows explain source amounts without nested cards | Actual 320px, 390px and desktop screenshots in light and dark, including populated balances and composer |
-| Skim | Within seconds, a person distinguishes actual expenses, recurring rules, suggestions, reported payments, unsaved input and uncertain saves | Actual initial/detail/payment/recovery captures and a reading pass over visible labels |
-| Above fold | Personal balance, Add expense and tab navigation lead the initial screen; editor title, first meaningful field and recoverable actions are reachable | Captures at 320×568, 390×844 and 1280×800, plus short-height/software-keyboard inspection; check bottom navigation and footer overlap |
-| Generic-pattern fingerprint | Existing Home OS tokens, restrained typography and real money explanations carry the page | Actual screenshots checked for unrelated hero copy, metric tiles, gratuitous chips/gradients, decoration, nested cards or inaccessible tiny amounts |
-| Money and responsive alignment | Exact untruncated amounts, clear currency and stable person/amount association; no horizontal page overflow | Long names, maximum supported amounts, INR and zero-decimal currency, 320/390/desktop screenshots and zoom inspection |
-| Keyboard and dialogs | One active focus scope, explicit calculator Apply, deliberate dirty discard, recoverable errors and focus return | Actual Tab/Shift+Tab, Escape, Enter, native keypad/operator input, screen-reader labels/announcements and detail/editor transition journeys |
-| Financial state clarity | Retained unknown attempt stays frozen and identity-bound; no optimistic accepted money or automatic offline posting | Reload/two-tab/response-loss/same-member reauthentication/account-switch journeys, plus source/component and integrated evidence |
-| Lifecycle completeness | Every loading/empty/offline/error/conflict state has a truthful scope and working next step | Actual captures/journeys for failure, stale revision, source-period collision, refund capacity, export cancellation/limits and viewer state |
+The author inspected actual composer top/review, entries, balances, statement, refund history, Viewer and retained-payment-recovery images, rather than inferring appearance from component tests. Screenshot capture waits for two animation frames and disables capture-time CSS transitions; the earlier dark capture taken during a color/resize repaint was replaced. Enabled Save/Cancel and focus remain explicit browser assertions, independent of their pixel colors.
 
-Future verification should record screenshot paths, viewport/theme, observed problems and fixes here. Leave any unobserved check pending; passing component tests alone does not complete visual self-critique.
+| Check | Observed result and artifact |
+| --- | --- |
+| Squint | The selected-currency personal balance and Add expense lead the initial screen. Flat names/amounts and dividing rules carry explanation. `entries-320-light.png`, `entries-390-dark.png`, `balances-390-dark.png`, `balances-1280-light.png`; no new metric tiles or elevated nested surfaces. |
+| Skim | Expenses/Balances/Recurring rules remain visibly separate. The rule collision opens its existing void original; reported payment and retained unknown money use explicit words. `recurring-source-collision.png`, `payment-lost-response-recovery.png`, `refund-history.png`, `viewer-390.png`. |
+| Above fold | Composer heading, Description and currency/date are visible at 320×568 and 390×844; 390×500 retains internal scrolling. Initial balance, Add expense and money navigation remain visible at narrow sizes. `composer-320-568-light.png`, `composer-390-844-dark.png`, `composer-390-500-dark.png`, `composer-1280-800-light.png`. The existing shell and panel both say Expenses, adding modest vertical repetition; it does not hide the primary action. |
+| Generic-pattern fingerprint | Existing Geist/mono, semantic greens, flat dividers, outlined fields and pill controls remain coherent in both themes. No hero, unrelated illustration, gradient or invented financial chart was added. |
+| Money and responsive alignment | The AE5 bill resolves to ₹1,080.00 and shares ₹324.00/₹756.00 across actual UI/API/MCP. Both themes are captured at 320/390/1280; no page-level horizontal overflow. `composer-review-320-568-light.png`, `composer-review-390-500-dark.png`, `zero-decimal-JPY.png`, `maximum-amount-320.png` and statement captures show separate JPY precision and the maximum supported USD amount without a float-formatting substitute. |
+| Keyboard and dialogs | Initial Description focus, typed calculator expression plus Enter without saving, explicit Apply/focus return, Notes→Cancel Tab inside the sole modal and enabled Save/Cancel are asserted. The short-height footer is reachable and amounts wrap. These are physical-keyboard/Chrome checks; virtual-keyboard occlusion and screen-reader speech remain unobserved device checks. |
+| Financial state clarity | A real payment commits before its response is aborted. Reload retains the exact operation; another tab's later refusal preserves its monotonic uncertainty marker; authorized same-intent replay clears recovery with one payment/revision/audit cause. Changed intent refuses. `payment-lost-response-recovery.png`; the summary separately records zero uncaught page errors. |
+| Lifecycle completeness | Actual comment, correction, positive refund, void/restore history, recurring source collision, separate Owner/Member/Viewer official-SDK financial parity, Viewer read/refusal, member writes, complete exports, real correction-between-export-pages restart, empty date scope and offline cached read-only views are exercised. `statement.csv`, `statement.json`, `statement-empty.csv`, `statement-empty.json`, `offline-balances-readonly.png`. Routed 10,001-row and multibyte 8 MiB fixtures verify download refusal; accepted files and revision-race responses are real server output. |
+
+The installed-shell journey uses the faithful deployed `8f45806` archive with a real controlling service worker, zero CDP installability errors, continuing session, actual queued inventory create, one accepted inventory audit cause, and explicit Update and reload before current offline recovery. The separate `102af58` nullable-session fixture is unchanged.
+
+Device-specific installation UI, native virtual keypad, assistive-technology speech, long localized member names, and a controlled production financial acceptance remain outside this local visual claim. Existing focused tests cover identity transitions, stale input/error recovery and bounded cache/export behavior; this document does not relabel those as observed phone or screen-reader results. Root owns the final full canonical suites, independent review and release verification.

@@ -1,6 +1,6 @@
 # Home OS
 
-Home OS is an offline-first shared operating system for roommates. It includes inventory, household accounts, recurring expense rules, recipes, a meal calendar with attendance, shared contacts, and meal reminder notifications. Documents, a payment ledger, chores, and general automations remain on the roadmap.
+Home OS is an offline-first shared operating system for roommates. It includes inventory, household accounts, recurring expense rules, recipes, a meal calendar with attendance, shared contacts, and meal reminder notifications. The current ledger iteration adds actual shared expenses, itemized bills, linked refunds, reported payments, per-currency balances and statements. Documents, chores, and general automations remain on the roadmap.
 
 The canonical [functional and non-functional requirements](docs/requirements.md) distinguish shipped behavior from the planned household modules.
 
@@ -25,7 +25,7 @@ The full information architecture and preserved roadmap are in [docs/product-arc
 Next.js static PWA
   └─ Dexie projections + transactional outbox
        └─ Hono Worker /api/v1 + /mcp
-            └─ D1 authoritative inventory + audit history
+            └─ D1 authoritative household facts + ledger + audit history
 ```
 
 The browser applies supported commands locally before the network is used. Startup, reconnect, and manual sync send queued operations to D1. Operation IDs make retries idempotent; entity versions turn concurrent roommate edits into visible conflicts instead of silent overwrites.
@@ -56,6 +56,16 @@ Notifications shows unanswered meal reminders and personal preferences. Choose *
 
 Menu, recipes, contacts, and inbox preserve the last accepted reads offline. Their changes and attendance responses require a connection; only supported inventory changes queue offline.
 
+## Household money
+
+Expenses records actual accepted money. Its **Balances** tab explains each person's contributions, allocated consumption, reported payments and net separately for INR, USD, EUR, GBP and JPY. **Recurring rules** retains the existing catalog; a rule affects balances only after an explicit period posting. Suggestions describe one way to settle net balances. Recording a payment reports an external fact; Home OS does not transfer funds.
+
+Bills support multiple payers, equal/exact/percentage/weighted/mixed splits, itemized quantities and assignments, discount before tax and tip, notes, immutable comments, and editable duplication. Calculator Apply only changes a field. Correction, void and restore retain accepted financial history. Linked positive refunds stay within original and per-person capacity. Historical people remain named after departure.
+
+Money saves require a connection. The app retains one frozen uncertain attempt per household/person, separate from the inventory queue; **Check status** or **Replay same save** resolves that same operation after a lost response. Reload/reconnect never posts money automatically. Last admitted financial reads reopen offline with writes disabled. CSV/JSON statement downloads declare currency, date scope, current-effective financial revision, opening/movements/closing and complete row count; limits are 10,000 movements and 8 MiB.
+
+The API is under `/api/v1/ledger`; the 19 `ledger_*` MCP primitives use the same service, current role and personal connection ceiling. Existing `/api/v1/expenses` and `expenses_*` tools continue to mean recurring rules. See [architecture](docs/product-architecture.md) and [deployment checks](docs/deployment.md).
+
 ## Browser assistant
 
 **Ask Home** answers counts, quantities, status, locations, categories, low/out stock, forecasts, and cadence directly from local inventory without a model. For ambiguous language and rename/alias/category requests, local Unicode-aware retrieval selects at most 12 relevant records and the optional SmolLM2 135M model emits only an allowlisted query/action plan. Application code verifies that plan against current inventory; the model never authors facts or writes directly.
@@ -64,7 +74,7 @@ The model is an explicit, optional download of about 105 MB into origin-private 
 
 ## Local development
 
-Requirements: Node.js 22.18+ and npm 10+.
+Requirements: Node.js 22.23.5 and npm 10+ for release verification.
 
 ```bash
 npm install
@@ -92,6 +102,7 @@ npm run smoke
 npm run smoke:browser
 npm run smoke:mcp
 npm run smoke:upgrade
+npm run smoke:ledger
 ```
 
 The HTTP smoke test creates isolated D1 state and exercises authentication, inventory, owners, recipe snapshots, meals, attendance, contacts, and reminder deduplication. Browser checks require Chrome locally, or Playwright Chromium with `HOMEOS_BROWSER_CHANNEL=chromium`; set `HOMEOS_SKIP_BUILD=1` after building to reuse the current static output. The MCP check uses the official client SDK and browser consent, checks role restrictions and shared domain state, and tests refresh, revocation, logout and cookie ordering. The upgrade check builds the frozen legacy release `102af58` in a disposable archive, installs its real service worker, queues three offline changes, exercises the old reconnect, then opens the recovery document on the same isolated D1/browser profile and applies an explicit PWA update. This historical fixture protects the transition from finite sessions to continuing access. It needs Git history (`git fetch --unshallow` for a shallow clone), OpenSSL and network access to install the old lockfile. Both HTTPS checks trust only their temporary local certificate and remove their temporary servers, profiles, keys and databases when finished.
@@ -108,6 +119,8 @@ npm run deploy --workspace @home-os/worker
 ```
 
 See [docs/deployment.md](docs/deployment.md) for D1 migrations, Worker secrets, remote verification, cost boundaries, and recovery. The 105 MB browser model is fetched only after consent; it is not part of the Worker upload.
+
+`smoke:ledger` builds an isolated deployed `8f45806` archive and the current shell, migrates disposable local D1, and drives real Chrome plus the official MCP OAuth client. It checks UI/API/MCP amounts, uncertain payment recovery, source uniqueness, actual statement downloads, responsive themes and deployed-shell inventory/session compatibility. It leaves screenshots, statement artifacts, summary and cleanup receipt under `test-results/ledger/`. CI installs the archived lockfile in its temporary directory; `HOMEOS_LEDGER_OLD_DEPENDENCIES=/absolute/compatible/checkout` can copy existing dependencies for a local run. `HOMEOS_SKIP_BUILD=1` reuses the already built current shell; the old shell is always built from its faithful archive. The distinct frozen `102af58` migration fixture remains in `smoke:upgrade`.
 
 ## Project structure
 

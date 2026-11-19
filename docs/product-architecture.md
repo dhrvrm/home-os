@@ -76,11 +76,11 @@ The PWA caches at most 30 days or 2,000 activity entries locally. Older audit hi
 
 MCP is an authenticated interface to Home OS application services. It is not a database administration interface.
 
-The first MCP release is read-only and exposes household summary, inventory search, item detail, low-stock state, consumption history, and household activity. Every query is household-scoped and uses the same repository and authorization rules as the PWA API.
+Personal OAuth authorizes the current member and records an approved role ceiling. HTTP and MCP share household commands and current-authority checks for reads, acceptance and replay. Inventory, recurring rules, cooking, contacts, notification preferences, permitted access controls and ledger operations are available according to that policy. Cookies and the retired operator bearer do not authorize MCP.
 
-Write tools enter in later module iterations only after their underlying application commands, permissions, idempotency, conflict handling, and audit behavior exist. Destructive or financially meaningful tools require explicit scopes and client-visible confirmation semantics.
+Ledger tools accept exact minor-unit intents with an operation ID and observed version where relevant. They cannot claim an actor, household, role or author. Financial corrections/voids identify retained facts; no tool executes a bank transfer.
 
-The initial personal deployment uses a dedicated high-entropy bearer credential stored as a Cloudflare Worker secret. Multi-member or third-party MCP clients require OAuth 2.1 with audience-bound tokens and separately grantable scopes such as `home:read`, `inventory:read`, `inventory:write`, `activity:read`, `expenses:read`, and `expenses:write`.
+The supported connection uses OAuth discovery, dynamic registration, PKCE, audience-bound tokens and `home:access`; current role and consent ceiling constrain each ordinary command. Password setup/reset and device push enrollment remain app interactions.
 
 ## Iteration map
 
@@ -102,7 +102,7 @@ Landlord, maintenance, building, medical, utility, and emergency contacts; warra
 
 ### 5. Shared expenses
 
-Splitwise-style expenses, equal or custom shares, balances, settlements, recurring bills, receipts, and export. Financial corrections are append-only domain events with stricter audit retention.
+Actual expenses, itemized and custom shares, balances, reported repayments, linked refunds, explicit recurring posting and statements are implemented in the current iteration described below. Receipt attachments remain planned. Financial corrections retain immutable revisions and reversing/replacement effects.
 
 ### 6. Chores and maintenance
 
@@ -121,3 +121,25 @@ Each iteration ships working software and receives its own implementation plan. 
 ## Requirements and traceability
 
 The canonical [product requirements](requirements.md) assign stable functional and non-functional IDs, measurable acceptance conditions, and an honest release state. An item moves from planned or current iteration to shipped only when its implementation, automated acceptance evidence, and operational documentation land together.
+
+## Actual financial ledger (current iteration)
+
+`apps/worker/src/ledger` preserves accepted actual expenses, refunds and reported repayments beside the recurring catalog. `shared/ledger-money.ts` is the neutral exact allocation/calculator/formatting engine used by server and browser; it imports no Worker environment. Migration `0012_expense_ledger.sql` adds immutable revisions, allocation/effect rows, comments, source identities, current heads and household financial revision without changing existing recurring/inventory/auth/notification tables. Current heads select complete snapshot effects; historical reversal/replacement effects explain transitions and do not replace current snapshots. SQL integer `SUM` computes complete balances, independently of bounded visible pages.
+
+Every accepted command shares the transaction with its authority/version/capacity/source guards, receipt and safe audit cause. Expense payer and beneficiary sums conserve total; credits reverse both sides within original caps; reported payments conserve sender/receiver value. Balances use contributions minus consumption plus sent minus received, grouped by currency. Deterministic cumulative-interval suggestions settle net balances without claiming a unique original debt or minimum payment count.
+
+HTTP `/api/v1/ledger` and MCP are thin adapters:
+
+| HTTP suffix | MCP primitives |
+| --- | --- |
+| `/entries`, `/entries/:id`, `/preview` | `ledger_entries_list`, `ledger_entry_get`, `ledger_preview` |
+| `/expenses`, `/refunds`, `/payments` | `ledger_expense_create`, `ledger_refund_create`, `ledger_payment_create` |
+| `/entries/:id` PUT; `/void`, `/restore` POST | `ledger_entry_correct`, `ledger_entry_void`, `ledger_entry_restore` |
+| `/entries/:id/comments`, `/history` | `ledger_comment_add`, `ledger_comments_list`, `ledger_history_list` |
+| `/balances`, `/repayments`, `/summaries` | `ledger_balances`, `ledger_repayments`, `ledger_summaries` |
+| `/statements`, `/export` | `ledger_statement`, `ledger_export` |
+| `/rule-postings`, `/operations/:operationId` | `ledger_rule_post`, `ledger_operation_status` |
+
+Queries return one consistent accepted financial revision, full scoped totals and bounded rows (default 25, maximum 50). Continuation binds filters and revision; a correction requires restart. Statements are current-effective facts at generation, filtered by entered date; no historical time-travel claim. Spending excludes repayments. Export pages retain scope/revision/opening/movements/closing; complete downloads cap at 10,000 rows and 8 MiB, quote/neutralize human CSV text and preserve exact numeric decimals.
+
+`apps/web/src/ledger` presents Entries, Balances and Recurring rules through the existing identity/navigation/focus primitives. It stores at most 20 query pages and 10 details per person, plus a distinct transactional unresolved-attempt slot. Durable exact intent precedes dispatch; response loss freezes it, authorized status/replay resolves it, and account changes use the established explicit discard boundary. No financial outbox, automatic reconnect send, new push category or bank transfer is introduced.
