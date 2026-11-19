@@ -102,49 +102,49 @@ export async function replayCommand<T>(
   command: HouseholdCommand,
 ): Promise<T | null> {
   const { context } = command;
-  const predicate = authorityPredicate(
-    context,
-    command.policyAction,
-  );
-  const row = await database
+  const predicate = authorityPredicate(context, command.policyAction);
+  const readReceipt = () => database
     .prepare(
       `SELECT (${predicate.sql}) AS authority_admitted, r.operation_id, r.actor_id, r.entity_type, r.entity_id, r.action, r.request_hash, r.result_json
        FROM (SELECT 1) LEFT JOIN household_command_receipts r ON r.household_id = ? AND r.operation_id = ?`,
     )
     .bind(...predicate.values, context.householdId, context.operationId)
     .first<Receipt>();
+  let row = await readReceipt();
   if (!row?.authority_admitted) throw authorityDenied();
-  if (row.operation_id !== null) {
-    if (
-      row.actor_id !== context.actorId ||
-      row.entity_type !== command.entityType ||
-      row.action !== command.action ||
-      row.request_hash !== command.requestHash ||
-      (command.entityId !== undefined && row.entity_id !== command.entityId)
-    )
-      throw operationConflict(command);
-    const stored = JSON.parse(row.result_json);
-    return (command.visibility === "private" ? stored.acknowledgement : stored) as T;
+  if (row.operation_id === null) {
+    const used = await database
+      .prepare(
+        `SELECT (${predicate.sql}) AS authority_admitted, EXISTS (
+         SELECT operation_id FROM audit_events WHERE household_id = ? AND operation_id = ?
+         UNION ALL
+         SELECT operation_id FROM processed_operations WHERE household_id = ? AND operation_id = ?
+       ) AS used`,
+      )
+      .bind(
+        ...predicate.values,
+        context.householdId,
+        context.operationId,
+        context.householdId,
+        context.operationId,
+      )
+      .first<{ authority_admitted: number; used: number }>();
+    if (!used?.authority_admitted) throw authorityDenied();
+    if (!used.used) return null;
+    // A concurrent acceptance can create its receipt and audit after our first read.
+    row = await readReceipt();
+    if (!row?.authority_admitted) throw authorityDenied();
+    if (row.operation_id === null) throw operationConflict(command);
   }
-  const used = await database
-    .prepare(
-      `SELECT (${predicate.sql}) AS authority_admitted, EXISTS (
-       SELECT operation_id FROM audit_events WHERE household_id = ? AND operation_id = ?
-       UNION ALL
-       SELECT operation_id FROM processed_operations WHERE household_id = ? AND operation_id = ?
-     ) AS used`,
-    )
-    .bind(
-      ...predicate.values,
-      context.householdId,
-      context.operationId,
-      context.householdId,
-      context.operationId,
-    )
-    .first<{ authority_admitted: number; used: number }>();
-  if (!used?.authority_admitted) throw authorityDenied();
-  if (used.used) throw operationConflict(command);
-  return null;
+  if (
+    row.actor_id !== context.actorId ||
+    row.entity_type !== command.entityType ||
+    row.action !== command.action ||
+    row.request_hash !== command.requestHash ||
+    (command.entityId !== undefined && row.entity_id !== command.entityId)
+  ) throw operationConflict(command);
+  const stored = JSON.parse(row.result_json);
+  return (command.visibility === "private" ? stored.acknowledgement : stored) as T;
 }
 
 export function commandGuard(
