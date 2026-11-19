@@ -15,6 +15,35 @@ function capabilityLabel(action: string): string {
   return "An additional household permission (refresh this app to review it)";
 }
 
+function capabilitySummary(preview: ConsentPreview): string[] {
+  const actions = new Set(preview.capabilities);
+  const summaries: string[] = [];
+  if (actions.has("home_context")) summaries.push("Read household details");
+  if (actions.has("activity_list")) summaries.push("Read shared household activity");
+  for (const [domain, label] of [["inventory", "inventory"], ["expenses", "expense rules"], ["recipes", "recipes"], ["meals", "meals"], ["contacts", "contacts"]] as const) {
+    const available = preview.capabilities.filter(action => action.startsWith(`${domain}_`));
+    if (!available.length) continue;
+    const writes = available.some(action => /_(create|update|stock|archive|restore|cancel)$/.test(action));
+    summaries.push(`${writes ? "Read and maintain" : "Read"} ${label}${domain === "inventory" && actions.has("inventory_export") ? ", including exports" : ""}`);
+  }
+  if (actions.has("meal_attendance_set")) summaries.push("Answer only your own meal attendance");
+  const reminders = preview.capabilities.some(action => action.startsWith("notifications_"));
+  const preferences = preview.capabilities.some(action => action.startsWith("notification_preferences_"));
+  if (reminders || preferences) {
+    const changes = actions.has("notifications_mark_read") || actions.has("notification_preferences_set");
+    summaries.push(`${changes ? "Manage" : "Read"} your own ${reminders && preferences ? "reminders and preferences" : reminders ? "reminders" : "reminder preferences"}`);
+  }
+  if (actions.has("members_list") || actions.has("members_update")) summaries.push(`${actions.has("members_update") ? "Read and manage" : "Read"} household members`);
+  const browsers = actions.has("sessions_list") || actions.has("sessions_revoke");
+  const assistants = actions.has("connections_list") || actions.has("connections_revoke");
+  if (browsers || assistants) {
+    const end = actions.has("sessions_revoke") || actions.has("connections_revoke");
+    const owner = preview.approvedRole === "owner" && preview.member.role === "owner";
+    summaries.push(`${end ? "Inspect and end" : "Inspect"} ${owner ? "household" : "your own"} ${browsers && assistants ? "browser and assistant access" : browsers ? "browser access" : "assistant access"}`);
+  }
+  return summaries;
+}
+
 export function ConnectionConsent({ intentId, session, online, onRedirect = url => window.location.assign(url) }: { intentId: string; session: AuthSession; online: boolean; onRedirect?: (url: string) => void }) {
   const [review, setReview] = useState<{ preview: ConsentPreview; proof: AccessProof } | null>(null);
   const [loading, setLoading] = useState(true);
@@ -79,7 +108,7 @@ export function ConnectionConsent({ intentId, session, online, onRedirect = url 
         <dl className="consent-details"><dt>Return destination</dt><dd><strong>{preview.client.redirectHost}</strong><span>{preview.client.redirectUri}</span></dd><dt>Home OS resource</dt><dd>{preview.resource}</dd><dt>Approved role</dt><dd>{preview.approvedRole}</dd></dl>
         {preview.client.redirectIsLoopback && <p className="auth-notice">This returns to an app on your device (a local address). Any local process may be listening at this address. Continue only if you started this connection in that app.</p>}
       </div>
-      <div className="account-section"><h3>What this assistant can do</h3><ul className="consent-capabilities">{[...new Set(preview.capabilities.map(capabilityLabel))].map(label => <li key={label}>{label}</li>)}</ul><p className="account-description">Your current role always limits access. A promotion does not expand this approval; reconnect from your assistant for a broader role. You can end access in Account.</p></div>
+      <div className="account-section"><h3>What this assistant can do</h3><ul className="consent-capabilities" aria-label="Permission summary">{capabilitySummary(preview).map(label => <li key={label}>{label}</li>)}</ul><details className="consent-permission-details"><summary>Full permission details</summary><ul className="consent-capabilities" aria-label="Full permissions">{[...new Set(preview.capabilities.map(capabilityLabel))].map(label => <li key={label}>{label}</li>)}</ul></details>{unknownCapability && <p role="alert" className="account-offline">Update Home OS to review all requested permissions before allowing.</p>}<p className="account-description">Your current role always limits access. A promotion does not expand this approval; reconnect from your assistant for a broader role. You can end access in Account.</p></div>
       <div className="account-section account-form__actions"><button className="button button--primary" disabled={!online || !!pending || expired || unknownCapability} onClick={() => void decide("approve")}>{pending === "approve" ? "Allowing…" : "Allow"}</button><button className="button button--quiet" disabled={!online || !!pending || expired} onClick={() => void decide("deny")}>{pending === "deny" ? "Denying…" : "Deny"}</button></div>
     </>}
     <div className="account-section"><a className="access-link" href="/">Return to Home OS</a><p className="auth-help">Returning leaves this request unapproved.</p></div>

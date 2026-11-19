@@ -81,9 +81,11 @@
 .consent-domain { color: var(--accent); font-size: 15px; overflow-wrap: anywhere; }
 .consent-details dd span { display: block; margin-top: 6px; font-size: 12px; }
 .consent-capabilities { padding-left: 20px; font-size: 13px; line-height: 1.7; }
+.consent-permission-details summary { cursor: pointer; min-height: 44px; padding: 12px 0; color: var(--accent); font-size: 13px; }
 .consent-panel .auth-notice, .consent-panel .form-error { margin-top: 18px; }
 .consent-panel :focus-visible, .access-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
 @media (max-width: 390px) {
+  .access-address code { font-size: 12px; }
   .access-roles, .consent-details { grid-template-columns: minmax(0, 1fr); gap: 5px; }
   .access-roles dd, .consent-details dd { margin-bottom: 10px; }
   .access-row > .button { width: 100%; }

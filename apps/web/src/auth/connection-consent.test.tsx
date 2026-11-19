@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { AuthSession } from "@/lib/auth";
 import { ConnectionConsent } from "./connection-consent";
@@ -29,6 +29,19 @@ it("shows a verified domain prominently without loading an untrusted logo", asyn
   expect(await screen.findByText("assistant.example")).toBeInTheDocument();
   expect(screen.queryByText(/Unverified client name/)).not.toBeInTheDocument();
   expect(view.container.querySelector("img")).toBeNull();
+});
+it("summarizes capabilities without hiding the exact permission review", async () => {
+  vi.mocked(getConsent).mockResolvedValue({ ...preview, capabilities: [...preview.capabilities, "notification_preferences_get", "notification_preferences_set", "sessions_list", "sessions_revoke", "connections_list"] });
+  const view = show();
+  const summary = await screen.findByRole("list", { name: "Permission summary" });
+  expect(within(summary).getByText("Read inventory")).toBeVisible();
+  expect(screen.getByText("Manage your own reminders and preferences")).toBeVisible();
+  expect(screen.getByText("Inspect and end your own browser and assistant access")).toBeVisible();
+  const details = view.container.querySelector("details");
+  expect(details).not.toHaveAttribute("open");
+  expect(details).toHaveTextContent("Mark your reminders read");
+  expect(screen.getByText("Full permission details")).toBeVisible();
+  expect(decideConsent).not.toHaveBeenCalled();
 });
 it.each(["approve", "deny"] as const)("performs only explicit %s and uses only the server callback", async decision => {
   window.history.replaceState(null, "", "/?redirect=https://evil.example");

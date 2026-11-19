@@ -87,7 +87,7 @@ export function AccountPanel({ session, onLogout, onSessionChange, hasPendingCha
       <AccessRosters session={session} online={online} hasPendingChanges={hasPendingChanges} />
       <div className="account-section">
         <h3>Staying signed in</h3>
-        <p className="account-description">Your sign-in has no automatic server expiry. During coordinated sign-in checks, Home OS renews the browser cookie for up to 400 days. Clearing browser storage, browser retention limits or device policy can still require signing in again.</p>
+        <p className="account-description">Your sign-in has no automatic server expiry. Home OS refreshes its browser cookie while you use the app, for up to 400 days. Clearing browser storage, browser retention limits or device policy can still require signing in again.</p>
         <p className="auth-help">Sign out ends this browser and its push access. Independently connected assistants continue until you end their access. Replacing a password or deactivating a member ends all their previous browser sessions and assistant connections.</p>
       </div>
       <div className="account-section">
