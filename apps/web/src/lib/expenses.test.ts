@@ -209,3 +209,14 @@ describe("expense formatting", () => {
     );
   });
 });
+
+// Characterizes the recurring resolver before the actual-expense ledger is introduced.
+describe("recurring split ordering characterization", () => {
+  it("keeps percentages on the original total after fixed shares and ties in input order", () => {
+    expect(amounts(resolveShares(request(1001, [
+      { memberId: "fixed", override: { kind: "fixed", amountMinor: 200 } },
+      { memberId: "percent", override: { kind: "percent", basisPoints: 3000 } },
+      { memberId: "z-first" }, { memberId: "a-last" },
+    ])))).toEqual([200, 300, 251, 250]);
+  });
+});
