@@ -7,8 +7,8 @@ definition: >
   a recurring expense is a rule, not an event: it names a cadence, a total,
   and a split, and every member's share is derivable from the rule alone
   without any record of a particular period having occurred. It declares no
-  ledger of what has been paid or owed; that is a later subsystem which
-  materializes this rule per period. Without this subsystem the division of
+  ledger of what has been paid or owed; it supplies a period's authoritative
+  rule basis when an actual expense is explicitly posted. Without this subsystem the division of
   shared household costs has no shared source of truth.
 inputs:
   - name: protected-action-admission
@@ -39,6 +39,12 @@ inputs:
       default is defined over the active set, and a rule naming an inactive
       member must be surfaced as needing attention rather than silently
       resolving.
+  - name: recurring-posting-query
+    description: >
+      A chosen recurring rule, observed version, and intended cadence
+      period supplied by the household expense ledger. Required to resolve
+      one explicit posting against the current active rule and membership
+      without treating the passing of time as proof a cost occurred.
 outputs:
   - name: expense-command-outcome
     description: >
@@ -59,4 +65,13 @@ outputs:
       which source. Emitted so the household's audit trail and activity
       feed include expense changes without this subsystem knowing how they
       are recorded.
+  - name: recurring-posting-basis
+    description: >
+      The requested rule's current version, active lifecycle, currency,
+      exact total, valid cadence period, and resolved participant shares,
+      or the reason the requested posting basis is invalid. Supplied to
+      the household expense ledger so it can preserve the accepted rule
+      snapshot and one period's provenance while recording separately
+      declared actual payers and expense date. Does not itself record a
+      charge, confirm payment, or change an earlier posted expense.
 ---

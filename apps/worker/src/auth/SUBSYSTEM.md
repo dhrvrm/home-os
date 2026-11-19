@@ -96,9 +96,13 @@ outputs:
       intersection of the current role, the connection's explicit ceiling
       when present, and personal or household ownership of the subject.
       Personal reminder control and connection control never confer shared
-      editing rights. Membership and connection-management changes require
-      authority that still holds when the change is accepted, so an earlier
-      decision cannot survive intervening revocation or demotion.
+      editing rights. Every accepted shared change, including financial
+      records and comments, requires authority that still holds at
+      acceptance and at replay of a prior outcome. The exact continuing
+      grant, current role, approved ceiling, and subject remain binding;
+      an earlier decision cannot survive revocation, departure, demotion,
+      or replacement of identity proof. Owners and members maintain shared
+      finances; viewers inspect the same household financial facts.
   - name: notification-delivery-authority
     description: >
       Whether the recipient still belongs to the household and the exact
@@ -110,8 +114,11 @@ outputs:
     description: >
       Stable member identities, display information, roles, and active state.
       Supplied to member experiences, connected household interaction,
-      recurring expenses, and household cooking so people remain referable
+      recurring expenses, household money, and household cooking so people remain referable
       after departure without confusing shared contacts with login accounts.
+      Departure ends new authority and ordinary future expense selection,
+      but cannot erase an existing contribution, share, or debt; historical
+      corrections, linked refunds, and repayments retain those identities.
   - name: access-change-record
     description: >
       The accountable person, direct or connected origin, and non-secret
