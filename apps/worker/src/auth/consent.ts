@@ -5,7 +5,7 @@ import { currentAuthority, currentMember } from "./session";
 import { commandContext } from "../http/request-context";
 import { assertAuthority, authorizedBatch } from "./authority";
 import { accessId, acceptedAccessBatch, consentChanged, maintainConnections } from "./connections";
-import { capabilities, type Action, type Role } from "./permissions";
+import { capabilities, HOME_ACCESS_SCOPE, type Action, type Role } from "./permissions";
 import { oauthReviewDestination } from "./handoffs";
 import { HomeOSError } from "../platform/errors";
 
@@ -24,7 +24,7 @@ export function appendProviderHeaders(context: AuthContext, headers: Headers): v
 export async function startAuthorization(context: AuthContext, helpers: OAuthHelpers): Promise<Response> {
   const request = await helpers.parseAuthRequest(context.req.raw);
   if (!request.codeChallenge || request.codeChallengeMethod !== "S256") throw new AuthorizationError("invalid_request", { description: "PKCE S256 is required.", redirectUri: request.redirectUri, state: request.state, issuer: request.issuer });
-  if (request.scope.length !== 1 || request.scope[0] !== "home:access") throw new AuthorizationError("invalid_scope", { description: "Request the home:access scope.", redirectUri: request.redirectUri, state: request.state, issuer: request.issuer });
+  if (request.scope.length !== 1 || request.scope[0] !== HOME_ACCESS_SCOPE) throw new AuthorizationError("invalid_scope", { description: `Request the ${HOME_ACCESS_SCOPE} scope.`, redirectUri: request.redirectUri, state: request.state, issuer: request.issuer });
   const id = crypto.randomUUID().replaceAll("-", ""), now = new Date().toISOString();
   await maintainConnections(context.env, oauthMaintenanceHelpers(context.env));
   await context.env.DB.prepare("INSERT INTO mcp_consent_intents (id, request_json, created_at, expires_at) VALUES (?, ?, ?, ?)")
@@ -78,10 +78,10 @@ export async function decideConsent(context: AuthContext, helpers: OAuthHelpers,
     .bind(connectionId, member.id, member.householdId, authority.proof.credentialVersion, request.clientId, (await helpers.describeConsent(request)).clientName, request.resource!, member.role, now, new Date(Date.now() + 600_000).toISOString(), request.clientId)]);
   if (pending[0]!.meta.changes !== 1) throw consentChanged();
   try {
-    const approved = await helpers.approveConsent(context.req.raw, intent.consent_handle, { scope: ["home:access"] });
+    const approved = await helpers.approveConsent(context.req.raw, intent.consent_handle, { scope: [HOME_ACCESS_SCOPE] });
     appendProviderHeaders(context, approved.headers);
     if (JSON.stringify(approved.request) !== JSON.stringify(request)) throw consentChanged();
-    const completed = await helpers.completeAuthorization({ request: approved.request, userId: member.id, metadata: { connectionId }, props: { connectionId }, scope: ["home:access"], revokeExistingGrants: false });
+    const completed = await helpers.completeAuthorization({ request: approved.request, userId: member.id, metadata: { connectionId }, props: { connectionId }, scope: [HOME_ACCESS_SCOPE], revokeExistingGrants: false });
     await acceptedAccessBatch(context.env.DB, command, "connection_authorize", { householdId: member.householdId, memberId: member.id }, {
       entityType: "mcp_connection", id: connectionId, event: "connection.authorized", exists: "EXISTS (SELECT 1 FROM mcp_connections WHERE id = ? AND status = 'pending')", values: [connectionId],
       statements: [

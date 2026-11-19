@@ -7,6 +7,7 @@ import {
   ROLES,
   type Action,
   type ActionSubject,
+  type PermissionIdentity,
   type Role,
 } from "./permissions";
 export type AuthorityProof =
@@ -22,6 +23,15 @@ export interface VerifiedAuthority {
   householdId: string;
   role: Role;
   proof: AuthorityProof;
+}
+export function permissionIdentity(authority: VerifiedAuthority, role = authority.role): PermissionIdentity {
+  return {
+    memberId: authority.memberId,
+    householdId: authority.householdId,
+    role,
+    kind: authority.proof.kind,
+    ceiling: authority.proof.kind === "delegated" ? authority.proof.ceiling : undefined,
+  };
 }
 export function authorityDenied(): HomeOSError {
   return new HomeOSError(
@@ -49,13 +59,7 @@ export function authorityPredicate(
     return { sql: "0", values: [] };
   const roles = ROLES.filter((role) =>
     (mode === "handoff" ? permitsHandoff : permits)(
-      {
-        memberId: authority.memberId,
-        householdId: authority.householdId,
-        role,
-        kind: authority.proof.kind,
-        ceiling: authority.proof.kind === "delegated" ? authority.proof.ceiling : undefined,
-      },
+      permissionIdentity(authority, role),
       action,
       subject,
     ),

@@ -3,21 +3,17 @@ import type { McpServer } from '@modelcontextprotocol/server';
 import { MemberService, updateMemberSchema } from '../auth/members';
 import { SessionAccessService } from '../auth/session-access';
 import { ConnectionAccessService } from '../auth/connections';
-import { assertAuthority } from '../auth/authority';
-import { capabilities, handoffCapabilities, permitsHandoff, type PermissionIdentity } from '../auth/permissions';
+import { assertAuthority, permissionIdentity } from '../auth/authority';
+import { capabilities, handoffCapabilities, permitsHandoff } from '../auth/permissions';
 import { interactiveHandoff, type InteractiveAction } from '../auth/handoffs';
 import { pageInput } from '../inventory/validation';
 import { HomeOSError } from '../platform/errors';
 import { D1MealRepository } from '../meals/d1-repository';
 import { commandContext, failure, mutationInput, readOnlyAnnotations, registerTool, result, subjectId, type ToolContext } from './results';
 
-function identity(context: ToolContext): PermissionIdentity {
- const a=context.authority;
- return {memberId:a.memberId,householdId:a.householdId,role:a.role,kind:a.proof.kind,ceiling:a.proof.kind==='delegated'?a.proof.ceiling:undefined};
-}
 function registerHandoff(server:McpServer,context:ToolContext,action:InteractiveAction,members:MemberService) {
  const subject={householdId:context.authority.householdId,memberId:context.authority.memberId};
- if(!permitsHandoff(identity(context),action,subject))return;
+ if(!permitsHandoff(permissionIdentity(context.authority),action,subject))return;
  server.registerTool(action,{description:'Open the trusted Home OS form. The person must complete this action directly; opening the form performs no mutation or native permission request.',inputSchema:(action==='member_password_reset'?z.object({memberId:subjectId}):z.object({})).strict(),annotations:readOnlyAnnotations},async input=>{
   const command=commandContext(context,action);
   try {
@@ -43,7 +39,7 @@ export function registerAccessTools(server:McpServer,context:ToolContext) {
  const members=new MemberService(context.env.DB),sessions=new SessionAccessService(context.env.DB),connections=new ConnectionAccessService(context.env.DB);
  registerTool(server,context,'home_context','Read your current identity, household timezone/local date, effective capabilities, reviewed ceiling and public current connection ID.',z.object({}),true,async(_,command)=>{
   const member=await members.getMember(command.householdId,command.actorId),timezone=await new D1MealRepository(context.env.DB).timezone(command.householdId),now=new Date();
-  const current={...identity(context),role:member.role};
+  const current=permissionIdentity(context.authority,member.role);
   const parts=new Intl.DateTimeFormat('en-CA',{timeZone:timezone,year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(now);
   const part=(type:string)=>parts.find(p=>p.type===type)!.value;
   return {member,householdId:command.householdId,timezone,now:now.toISOString(),localDate:`${part('year')}-${part('month')}-${part('day')}`,capabilities:capabilities(current),handoffs:handoffCapabilities(current),approvedRole:current.ceiling??null,currentConnectionId:context.authority.proof.kind==='delegated'?context.authority.proof.connectionId:null};

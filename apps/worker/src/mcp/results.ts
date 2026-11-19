@@ -1,6 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
-import { assertAuthority, type VerifiedAuthority } from "../auth/authority";
+import { assertAuthority, permissionIdentity, type VerifiedAuthority } from "../auth/authority";
 import { permits, type Action } from "../auth/permissions";
 import type { Env } from "../env";
 import type { CommandContext } from "../platform/context";
@@ -44,13 +44,7 @@ export function commandContext(
 export function permitted(context: ToolContext, action: Action): boolean {
   const authority = context.authority;
   return permits(
-    {
-      memberId: authority.memberId,
-      householdId: authority.householdId,
-      role: authority.role,
-      kind: authority.proof.kind,
-      ceiling: authority.proof.kind === "delegated" ? authority.proof.ceiling : undefined,
-    },
+    permissionIdentity(authority),
     action,
     { householdId: authority.householdId, memberId: authority.memberId },
   );

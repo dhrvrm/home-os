@@ -1,7 +1,8 @@
 import OAuthProvider, { AuthorizationError, OAuthError, getOAuthApi, type OAuthHelpers, type OAuthProviderOptions, type TokenExchangeCallbackOptions } from "@cloudflare/workers-oauth-provider";
 import type { Env } from "../env";
 import { handleMcpRequest } from "../mcp/routes";
-import { resolveDelegatedAuthority } from "./connections";
+import { accessId, resolveDelegatedAuthority } from "./connections";
+import { HOME_ACCESS_SCOPE } from "./permissions";
 
 export function canonicalResource(env: Env): string {
   const configured = new URL(env.HOMEOS_MCP_RESOURCE);
@@ -33,7 +34,7 @@ function boundedKV(namespace: KVNamespace, limit: number): { namespace: KVNamesp
 }
 export async function bindProviderGrant(options: TokenExchangeCallbackOptions<Env>): Promise<{ established: boolean }> {
   const { env } = options, id: unknown = options.props?.connectionId;
-  if (typeof id !== "string" || !/^[a-f0-9]{32}$/.test(id) || options.resource !== canonicalResource(env) || options.clientId !== options.subjectClientId || !options.scope.includes("home:access")) {
+  if (typeof id !== "string" || !accessId.test(id) || options.resource !== canonicalResource(env) || options.clientId !== options.subjectClientId || !options.scope.includes(HOME_ACCESS_SCOPE)) {
     throw new OAuthError("invalid_grant", { description: "This personal connection is no longer valid." });
   }
   let bound: { id: string; established_at: string | null } | null;
@@ -90,7 +91,7 @@ export function oauthOptions(env: Env, fallback: AppHandler, registration?: Regi
       const verified = context as ExecutionContext & { props?: { connectionId?: unknown }; auth?: { clientId: string; userId: string; scope: string[] } };
       try {
         const auth = verified.auth;
-        const authority = auth?.scope.includes("home:access") ? await resolveDelegatedAuthority(bindings, verified.props?.connectionId, auth.clientId, auth.userId, resource) : null;
+        const authority = auth?.scope.includes(HOME_ACCESS_SCOPE) ? await resolveDelegatedAuthority(bindings, verified.props?.connectionId, auth.clientId, auth.userId, resource) : null;
         if (!authority) return new Response(JSON.stringify({ error: "invalid_token" }), { status: 401, headers: { "content-type": "application/json", "WWW-Authenticate": `Bearer resource_metadata="${origin}/.well-known/oauth-protected-resource/mcp", error="invalid_token"`, "Cache-Control": "no-store" } });
         return handleMcpRequest(request, bindings, authority, auth!.clientId);
       } catch { return protocolError("temporarily_unavailable", "Home OS access storage is temporarily unavailable.", 503); }
@@ -98,7 +99,7 @@ export function oauthOptions(env: Env, fallback: AppHandler, registration?: Regi
     defaultHandler: fallback,
     authorizeEndpoint: `${origin}/api/oauth/authorize`, tokenEndpoint: `${origin}/api/oauth/token`, clientRegistrationEndpoint: `${origin}/api/oauth/register`,
     resourceMetadata: { resource, authorization_servers: [origin], resource_name: "Home OS" },
-    scopesSupported: ["home:access"], requiredScopes: ["home:access"], accessTokenTTL: 900,
+    scopesSupported: [HOME_ACCESS_SCOPE], requiredScopes: [HOME_ACCESS_SCOPE], accessTokenTTL: 900,
     refreshTokenTTL: undefined, clientRegistrationTTL: undefined, clientIdMetadataDocumentEnabled: true,
     tokenExchangeCallback: async options => {
       const binding = await bindProviderGrant(options);

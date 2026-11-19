@@ -1,5 +1,6 @@
 export const ROLES = ["owner", "member", "viewer"] as const;
 export type Role = (typeof ROLES)[number];
+export const HOME_ACCESS_SCOPE = "home:access";
 type Rule = {
   roles: readonly Role[];
   subject?: "self" | "self_or_owner";

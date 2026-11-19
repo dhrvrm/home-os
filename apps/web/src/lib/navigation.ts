@@ -14,10 +14,21 @@ export function readHouseholdLocation(search: string): HouseholdLocation {
   const view = connect ? "account" : HOME_VIEWS.find((value) => value === requested) ?? "inventory";
   const requestedAction = params.get("action");
   const memberId = recordId(params.get("member"));
-  const action = view === "account" && requestedAction === "password" ? "password"
-    : view === "members" && requestedAction === "create-member" ? "create-member"
-    : view === "members" && requestedAction === "reset-password" && memberId ? "reset-password"
-    : view === "notifications" && requestedAction === "enable" ? "enable" : undefined;
+  let action: HouseholdLocation["action"];
+  switch (requestedAction) {
+    case "password":
+      if (view === "account") action = "password";
+      break;
+    case "create-member":
+      if (view === "members") action = "create-member";
+      break;
+    case "reset-password":
+      if (view === "members" && memberId) action = "reset-password";
+      break;
+    case "enable":
+      if (view === "notifications") action = "enable";
+      break;
+  }
   return { view, ...(action ? { action, ...(action === "reset-password" ? { memberId } : {}) } : {}), ...(connect ? { connect } : {}), mealId: view === "menu" ? recordId(params.get("meal")) : undefined, recipeId: view === "menu" ? recordId(params.get("recipe")) : undefined };
 }
 
